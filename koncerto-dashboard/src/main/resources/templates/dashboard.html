@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Koncerto Dashboard</title>
+    <style>
+        body { font-family: monospace; padding: 1rem; background: #111; color: #eee; }
+        h1 { color: #6cf; }
+        table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+        th, td { border: 1px solid #444; padding: 0.4rem; text-align: left; }
+        th { background: #222; }
+        .totals { margin-top: 1rem; }
+    </style>
+</head>
+<body>
+    <h1>Koncerto Dashboard</h1>
+    <p>Live orchestrator state</p>
+    <div class="totals">
+        <strong>Tokens:</strong> <span id="totals">loading...</span>
+    </div>
+    <h2>Running</h2>
+    <table id="running"><thead><tr><th>Identifier</th><th>Thread</th><th>Turns</th><th>URL</th></tr></thead><tbody></tbody></table>
+    <h2>Retrying</h2>
+    <table id="retrying"><thead><tr><th>Identifier</th><th>Attempt</th><th>Error</th></tr></thead><tbody></tbody></table>
+    <script>
+        async function refresh() {
+            const r = await fetch('/api/v1/state');
+            const s = await r.json();
+            document.getElementById('totals').textContent =
+                `in=${s.codexTotals.inputTokens} out=${s.codexTotals.outputTokens} total=${s.codexTotals.totalTokens}`;
+            const rb = document.querySelector('#running tbody');
+            rb.innerHTML = s.running.map(x => `<tr><td>${x.issueIdentifier}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td></tr>`).join('');
+            const rt = document.querySelector('#retrying tbody');
+            rt.innerHTML = s.retrying.map(x => `<tr><td>${x.identifier}</td><td>${x.attempt}</td><td>${x.error ?? ''}</td></tr>`).join('');
+        }
+        refresh();
+        setInterval(refresh, 5000);
+    </script>
+</body>
+</html>
