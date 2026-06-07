@@ -1,0 +1,38 @@
+[versions]
+kotlin = "2.0.21"
+spring-boot = "3.3.5"
+coroutines = "1.9.0"
+serialization = "1.7.3"
+webclient = "6.1.14"
+snakeyaml = "2.3"
+liqp = "0.8.3"
+logback = "1.5.11"
+junit5 = "5.11.3"
+assertk = "0.28.1"
+mockk = "1.13.13"
+wiremock = "3.10.0"
+testcontainers = "1.20.3"
+
+[libraries]
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+spring-webflux = { module = "org.springframework:spring-webflux" }
+spring-boot-starter-webflux = { module = "org.springframework.boot:spring-boot-starter-webflux", version.ref = "spring-boot" }
+spring-boot-starter-actuator = { module = "org.springframework.boot:spring-boot-starter-actuator", version.ref = "spring-boot" }
+webclient = { module = "io.projectreactor.netty:reactor-netty", version.ref = "webclient" }
+snakeyaml = { module = "org.yaml:snakeyaml", version.ref = "snakeyaml" }
+liqp = { module = "nl.big-o:liqp", version.ref = "liqp" }
+logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+junit5-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit5" }
+assertk = { module = "com.willowtreeapps.assertk:assertk-jvm", version.ref = "assertk" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+wiremock-standalone = { module = "org.wiremock:wiremock-standalone", version.ref = "wiremock" }
+spring-boot-starter-test = { module = "org.springframework.boot:spring-boot-starter-test", version.ref = "spring-boot" }
+spring-boot-testcontainers = { module = "org.springframework.boot:spring-boot-testcontainers", version.ref = "spring-boot" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }
+spring-dependency-management = { id = "io.spring.dependency-management", version.ref = "spring-boot" }
