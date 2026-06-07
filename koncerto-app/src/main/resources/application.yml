@@ -1,0 +1,11 @@
+spring:
+  main:
+    web-application-type: ${KONCERTO_WEB_TYPE:none}
+  webflux:
+    base-path: /
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+koncerto:
+  workflow-path: ${KONCERTO_WORKFLOW_PATH:./WORKFLOW.md}
+  logs-root: ${KONCERTO_LOGS_ROOT:}
