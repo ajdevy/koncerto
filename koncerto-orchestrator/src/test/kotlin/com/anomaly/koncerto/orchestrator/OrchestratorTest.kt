@@ -17,6 +17,7 @@ import com.anomaly.koncerto.workspace.HookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
@@ -88,5 +89,8 @@ class FakeAgentRunner : AgentRunner {
 }
 
 fun Orchestrator.fetchAndDispatchPublic() {
-    runBlocking { this@fetchAndDispatchPublic.fetchAndDispatch() }
+    runBlocking {
+        this@fetchAndDispatchPublic.scope = CoroutineScope(coroutineContext)
+        this@fetchAndDispatchPublic.fetchAndDispatch()
+    }
 }

@@ -73,7 +73,8 @@ class DefaultLinearClient(
                 if (after != null) put("after", after)
             }
             val resp = graphql.execute(candidateQuery, vars)
-            val conn = resp["data"]?.let { (it as JsonObject)["issues"] } as? JsonObject
+            val dataObj = resp["data"] as? JsonObject ?: throw LinearError.UnknownPayload()
+            val conn = dataObj["issues"] as? JsonObject
                 ?: throw LinearError.UnknownPayload()
             val pageInfo = conn["pageInfo"] as? JsonObject ?: throw LinearError.UnknownPayload()
             val nodes = conn["nodes"] as? JsonArray ?: throw LinearError.UnknownPayload()

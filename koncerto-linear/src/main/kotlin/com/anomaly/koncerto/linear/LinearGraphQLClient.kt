@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.linear
 
-import kotlinx.serialization.json.JsonElement
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -8,7 +9,6 @@ import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
-import reactor.core.publisher.Mono
 import java.time.Duration
 
 class LinearGraphQLClient(
@@ -27,24 +27,26 @@ class LinearGraphQLClient(
             put("query", query)
             put("variables", variables)
         }
-        return try {
-            val response = client.post()
-                .header(HttpHeaders.AUTHORIZATION, apiKey)
-                .bodyValue(body)
-                .retrieve()
-                .bodyToMono<JsonObject>()
-                .block(Duration.ofMillis(timeoutMs))
-            if (response == null) {
-                throw LinearError.Request("null response")
+        return withContext(Dispatchers.IO) {
+            try {
+                val response = client.post()
+                    .header(HttpHeaders.AUTHORIZATION, apiKey)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono<JsonObject>()
+                    .block(Duration.ofMillis(timeoutMs))
+                if (response == null) {
+                    throw LinearError.Request("null response")
+                }
+                if (response["errors"] != null) {
+                    throw LinearError.GraphQlErrors(response["errors"].toString())
+                }
+                response
+            } catch (e: LinearError) {
+                throw e
+            } catch (e: Exception) {
+                throw LinearError.Request(e.message ?: "transport failure", e)
             }
-            if (response["errors"] != null) {
-                throw LinearError.GraphQlErrors(response["errors"].toString())
-            }
-            response
-        } catch (e: LinearError) {
-            throw e
-        } catch (e: Exception) {
-            throw LinearError.Request(e.message ?: "transport failure", e)
         }
     }
 }

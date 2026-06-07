@@ -13,3 +13,11 @@ allprojects {
         mavenCentral()
     }
 }
+
+subprojects {
+    apply(plugin = "jacoco")
+
+    tasks.withType<JacocoReport>().configureEach {
+        dependsOn("test")
+    }
+}

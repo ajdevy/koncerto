@@ -14,7 +14,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
+@OptIn(kotlin.time.ExperimentalTime::class)
 class Orchestrator(
     private val config: ServiceConfig,
     private val state: RuntimeState,
@@ -26,8 +28,10 @@ class Orchestrator(
     private val projectSlug: String
 ) {
     private var loopJob: Job? = null
+    internal var scope: CoroutineScope? = null
 
     fun start(scope: CoroutineScope) {
+        this.scope = scope
         loopJob = scope.launch {
             launch {
                 agentRunner.events().collect { ev ->
@@ -150,7 +154,7 @@ class Orchestrator(
         )
         val prompt = workflowCache.current().promptTemplate
         val attempt: Int? = null
-        kotlinx.coroutines.GlobalScope.launch {
+        scope?.launch {
             val result = agentRunner.run(issue, attempt, prompt)
             result.onSuccess {
                 state.completed.add(issue.id)

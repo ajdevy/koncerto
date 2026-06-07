@@ -11,7 +11,6 @@ dependencies {
 
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)
-    testImplementation(libs.wiremock.standalone)
     testImplementation(libs.kotlinx.coroutines.test)
 }
 
