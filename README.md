@@ -1,7 +1,7 @@
 # Koncerto
 
 [![CI](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml/badge.svg)](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/ajdevy/koncerto/branch/main/graph/badge.svg)](https://codecov.io/gh/ajdevy/koncerto)
+[![coverage](.badges/jacoco.svg)](.badges/coverage-summary.json)
 
 A Kotlin/Spring Boot implementation of the [OpenAI Symphony](https://github.com/openai/symphony) orchestration service. Koncerto polls a project tracker (Linear), dispatches coding tasks to an AI agent (Codex) via JSON-RPC, and manages the full lifecycle — retries, reconciliation, and a live dashboard.
 
