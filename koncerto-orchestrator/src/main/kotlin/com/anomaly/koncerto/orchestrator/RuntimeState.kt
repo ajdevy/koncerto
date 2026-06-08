@@ -2,8 +2,8 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
-import kotlinx.coroutines.sync.Mutex
 
 data class RunningEntry(
     val issue: Issue,
@@ -36,11 +36,10 @@ data class CodexTotals(
 )
 
 class RuntimeState {
-    val mutex = Mutex()
     val running = ConcurrentHashMap<String, RunningEntry>()
-    val claimed: MutableSet<String> = mutableSetOf()
+    val claimed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
-    val completed: MutableSet<String> = mutableSetOf()
+    val completed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     var codexTotals = CodexTotals()
     @Volatile
     var codexRateLimits: Map<String, Any?> = emptyMap()
