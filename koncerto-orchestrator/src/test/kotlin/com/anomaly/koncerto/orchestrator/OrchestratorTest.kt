@@ -330,7 +330,7 @@ class OrchestratorTest {
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
         val beforeMs = System.currentTimeMillis()
-        orch.scheduleRetry(issue, "timeout error")
+        orch.dispatchService.scheduleRetry(issue, "timeout error")
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(1)
@@ -351,8 +351,8 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
-        orch.scheduleRetry(issue, "err1")
-        orch.scheduleRetry(issue, "err2")
+        orch.dispatchService.scheduleRetry(issue, "err1")
+        orch.dispatchService.scheduleRetry(issue, "err2")
         assertThat(state.retryAttempts["1"]?.attempt).isEqualTo(2)
         assertThat(state.retryAttempts["1"]?.error).isEqualTo("err2")
     }
@@ -369,7 +369,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
-        repeat(10) { orch.scheduleRetry(issue, "err") }
+        repeat(10) { orch.dispatchService.scheduleRetry(issue, "err") }
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(10)
@@ -642,7 +642,7 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
 
 fun Orchestrator.runDispatchSync() {
     runBlocking {
-        this@runDispatchSync.scope = CoroutineScope(coroutineContext)
-        this@runDispatchSync.fetchAndDispatch()
+        scope = CoroutineScope(coroutineContext)
+        dispatchService.fetchAndDispatch(scope!!)
     }
 }
