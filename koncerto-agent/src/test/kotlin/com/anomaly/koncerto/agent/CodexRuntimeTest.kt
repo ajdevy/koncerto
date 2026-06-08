@@ -12,13 +12,13 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.jupiter.api.Test
 
-class CodexAppServerClientTest {
+class CodexRuntimeTest {
 
     private fun noopLogger() = StructuredLogger(listOf(object : LogSink {
         override fun write(line: String) {}
     }))
 
-    private fun collectEvents(client: CodexAppServerClient, timeoutMs: Long = 5_000): List<AgentEvent> {
+    private fun collectEvents(client: CodexRuntime, timeoutMs: Long = 5_000): List<AgentEvent> {
         val collected = mutableListOf<AgentEvent>()
         runBlocking {
             withTimeoutOrNull(timeoutMs) {
@@ -35,7 +35,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { assertThat(client.start()).isEqualTo(true) }
 
         val collected = collectEvents(client)
@@ -50,7 +50,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -69,7 +69,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/failed","params":{"thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -86,7 +86,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/cancelled","params":{"thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -103,7 +103,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/input_required","params":{}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -118,7 +118,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"approval/auto_approved","params":{}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -133,7 +133,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"unsupported_tool_call","params":{}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -148,7 +148,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"custom/unknown_event","params":{"foo":"bar"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -165,7 +165,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"session/started","thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -182,7 +182,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/completed","thread_id":"t1","turn_id":"u1","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -200,7 +200,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/failed","thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -216,7 +216,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/cancelled","thread_id":"t1","turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -232,7 +232,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"custom/result","data":"x"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -248,7 +248,7 @@ class CodexAppServerClientTest {
             echo 'this is not valid json {{{'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -261,7 +261,7 @@ class CodexAppServerClientTest {
     @Test
     fun `startup failure emits StartupFailed event`() {
         val ws = java.nio.file.Path.of("/nonexistent/workspace/path/that/does/not/exist")
-        val client = CodexAppServerClient("echo hello", ws, noopLogger())
+        val client = CodexRuntime("echo hello", ws, noopLogger())
         val started = runBlocking { client.start() }
         assertThat(started).isEqualTo(false)
 
@@ -277,7 +277,7 @@ class CodexAppServerClientTest {
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             sleep 0.5
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
         client.stop()
         // After stop, events channel is closed; collecting should terminate
@@ -292,7 +292,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":30,"output_tokens":20}}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -310,7 +310,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":"abc","output_tokens":"def"}}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -329,7 +329,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"turn_id":"u1"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -347,7 +347,7 @@ class CodexAppServerClientTest {
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"data":"no method here"}}'
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)
@@ -360,7 +360,7 @@ class CodexAppServerClientTest {
     fun `send returns incrementing request ids`() {
         val ws = Files.createTempDirectory("agent-test-")
         val script = "sleep 2"
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val id1 = client.send("initialize")
@@ -379,7 +379,7 @@ class CodexAppServerClientTest {
             echo ''
             sleep 0.2
         """.trimIndent()
-        val client = CodexAppServerClient(script, ws, noopLogger())
+        val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
 
         val collected = collectEvents(client)

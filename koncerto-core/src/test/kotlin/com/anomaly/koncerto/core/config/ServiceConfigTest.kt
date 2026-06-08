@@ -24,6 +24,54 @@ class ServiceConfigTest {
         assertThat(config.stallTimeoutMs).isEqualTo(300_000L)
         assertThat(config.hooksTimeoutMs()).isEqualTo(60_000L)
         assertThat(config.codexCommand).isEqualTo("codex app-server")
+        assertThat(config.agentKind).isEqualTo("codex")
+        assertThat(config.opencodeCommand).isEqualTo("opencode")
+    }
+
+    @Test
+    fun `agent kind defaults to codex when not specified`() {
+        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        assertThat(config.agentKind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `agent kind codex is accepted`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("agent" to mapOf("kind" to "codex")),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.agentKind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `agent kind opencode is accepted`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "agent" to mapOf("kind" to "opencode"),
+                "opencode" to mapOf("command" to "opencode-my-build")
+            ),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.agentKind).isEqualTo("opencode")
+        assertThat(config.opencodeCommand).isEqualTo("opencode-my-build")
+    }
+
+    @Test
+    fun `agent kind invalid throws`() {
+        val result = ServiceConfig.fromMapOrError(
+            mapOf("agent" to mapOf("kind" to "invalid-agent")),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `opencode command defaults to opencode`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("agent" to mapOf("kind" to "opencode")),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.opencodeCommand).isEqualTo("opencode")
     }
 
     @Test

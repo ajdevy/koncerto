@@ -97,8 +97,9 @@ class Orchestrator(
     }
 
     private fun runPreflight() {
+        val cmd = if (config.agentKind == "opencode") config.opencodeCommand else config.codexCommand
         if (config.trackerKind.isNullOrBlank() || config.trackerApiKey.isNullOrBlank()
-            || config.trackerProjectSlug.isNullOrBlank() || config.codexCommand.isBlank()
+            || config.trackerProjectSlug.isNullOrBlank() || cmd.isBlank()
         ) {
             logger.warn("preflight_invalid", emptyMap())
         }

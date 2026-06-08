@@ -21,10 +21,12 @@ data class ServiceConfig(
     val maxTurns: Int,
     val maxRetryBackoffMs: Long,
     val maxConcurrentAgentsByState: Map<String, Int>,
+    val agentKind: String,
     val codexCommand: String,
     val codexApprovalPolicy: Map<String, Any?>?,
     val codexThreadSandbox: String?,
     val codexTurnSandboxPolicy: Map<String, Any?>?,
+    val opencodeCommand: String,
     val turnTimeoutMs: Long,
     val readTimeoutMs: Long,
     val stallTimeoutMs: Long
@@ -89,9 +91,19 @@ data class ServiceConfig(
                 ?.toMap()
                 ?: emptyMap()
 
+            val agentKind = (agent?.get("kind") as? String)?.lowercase() ?: "codex"
+            if (agentKind !in listOf("codex", "opencode")) {
+                throw IllegalStateException("agent.kind must be 'codex' or 'opencode', got '$agentKind'")
+            }
+
             val codexCommand = (codex?.get("command") as? String) ?: "codex app-server"
-            if (codexCommand.isBlank()) {
+            if (agentKind == "codex" && codexCommand.isBlank()) {
                 throw IllegalStateException("codex.command must not be empty")
+            }
+
+            val opencodeCommand = (map["opencode"] as? Map<*, *>)?.get("command") as? String ?: "opencode"
+            if (agentKind == "opencode" && opencodeCommand.isBlank()) {
+                throw IllegalStateException("opencode.command must not be empty")
             }
 
             val maxTurns = (agent?.get("max_turns") as? Number)?.toInt() ?: 20
@@ -115,10 +127,12 @@ data class ServiceConfig(
                 maxTurns = maxTurns,
                 maxRetryBackoffMs = (agent?.get("max_retry_backoff_ms") as? Number)?.toLong() ?: 300_000L,
                 maxConcurrentAgentsByState = perState,
+                agentKind = agentKind,
                 codexCommand = codexCommand,
                 codexApprovalPolicy = @Suppress("UNCHECKED_CAST") (codex?.get("approval_policy") as? Map<String, Any?>),
                 codexThreadSandbox = codex?.get("thread_sandbox") as? String,
                 codexTurnSandboxPolicy = @Suppress("UNCHECKED_CAST") (codex?.get("turn_sandbox_policy") as? Map<String, Any?>),
+                opencodeCommand = opencodeCommand,
                 turnTimeoutMs = (codex?.get("turn_timeout_ms") as? Number)?.toLong() ?: 3_600_000L,
                 readTimeoutMs = (codex?.get("read_timeout_ms") as? Number)?.toLong() ?: 5_000L,
                 stallTimeoutMs = (codex?.get("stall_timeout_ms") as? Number)?.toLong() ?: 300_000L

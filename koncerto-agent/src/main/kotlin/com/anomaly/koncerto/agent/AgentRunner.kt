@@ -35,7 +35,8 @@ interface AgentRunner {
 class DefaultAgentRunner(
     private val config: ServiceConfig,
     private val workspaces: WorkspaceManager,
-    private val logger: StructuredLogger
+    private val logger: StructuredLogger,
+    private val runtimeFactory: AgentRuntimeFactory? = null
 ) : AgentRunner {
 
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
@@ -52,8 +53,10 @@ class DefaultAgentRunner(
         config.hooks.afterCreate?.let { workspaces.runAfterCreate(workspace, it) }
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
 
-        val client = CodexAppServerClient(config.codexCommand, workspace.path, logger)
-        if (!client.start()) throw IllegalStateException("startup_failed")
+        val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
+        val command = if (config.agentKind == "opencode") config.opencodeCommand else config.codexCommand
+        val runtime = factory.create(config.agentKind, command, workspace.path)
+        if (!runtime.start()) throw IllegalStateException("startup_failed")
 
         val rendered = PromptRenderer.render(
             prompt, mapOf(
@@ -62,19 +65,19 @@ class DefaultAgentRunner(
             )
         )
 
-        client.send("initialize", null)
-        client.send(
+        runtime.send("initialize", null)
+        runtime.send(
             "thread/start", buildJsonObject {
                 put("working_directory", workspace.path.toString())
             }
         )
-        client.send(
+        runtime.send(
             "turn/start", buildJsonObject {
                 put("input", rendered)
             }
         )
 
-        client.stop()
+        runtime.stop()
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
     }
 

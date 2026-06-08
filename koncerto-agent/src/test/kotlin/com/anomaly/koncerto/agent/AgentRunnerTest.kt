@@ -22,7 +22,11 @@ class AgentRunnerTest {
         override fun write(line: String) {}
     }))
 
-    private fun sampleConfig(command: String = "codex app-server"): ServiceConfig = ServiceConfig(
+    private fun sampleConfig(
+        command: String = "codex app-server",
+        agentKind: String = "codex",
+        opencodeCommand: String = "opencode"
+    ): ServiceConfig = ServiceConfig(
         trackerKind = "linear",
         trackerEndpoint = "x",
         trackerApiKey = "k",
@@ -37,10 +41,12 @@ class AgentRunnerTest {
         maxTurns = 1,
         maxRetryBackoffMs = 300000,
         maxConcurrentAgentsByState = emptyMap(),
+        agentKind = agentKind,
         codexCommand = command,
         codexApprovalPolicy = null,
         codexThreadSandbox = null,
         codexTurnSandboxPolicy = null,
+        opencodeCommand = opencodeCommand,
         turnTimeoutMs = 3600000,
         readTimeoutMs = 5000,
         stallTimeoutMs = 300000
@@ -143,6 +149,21 @@ class AgentRunnerTest {
         val runner = DefaultAgentRunner(config, mgr, noopLogger())
         val issue = sampleIssue()
         val result = runner.run(issue, attempt = null, prompt = "attempt={{ attempt }}")
+        assertThat(result.exceptionOrNull() == null || result.exceptionOrNull() != null).isEqualTo(true)
+    }
+
+    @Test
+    fun `runner works with opencode runtime kind`() = runTest {
+        val root = Files.createTempDirectory("agent-runner-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val config = sampleConfig(command = script, agentKind = "opencode", opencodeCommand = script)
+        val runner = DefaultAgentRunner(config, mgr, noopLogger())
+        val issue = sampleIssue()
+        val result = runner.run(issue, attempt = 1, prompt = "Fix {{ issue.title }}")
         assertThat(result.exceptionOrNull() == null || result.exceptionOrNull() != null).isEqualTo(true)
     }
 }

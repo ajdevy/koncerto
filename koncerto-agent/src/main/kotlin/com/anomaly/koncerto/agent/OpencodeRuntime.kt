@@ -14,10 +14,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-class CodexRuntime(
+class OpencodeRuntime(
     private val command: String,
     private val workspacePath: Path,
     private val logger: StructuredLogger
@@ -65,14 +66,16 @@ class CodexRuntime(
                 }
             }
         } catch (e: Exception) {
-            logger.warn("stdout_read_failed", emptyMap(), "error" to (e.message ?: "unknown"))
+            logger.warn("opencode_stdout_read_failed", emptyMap(), "error" to (e.message ?: "unknown"))
         }
     }
 
     private suspend fun readStderr(reader: java.io.BufferedReader) {
         try {
             reader.lineSequence().forEach { line ->
-                if (line.isNotBlank()) logger.debug("codex_stderr", emptyMap(), "line" to line.take(500))
+                if (line.isNotBlank()) {
+                    logger.debug("opencode_stderr", emptyMap(), "line" to line.take(500))
+                }
             }
         } catch (_: Exception) {
         }
@@ -167,7 +170,7 @@ class CodexRuntime(
 
     override fun events(): Flow<AgentEvent> = events.receiveAsFlow()
 
-    override fun send(method: String, params: kotlinx.serialization.json.JsonElement?): String {
+    override fun send(method: String, params: JsonElement?): String {
         val id = requestId.getAndIncrement().toString()
         val req = JsonRpcRequest(id = id, method = method, params = params)
         synchronized(this) {
@@ -196,6 +199,3 @@ class CodexRuntime(
         events.close()
     }
 }
-
-@Suppress("unused")
-typealias CodexAppServerClient = CodexRuntime

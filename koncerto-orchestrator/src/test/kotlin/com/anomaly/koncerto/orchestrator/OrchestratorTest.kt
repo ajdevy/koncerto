@@ -571,8 +571,10 @@ class OrchestratorTest {
         hooks = HooksConfig(null, null, null, null, 60000),
         maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
         maxConcurrentAgentsByState = emptyMap(),
+        agentKind = "codex",
         codexCommand = "codex app-server", codexApprovalPolicy = null,
         codexThreadSandbox = null, codexTurnSandboxPolicy = null,
+        opencodeCommand = "opencode",
         turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000
     )
 

@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.app
 
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentRunner
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.DefaultLinearClient
@@ -73,8 +74,15 @@ class Beans {
     }
 
     @Bean
-    fun agentRunner(config: ServiceConfig, workspaces: WorkspaceManager, logger: StructuredLogger): AgentRunner =
-        DefaultAgentRunner(config, workspaces, logger)
+    fun agentRuntimeFactory(logger: StructuredLogger): AgentRuntimeFactory = AgentRuntimeFactory(logger)
+
+    @Bean
+    fun agentRunner(
+        config: ServiceConfig,
+        workspaces: WorkspaceManager,
+        logger: StructuredLogger,
+        agentRuntimeFactory: AgentRuntimeFactory
+    ): AgentRunner = DefaultAgentRunner(config, workspaces, logger, agentRuntimeFactory)
 
     @Bean
     fun runtimeState(config: ServiceConfig): RuntimeState = RuntimeState().also {
