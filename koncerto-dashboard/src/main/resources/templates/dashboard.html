@@ -26,7 +26,7 @@
             const r = await fetch('/api/v1/state');
             const s = await r.json();
             document.getElementById('totals').textContent =
-                `in=${s.codexTotals.inputTokens} out=${s.codexTotals.outputTokens} total=${s.codexTotals.totalTokens}`;
+                `in=${s.tokenTotals.inputTokens} out=${s.tokenTotals.outputTokens} total=${s.tokenTotals.totalTokens}`;
             const rb = document.querySelector('#running tbody');
             rb.innerHTML = s.running.map(x => `<tr><td>${x.issueIdentifier}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td></tr>`).join('');
             const rt = document.querySelector('#retrying tbody');

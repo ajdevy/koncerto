@@ -234,9 +234,9 @@ class OrchestratorTest {
             pid = 1234L
         )
         orch.handleAgentEventForTest(event)
-        assertThat(state.codexTotals.inputTokens).isEqualTo(100)
-        assertThat(state.codexTotals.outputTokens).isEqualTo(50)
-        assertThat(state.codexTotals.totalTokens).isEqualTo(150)
+        assertThat(state.tokenTotals.inputTokens).isEqualTo(100)
+        assertThat(state.tokenTotals.outputTokens).isEqualTo(50)
+        assertThat(state.tokenTotals.totalTokens).isEqualTo(150)
     }
 
     @Test
@@ -260,9 +260,9 @@ class OrchestratorTest {
             usage = TokenUsage(inputTokens = 200, outputTokens = 80, totalTokens = 280),
             pid = 1234L
         ))
-        assertThat(state.codexTotals.inputTokens).isEqualTo(300)
-        assertThat(state.codexTotals.outputTokens).isEqualTo(130)
-        assertThat(state.codexTotals.totalTokens).isEqualTo(430)
+        assertThat(state.tokenTotals.inputTokens).isEqualTo(300)
+        assertThat(state.tokenTotals.outputTokens).isEqualTo(130)
+        assertThat(state.tokenTotals.totalTokens).isEqualTo(430)
     }
 
     @Test
@@ -279,9 +279,9 @@ class OrchestratorTest {
         orch.handleAgentEventForTest(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1", usage = null, pid = 1234L
         ))
-        assertThat(state.codexTotals.inputTokens).isEqualTo(0)
-        assertThat(state.codexTotals.outputTokens).isEqualTo(0)
-        assertThat(state.codexTotals.totalTokens).isEqualTo(0)
+        assertThat(state.tokenTotals.inputTokens).isEqualTo(0)
+        assertThat(state.tokenTotals.outputTokens).isEqualTo(0)
+        assertThat(state.tokenTotals.totalTokens).isEqualTo(0)
     }
 
     @Test
@@ -298,7 +298,7 @@ class OrchestratorTest {
         orch.handleAgentEventForTest(AgentEvent.TurnFailed(
             threadId = "t1", turnId = "r1", error = "boom", pid = 1234L
         ))
-        assertThat(state.codexTotals.inputTokens).isEqualTo(0)
+        assertThat(state.tokenTotals.inputTokens).isEqualTo(0)
     }
 
     @Test

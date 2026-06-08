@@ -2,7 +2,7 @@ package com.anomaly.koncerto.dashboard
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
-import com.anomaly.koncerto.orchestrator.CodexTotals
+import com.anomaly.koncerto.orchestrator.TokenTotals
 import com.anomaly.koncerto.orchestrator.RetryEntry
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.core.model.Issue

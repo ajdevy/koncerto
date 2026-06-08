@@ -28,7 +28,7 @@ data class RetryEntry(
     val error: String?
 )
 
-data class CodexTotals(
+data class TokenTotals(
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
     val totalTokens: Long = 0,
@@ -40,7 +40,7 @@ class RuntimeState {
     val claimed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
     val completed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
-    var codexTotals = CodexTotals()
+    var tokenTotals = TokenTotals()
     @Volatile
     var codexRateLimits: Map<String, Any?> = emptyMap()
     @Volatile

@@ -101,19 +101,19 @@ class RuntimeStateTest {
     }
 
     @Test
-    fun `codexTotals accumulates token counts`() {
+    fun `tokenTotals accumulates token counts`() {
         val s = RuntimeState()
-        assertThat(s.codexTotals.inputTokens).isEqualTo(0)
-        assertThat(s.codexTotals.outputTokens).isEqualTo(0)
-        assertThat(s.codexTotals.totalTokens).isEqualTo(0)
-        s.codexTotals = s.codexTotals.copy(
-            inputTokens = s.codexTotals.inputTokens + 100,
-            outputTokens = s.codexTotals.outputTokens + 50,
-            totalTokens = s.codexTotals.totalTokens + 150
+        assertThat(s.tokenTotals.inputTokens).isEqualTo(0)
+        assertThat(s.tokenTotals.outputTokens).isEqualTo(0)
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(0)
+        s.tokenTotals = s.tokenTotals.copy(
+            inputTokens = s.tokenTotals.inputTokens + 100,
+            outputTokens = s.tokenTotals.outputTokens + 50,
+            totalTokens = s.tokenTotals.totalTokens + 150
         )
-        assertThat(s.codexTotals.inputTokens).isEqualTo(100)
-        assertThat(s.codexTotals.outputTokens).isEqualTo(50)
-        assertThat(s.codexTotals.totalTokens).isEqualTo(150)
+        assertThat(s.tokenTotals.inputTokens).isEqualTo(100)
+        assertThat(s.tokenTotals.outputTokens).isEqualTo(50)
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(150)
     }
 
     @Test

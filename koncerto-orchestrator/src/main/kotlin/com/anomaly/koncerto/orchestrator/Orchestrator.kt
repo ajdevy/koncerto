@@ -192,10 +192,10 @@ class Orchestrator(
         when (event) {
             is AgentEvent.TurnCompleted -> {
                 event.usage?.let { u ->
-                    state.codexTotals = state.codexTotals.copy(
-                        inputTokens = state.codexTotals.inputTokens + u.inputTokens,
-                        outputTokens = state.codexTotals.outputTokens + u.outputTokens,
-                        totalTokens = state.codexTotals.totalTokens + u.totalTokens
+                    state.tokenTotals = state.tokenTotals.copy(
+                        inputTokens = state.tokenTotals.inputTokens + u.inputTokens,
+                        outputTokens = state.tokenTotals.outputTokens + u.outputTokens,
+                        totalTokens = state.tokenTotals.totalTokens + u.totalTokens
                     )
                 }
             }

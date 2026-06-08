@@ -17,7 +17,7 @@ class ApiV1Controller(private val state: RuntimeState) {
     data class StateSnapshot(
         val running: List<RunningRow>,
         val retrying: List<RetryingRow>,
-        val codexTotals: Totals,
+        val tokenTotals: Totals,
         val rateLimits: Map<String, String>
     )
 
@@ -63,9 +63,9 @@ class ApiV1Controller(private val state: RuntimeState) {
             retrying = state.retryAttempts.values.map {
                 RetryingRow(it.issueId, it.identifier, it.attempt, it.dueAtMs, it.error)
             },
-            codexTotals = Totals(
-                state.codexTotals.inputTokens, state.codexTotals.outputTokens,
-                state.codexTotals.totalTokens, state.codexTotals.secondsRunning
+            tokenTotals = Totals(
+                state.tokenTotals.inputTokens, state.tokenTotals.outputTokens,
+                state.tokenTotals.totalTokens, state.tokenTotals.secondsRunning
             ),
             rateLimits = state.codexRateLimits.mapValues { it.value.toString() }
         )
