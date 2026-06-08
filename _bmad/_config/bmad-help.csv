@@ -1,0 +1,8 @@
+command,agent,task,description
+/analyst,Analyst,brainstorming,Start brainstorming session with Analyst
+/pm,PM,prd-creation,Create PRD with PM
+/architect,Architect,architecture-design,Design architecture with Architect
+/developer,Developer,story-implementation,Implement story with Developer
+/help,Core,,Show available BMAD commands
+/status,Core,,Show current project status
+/memory,Core,,Manage agent memory
