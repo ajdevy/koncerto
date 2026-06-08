@@ -21,9 +21,11 @@ subprojects {
         useJUnitPlatform()
     }
 
+    val jacocoEnabled = providers.gradleProperty("jacoco").isPresent()
+
     tasks.withType<JacocoReport>().configureEach {
         dependsOn("test")
-        onlyIf { providers.gradleProperty("jacoco").isPresent() }
+        onlyIf { jacocoEnabled }
 
         reports {
             html.required.set(true)

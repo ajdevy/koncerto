@@ -71,22 +71,35 @@ class ApiV1Controller(private val state: RuntimeState) {
         )
     )
 
+    @Serializable
+    data class IssueDetail(
+        val issueId: String? = null,
+        val issueIdentifier: String? = null,
+        val threadId: String? = null,
+        val turnId: String? = null,
+        val turnCount: Int? = null,
+        val error: String? = null
+    )
+
+    @Serializable
+    data class RefreshResponse(val status: String)
+
     @GetMapping("/{identifier}", produces = ["application/json"])
-    fun byIdentifier(@PathVariable identifier: String): Mono<Map<String, Any?>> {
+    fun byIdentifier(@PathVariable identifier: String): Mono<IssueDetail> {
         val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
         return if (entry != null) {
             Mono.just(
-                mapOf(
-                    "issueId" to entry.issue.id,
-                    "issueIdentifier" to entry.issue.identifier,
-                    "threadId" to entry.threadId,
-                    "turnId" to entry.turnId,
-                    "turnCount" to entry.turnCount
+                IssueDetail(
+                    issueId = entry.issue.id,
+                    issueIdentifier = entry.issue.identifier,
+                    threadId = entry.threadId,
+                    turnId = entry.turnId,
+                    turnCount = entry.turnCount
                 )
             )
-        } else Mono.just(mapOf("error" to "not_found"))
+        } else Mono.just(IssueDetail(error = "not_found"))
     }
 
     @PostMapping("/refresh")
-    fun refresh(): Mono<Map<String, String>> = Mono.just(mapOf("status" to "ok"))
+    fun refresh(): Mono<RefreshResponse> = Mono.just(RefreshResponse(status = "ok"))
 }

@@ -60,10 +60,10 @@ class ApiV1ControllerTest {
         val controller = ApiV1Controller(state)
         val result = controller.byIdentifier("ABC-1").block()
 
-        assertThat(result!!["issueId"]).isEqualTo("1")
-        assertThat(result["issueIdentifier"]).isEqualTo("ABC-1")
-        assertThat(result["threadId"]).isEqualTo("t-1")
-        assertThat(result["turnCount"]).isEqualTo(3)
+        assertThat(result!!.issueId).isEqualTo("1")
+        assertThat(result.issueIdentifier).isEqualTo("ABC-1")
+        assertThat(result.threadId).isEqualTo("t-1")
+        assertThat(result.turnCount).isEqualTo(3)
     }
 
     @Test
@@ -72,7 +72,7 @@ class ApiV1ControllerTest {
         val controller = ApiV1Controller(state)
         val result = controller.byIdentifier("MISSING").block()
 
-        assertThat(result!!["error"]).isEqualTo("not_found")
+        assertThat(result!!.error).isEqualTo("not_found")
     }
 
     @Test
@@ -81,6 +81,6 @@ class ApiV1ControllerTest {
         val controller = ApiV1Controller(state)
         val result = controller.refresh().block()
 
-        assertThat(result!!["status"]).isEqualTo("ok")
+        assertThat(result!!.status).isEqualTo("ok")
     }
 }

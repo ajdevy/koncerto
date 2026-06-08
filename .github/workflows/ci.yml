@@ -39,5 +39,6 @@ jobs:
             koncerto-agent/build/reports/jacoco/test/jacocoTestReport.xml
             koncerto-orchestrator/build/reports/jacoco/test/jacocoTestReport.xml
             koncerto-dashboard/build/reports/jacoco/test/jacocoTestReport.xml
+            koncerto-app/build/reports/jacoco/test/jacocoTestReport.xml
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
