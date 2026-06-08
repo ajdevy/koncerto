@@ -17,17 +17,18 @@ allprojects {
 subprojects {
     apply(plugin = "jacoco")
 
+    tasks.withType<Test>().configureEach {
+        useJUnitPlatform()
+    }
+
     tasks.withType<JacocoReport>().configureEach {
         dependsOn("test")
+        onlyIf { providers.gradleProperty("jacoco").isPresent() }
 
         reports {
             html.required.set(true)
             xml.required.set(true)
             csv.required.set(false)
         }
-    }
-
-    tasks.withType<Test>().configureEach {
-        finalizedBy(tasks.named("jacocoTestReport"))
     }
 }

@@ -15,7 +15,3 @@ dependencies {
     testImplementation(libs.assertk)
     testImplementation(libs.kotlinx.coroutines.test)
 }
-
-tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
-}

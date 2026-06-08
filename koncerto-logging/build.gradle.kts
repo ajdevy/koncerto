@@ -11,6 +11,3 @@ dependencies {
     testImplementation(libs.assertk)
 }
 
-tasks.withType<Test>().configureEach {
-    useJUnitPlatform()
-}

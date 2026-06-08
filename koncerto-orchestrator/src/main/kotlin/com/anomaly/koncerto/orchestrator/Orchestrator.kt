@@ -60,7 +60,7 @@ class Orchestrator(
         }
     }
 
-    private suspend fun reconcile() {
+    internal suspend fun reconcile() {
         if (state.running.isEmpty()) return
         val ids = state.running.keys.toList()
         try {
@@ -170,7 +170,7 @@ class Orchestrator(
         }
     }
 
-    private fun scheduleRetry(issue: Issue, error: String) {
+    internal fun scheduleRetry(issue: Issue, error: String) {
         state.running.remove(issue.id)
         val existing = state.retryAttempts[issue.id]
         val nextAttempt = (existing?.attempt ?: 0) + 1
@@ -188,7 +188,7 @@ class Orchestrator(
         )
     }
 
-    private fun handleAgentEvent(event: AgentEvent) {
+    internal fun handleAgentEvent(event: AgentEvent) {
         when (event) {
             is AgentEvent.TurnCompleted -> {
                 event.usage?.let { u ->
@@ -203,9 +203,4 @@ class Orchestrator(
         }
     }
 
-    internal suspend fun reconcileForTest() = reconcile()
-
-    internal fun handleAgentEventForTest(event: AgentEvent) = handleAgentEvent(event)
-
-    internal suspend fun scheduleRetryForTest(issue: Issue, error: String) = scheduleRetry(issue, error)
 }

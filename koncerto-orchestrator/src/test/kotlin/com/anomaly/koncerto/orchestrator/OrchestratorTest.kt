@@ -47,7 +47,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-3", "A-1")
     }
 
@@ -70,7 +70,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -93,7 +93,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(2)
     }
 
@@ -109,7 +109,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -125,7 +125,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -143,7 +143,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcileForTest()
+        orch.reconcile()
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -162,7 +162,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcileForTest()
+        orch.reconcile()
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -180,7 +180,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcileForTest()
+        orch.reconcile()
         assertThat(state.running.containsKey("1")).isTrue()
     }
 
@@ -196,7 +196,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcileForTest()
+        orch.reconcile()
         assertThat(state.running.size).isEqualTo(0)
     }
 
@@ -213,7 +213,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcileForTest()
+        orch.reconcile()
         assertThat(state.running.containsKey("1")).isTrue()
     }
 
@@ -233,7 +233,7 @@ class OrchestratorTest {
             usage = TokenUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
             pid = 1234L
         )
-        orch.handleAgentEventForTest(event)
+        orch.handleAgentEvent(event)
         assertThat(state.tokenTotals.inputTokens).isEqualTo(100)
         assertThat(state.tokenTotals.outputTokens).isEqualTo(50)
         assertThat(state.tokenTotals.totalTokens).isEqualTo(150)
@@ -250,12 +250,12 @@ class OrchestratorTest {
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.handleAgentEventForTest(AgentEvent.TurnCompleted(
+        orch.handleAgentEvent(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1",
             usage = TokenUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
             pid = 1234L
         ))
-        orch.handleAgentEventForTest(AgentEvent.TurnCompleted(
+        orch.handleAgentEvent(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r2",
             usage = TokenUsage(inputTokens = 200, outputTokens = 80, totalTokens = 280),
             pid = 1234L
@@ -276,7 +276,7 @@ class OrchestratorTest {
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.handleAgentEventForTest(AgentEvent.TurnCompleted(
+        orch.handleAgentEvent(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1", usage = null, pid = 1234L
         ))
         assertThat(state.tokenTotals.inputTokens).isEqualTo(0)
@@ -295,7 +295,7 @@ class OrchestratorTest {
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.handleAgentEventForTest(AgentEvent.TurnFailed(
+        orch.handleAgentEvent(AgentEvent.TurnFailed(
             threadId = "t1", turnId = "r1", error = "boom", pid = 1234L
         ))
         assertThat(state.tokenTotals.inputTokens).isEqualTo(0)
@@ -312,7 +312,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(state.claimed.contains("1")).isEqualTo(false)
         assertThat(state.completed.contains("1")).isTrue()
     }
@@ -330,7 +330,7 @@ class OrchestratorTest {
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
         val beforeMs = System.currentTimeMillis()
-        orch.scheduleRetryForTest(issue, "timeout error")
+        orch.scheduleRetry(issue, "timeout error")
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(1)
@@ -351,8 +351,8 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
-        orch.scheduleRetryForTest(issue, "err1")
-        orch.scheduleRetryForTest(issue, "err2")
+        orch.scheduleRetry(issue, "err1")
+        orch.scheduleRetry(issue, "err2")
         assertThat(state.retryAttempts["1"]?.attempt).isEqualTo(2)
         assertThat(state.retryAttempts["1"]?.error).isEqualTo("err2")
     }
@@ -369,7 +369,7 @@ class OrchestratorTest {
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
         val issue = sampleIssue("1", "A-1", "Todo")
-        repeat(10) { orch.scheduleRetryForTest(issue, "err") }
+        repeat(10) { orch.scheduleRetry(issue, "err") }
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(10)
@@ -394,7 +394,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-2")
     }
 
@@ -411,7 +411,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
 
@@ -433,7 +433,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-2")
     }
 
@@ -454,7 +454,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
 
@@ -475,7 +475,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -496,7 +496,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         yield()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
@@ -512,7 +512,7 @@ class OrchestratorTest {
         val runner = FailingAgentRunner("agent crashed")
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(state.retryAttempts.containsKey("1")).isTrue()
         assertThat(state.retryAttempts["1"]?.attempt).isEqualTo(1)
         assertThat(state.retryAttempts["1"]?.error).isEqualTo("agent crashed")
@@ -529,7 +529,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -552,7 +552,7 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
         val orch = Orchestrator(config, state, linear, mgr, runner, cache, logger, "proj")
-        orch.fetchAndDispatchPublic()
+        orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
@@ -640,9 +640,9 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
     }
 }
 
-fun Orchestrator.fetchAndDispatchPublic() {
+fun Orchestrator.runDispatchSync() {
     runBlocking {
-        this@fetchAndDispatchPublic.scope = CoroutineScope(coroutineContext)
-        this@fetchAndDispatchPublic.fetchAndDispatch()
+        this@runDispatchSync.scope = CoroutineScope(coroutineContext)
+        this@runDispatchSync.fetchAndDispatch()
     }
 }

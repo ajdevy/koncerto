@@ -25,7 +25,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test
-        run: ./gradlew build jacocoTestReport --no-daemon
+        run: ./gradlew build jacocoTestReport -Pjacoco --no-daemon
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
