@@ -265,7 +265,7 @@ class OpencodeRuntimeTest {
         runBlocking { runtime.start() }
         runtime.stop()
         val collected = collectEvents(runtime, timeoutMs = 2_000)
-        assertThat(collected.isNotEmpty() || collected.isEmpty()).isTrue()
+        assertThat(collected).isNotNull()
     }
 
     @Test

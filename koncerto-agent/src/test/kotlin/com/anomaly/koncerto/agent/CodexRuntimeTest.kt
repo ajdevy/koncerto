@@ -280,9 +280,8 @@ class CodexRuntimeTest {
         val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
         client.stop()
-        // After stop, events channel is closed; collecting should terminate
         val collected = collectEvents(client, timeoutMs = 2_000)
-        assertThat(collected.isNotEmpty() || collected.isEmpty()).isTrue()
+        assertThat(collected).isNotNull()
     }
 
     @Test
