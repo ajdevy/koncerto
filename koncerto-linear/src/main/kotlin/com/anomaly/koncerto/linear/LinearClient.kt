@@ -20,7 +20,7 @@ class DefaultLinearClient(
     private val projectSlug: String
 ) : LinearClient {
 
-    private val candidateQuery = """
+    internal val candidateQuery = """
         query Candidates(${'$'}projectSlug: String!, ${'$'}states: [String!], ${'$'}first: Int!, ${'$'}after: String) {
           issues(filter: { project: { slugId: { eq: ${'$'}projectSlug } }, state: { name: { in: ${'$'}states } } }, first: ${'$'}first, after: ${'$'}after) {
             pageInfo { hasNextPage endCursor }
@@ -41,7 +41,7 @@ class DefaultLinearClient(
         }
     """.trimIndent()
 
-    private val issuesByStatesQuery = """
+    internal val issuesByStatesQuery = """
         query IssuesByStates(${'$'}projectSlug: String!, ${'$'}states: [String!], ${'$'}first: Int!) {
           issues(filter: { project: { slugId: { eq: ${'$'}projectSlug } }, state: { name: { in: ${'$'}states } } }, first: ${'$'}first) {
             pageInfo { hasNextPage endCursor }
@@ -53,7 +53,7 @@ class DefaultLinearClient(
         }
     """.trimIndent()
 
-    private val statesByIdsQuery = """
+    internal val statesByIdsQuery = """
         query StatesByIds(${'$'}ids: [ID!]!) {
           nodes(filter: { id: { in: ${'$'}ids } }) {
             ... on Issue { id state { name } }

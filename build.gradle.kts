@@ -19,5 +19,15 @@ subprojects {
 
     tasks.withType<JacocoReport>().configureEach {
         dependsOn("test")
+
+        reports {
+            html.required.set(true)
+            xml.required.set(true)
+            csv.required.set(false)
+        }
+    }
+
+    tasks.withType<Test>().configureEach {
+        finalizedBy(tasks.named("jacocoTestReport"))
     }
 }

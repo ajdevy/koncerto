@@ -201,4 +201,10 @@ class Orchestrator(
             else -> {}
         }
     }
+
+    internal suspend fun reconcileForTest() = reconcile()
+
+    internal fun handleAgentEventForTest(event: AgentEvent) = handleAgentEvent(event)
+
+    internal suspend fun scheduleRetryForTest(issue: Issue, error: String) = scheduleRetry(issue, error)
 }

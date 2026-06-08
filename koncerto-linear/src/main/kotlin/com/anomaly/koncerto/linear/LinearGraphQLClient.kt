@@ -11,7 +11,7 @@ import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.bodyToMono
 import java.time.Duration
 
-class LinearGraphQLClient(
+open class LinearGraphQLClient(
     private val endpoint: String,
     private val apiKey: String?,
     private val timeoutMs: Long = 30_000
@@ -21,7 +21,7 @@ class LinearGraphQLClient(
         .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
         .build()
 
-    suspend fun execute(query: String, variables: JsonObject): JsonObject {
+    open suspend fun execute(query: String, variables: JsonObject): JsonObject {
         if (apiKey.isNullOrBlank()) throw LinearError.MissingApiKey()
         val body = buildJsonObject {
             put("query", query)
