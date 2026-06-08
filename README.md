@@ -6,20 +6,20 @@ A Kotlin/Spring Boot implementation of the [OpenAI Symphony](https://github.com/
 
 - **Java 21+** (JDK, not JRE)
 - **Gradle 8.x** (wrapper included, no separate install needed)
-- **Codex CLI** — the `codex` binary must be on your `PATH` (used as the app-server subprocess)
+- **Codex CLI** or **opencode CLI** — the binary must be on your `PATH` (configured via `agent.kind`)
 - **Linear account** — a project with issues in active states (e.g. `Todo`, `In Progress`)
 
 ## How It Works
 
 ```
-┌─────────────┐    poll     ┌──────────────┐    dispatch    ┌──────────────┐
-│   Linear    │ ◄─────────► │ Orchestrator │ ─────────────► │ AgentRunner  │
-│   (API)     │             │              │                │              │
-└─────────────┘             │  ┌─────────┐ │                │  ┌─────────┐ │
-                            │  │ Runtime │ │                │  │ Codex   │ │
-                            │  │  State  │ │                │  │ Subproc │ │
-                            │  └─────────┘ │                │  └─────────┘ │
-                            └──────────────┘                └──────────────┘
+┌─────────────┐    poll     ┌──────────────┐    dispatch    ┌────────────────┐
+│   Linear    │ ◄─────────► │ Orchestrator │ ─────────────► │  AgentRunner   │
+│   (API)     │             │              │                │ (Runtime impl) │
+└─────────────┘             │  ┌─────────┐ │                │                │
+                            │  │ Runtime │ │                │ CodexRuntime   │
+                            │  │  State  │ │                │  or            │
+                            │  └─────────┘ │                │ OpencodeRuntime│
+                            └──────────────┘                └────────────────┘
                                    │
                             ┌──────▼──────┐
                             │  Dashboard  │
@@ -29,7 +29,7 @@ A Kotlin/Spring Boot implementation of the [OpenAI Symphony](https://github.com/
 
 1. **Orchestrator** polls Linear every N seconds for issues in active states
 2. For each eligible issue (respecting concurrency limits, labels, blockers), it dispatches an **AgentRunner**
-3. AgentRunner spawns a **Codex subprocess** via JSON-RPC, sends the rendered prompt, and collects events
+3. AgentRunner spawns the configured **agent subprocess** (Codex or opencode) via JSON-RPC over stdio, sends the rendered prompt, and collects events
 4. After each turn, the orchestrator checks if the issue moved to a terminal state and reclaims the workspace
 5. Failed attempts are retried with exponential backoff
 6. A live **Dashboard** exposes `/api/v1/state` and a web UI at `/`
@@ -70,13 +70,16 @@ hooks:
   before_run: npm install
   timeout_ms: 60000
 agent:
+  kind: codex                    # "codex" (default) or "opencode"
   max_concurrent_agents: 5
   max_turns: 20
   max_retry_backoff_ms: 300000
 codex:
-  command: codex app-server
+  command: codex app-server       # used when agent.kind = codex
   turn_timeout_ms: 3600000
   stall_timeout_ms: 300000
+opencode:
+  command: opencode               # used when agent.kind = opencode
 ---
 
 You are working on Linear issue {{ issue.identifier }}.
@@ -94,6 +97,17 @@ Description: {{ issue.description }}
 | `KONCERTO_LOGS_ROOT` | Directory for log files | (stderr only) |
 | `KONCERTO_WORKSPACE_ROOT` | Root dir for agent workspaces | `/tmp/symphony_workspaces` |
 | `KONCERTO_WEB_TYPE` | `reactive` to enable HTTP dashboard, `none` for headless | `none` |
+
+### Agent Providers
+
+Koncerto supports multiple AI agent runtimes. Set `agent.kind` in `WORKFLOW.md` to switch:
+
+| Provider | `agent.kind` | Command config | Protocol |
+|----------|-------------|----------------|----------|
+| **Codex** | `codex` (default) | `codex.command` | JSON-RPC over stdio (`codex app-server`) |
+| **Opencode** | `opencode` | `opencode.command` | JSON-RPC over stdio (`opencode`) |
+
+All providers implement the same `AgentRuntime` interface — events (session start, turn completion, token usage), lifecycle management, and error handling work identically regardless of provider. You can switch providers by changing a single config value.
 
 ## Running
 
