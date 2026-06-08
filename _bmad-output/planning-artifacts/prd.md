@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-Koncerto is a Kotlin/Spring Boot orchestration service that automates software development workflows by connecting project trackers (Linear) with AI coding agents (Codex). It automatically discovers issues, dispatches them to isolated workspaces, manages agent lifecycles, and provides real-time visibility through a dashboard.
+Koncerto is a Kotlin/Spring Boot orchestration service that automates software development workflows by connecting project trackers (Linear) with AI coding agents (Codex, opencode). It automatically discovers issues, dispatches them to isolated workspaces, manages agent lifecycles, and provides real-time visibility through a dashboard.
 
 ## 2. Problem Statement
 
@@ -72,7 +72,7 @@ Software teams using Linear for issue tracking and AI agents for code generation
 
 | ID | Requirement | Priority | Acceptance Criteria |
 |----|-------------|----------|---------------------|
-| FR-10 | Spawn Codex subprocess via JSON-RPC | P0 | Process starts and communicates via JSON-RPC |
+| FR-10 | Spawn Codex/opencode subprocess via JSON-RPC | P0 | Process starts and communicates via JSON-RPC |
 | FR-11 | Render prompt templates with Liquid | P0 | {{ issue.identifier }} placeholders work |
 | FR-12 | Stream agent events | P0 | Emit AgentEvent sealed class variants |
 | FR-13 | Enforce max turns per issue | P0 | Stop after max turns reached |
@@ -252,7 +252,7 @@ Software teams using Linear for issue tracking and AI agents for code generation
   - Handle blockers, labels
   - Unit tests
 
-### Epic 6: Agent Runtime (21 points)
+### Epic 6: Agent Runtime (25 points)
 
 #### Story 6.1: JSON-RPC Framing
 - **As a** developer
@@ -270,16 +270,36 @@ Software teams using Linear for issue tracking and AI agents for code generation
   - Emit AgentEvent sealed class variants
   - Unit tests
 
-#### Story 6.3: Subprocess Management
+#### Story 6.3: Agent Abstraction Layer
 - **As a** developer
-- **I want** subprocess management
-- **So that** agents are isolated
+- **I want** an agent abstraction layer
+- **So that** multiple agent runtimes can be supported
+- **Acceptance Criteria:**
+  - AgentRuntime interface with spawn, send, stop methods
+  - Factory for creating runtime instances
+  - Unit tests
+
+#### Story 6.4: Codex Runtime Implementation
+- **As a** developer
+- **I want** Codex runtime implementation
+- **So that** Codex agents can be spawned
 - **Acceptance Criteria:**
   - Spawn codex app-server
   - Manage stdin/stdout pipes
+  - Handle Codex-specific JSON-RPC protocol
   - Unit tests
 
-#### Story 6.4: Turn Timeout
+#### Story 6.5: opencode Runtime Implementation
+- **As a** developer
+- **I want** opencode runtime implementation
+- **So that** opencode agents can be spawned
+- **Acceptance Criteria:**
+  - Spawn opencode subprocess
+  - Manage stdin/stdout pipes
+  - Handle opencode-specific JSON-RPC protocol
+  - Unit tests
+
+#### Story 6.6: Turn Timeout
 - **As a** developer
 - **I want** turn timeout
 - **So that** hangs don't block forever
@@ -288,7 +308,7 @@ Software teams using Linear for issue tracking and AI agents for code generation
   - Kill process on timeout
   - Unit tests
 
-#### Story 6.5: Stall Detection
+#### Story 6.7: Stall Detection
 - **As a** developer
 - **I want** stall detection
 - **So that** unresponsive agents are killed
@@ -419,7 +439,6 @@ Software teams using Linear for issue tracking and AI agents for code generation
 - Web UI for configuration editing
 - Multi-project support in single instance
 - Agent-to-agent communication
-- Custom agent runtime (only Codex)
 - Persistent audit logging
 
 ## 9. Open Questions
@@ -427,7 +446,9 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | Question | Answer | Date |
 |----------|--------|------|
 | Should we support GitHub Issues? | Post-v1 | TBD |
-| Should we support custom agent commands? | Yes, via codex.command | 2026-06-08 |
+| Should we support custom agent commands? | Yes, via codex.command / opencode.command | 2026-06-08 |
+| What are the differences in JSON-RPC protocol between Codex and opencode? | Research needed | TBD |
+| How should users configure which agent to use per workflow? | agent.kind field in workflow | TBD |
 
 ## 10. Appendix
 
@@ -440,6 +461,8 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | KONCERTO_LOGS_ROOT | Log directory | (stderr only) |
 | KONCERTO_WORKSPACE_ROOT | Workspace root | /tmp/symphony_workspaces |
 | KONCERTO_WEB_TYPE | Web mode | none |
+| KONCERTO_CODEX_COMMAND | Codex command | codex app-server |
+| KONCERTO_OPENCODE_COMMAND | opencode command | opencode |
 
 ### 10.2 Glossary
 

@@ -159,9 +159,39 @@
 
 ### Technical Notes
 - Check tracker config completeness
-- Check codex command presence
-- Update codexTotals on TurnCompleted
+- Check agent command presence (codex or opencode)
+- Update totals on TurnCompleted
 - Log warnings for invalid config
+
+### Implementation
+- File: `koncerto-orchestrator/src/main/kotlin/com/anomaly/koncerto/orchestrator/Orchestrator.kt`
+- Tests: `koncerto-orchestrator/src/test/kotlin/com/anomaly/koncerto/orchestrator/OrchestratorTest.kt`
+
+---
+
+## Story 7.6: Agent Runtime Selection
+
+**ID:** 7.6  
+**Title:** Agent Runtime Selection  
+**Points:** 2  
+**Priority:** P0  
+
+### User Story
+- **As a** developer
+- **I want** the orchestrator to select the correct agent runtime
+- **So that** workflows can use either Codex or opencode
+
+### Acceptance Criteria
+- [ ] Read agent.kind from config (codex or opencode)
+- [ ] Use AgentRuntimeFactory to create runtime
+- [ ] Pass runtime to AgentRunner
+- [ ] Log which runtime is being used
+- [ ] Unit tests cover both runtimes
+
+### Technical Notes
+- Inject AgentRuntimeFactory into Orchestrator
+- Pass agent.kind config to factory
+- Factory returns appropriate AgentRuntime implementation
 
 ### Implementation
 - File: `koncerto-orchestrator/src/main/kotlin/com/anomaly/koncerto/orchestrator/Orchestrator.kt`

@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Koncerto is a Kotlin/Spring Boot orchestration service that automates software development workflows by connecting project trackers (Linear) with AI coding agents (Codex). It eliminates manual issue-to-code handoff by automatically discovering, dispatching, and managing coding tasks.
+Koncerto is a Kotlin/Spring Boot orchestration service that automates software development workflows by connecting project trackers (Linear) with AI coding agents (Codex, opencode). It eliminates manual issue-to-code handoff by automatically discovering, dispatching, and managing coding tasks.
 
 ## Problem Statement
 
@@ -60,7 +60,8 @@ Software teams using Linear for issue tracking and AI agents for code generation
 
 ### In Scope (v1.0)
 - Linear integration (polling, issue mapping)
-- Codex agent runtime (JSON-RPC, subprocess management)
+- **Codex agent runtime (JSON-RPC, subprocess management)**
+- **opencode agent runtime (JSON-RPC, subprocess management)**
 - Workspace isolation with lifecycle hooks
 - Retry logic with exponential backoff
 - Real-time dashboard and REST API
@@ -68,14 +69,12 @@ Software teams using Linear for issue tracking and AI agents for code generation
 
 ### Out of Scope (v1.0)
 - GitHub Issues integration
-- Custom agent runtimes
 - Web UI for configuration
 - Persistent audit logging
 - Multi-project support
 
 ### Future Considerations
 - GitHub/GitLab integration
-- Additional agent runtimes
 - Database for metrics and audit trail
 - OAuth authentication for dashboard
 
@@ -84,15 +83,16 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | Constraint | Impact | Mitigation |
 |------------|--------|------------|
 | Linear API rate limits | Polling frequency | Configurable intervals, efficient queries |
-| Codex subprocess overhead | Memory usage | Workspace cleanup, concurrency limits |
+| **Codex/opencode subprocess overhead** | Memory usage | Workspace cleanup, concurrency limits |
 | Kotlin/JVM startup time | Cold start | Spring Boot optimization, minimal dependencies |
 
 ## Assumptions
 
 1. Linear API is available and stable
-2. Codex CLI is installed and functional
-3. Users have basic Kotlin/Gradle knowledge
-4. Internal deployment (no public internet exposure)
+2. **Codex CLI is installed and functional**
+3. **opencode CLI is installed and functional**
+4. Users have basic Kotlin/Gradle knowledge
+5. Internal deployment (no public internet exposure)
 
 ## Risks
 
@@ -125,6 +125,8 @@ Software teams using Linear for issue tracking and AI agents for code generation
 1. Should we support multiple agent runtimes in v1?
 2. What's the expected number of concurrent issues?
 3. Do we need authentication for the dashboard?
+4. **What are the differences in JSON-RPC protocol between Codex and opencode?**
+5. **How should users configure which agent to use per workflow?**
 
 ## Next Steps
 

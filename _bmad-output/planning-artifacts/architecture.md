@@ -9,7 +9,7 @@
 
 ## 1. System Overview
 
-Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents by connecting project trackers (Linear) with agent runtimes (Codex). It follows a modular, layered architecture with strict dependency direction.
+Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents by connecting project trackers (Linear) with agent runtimes (Codex, opencode). It follows a modular, layered architecture with strict dependency direction.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -109,7 +109,7 @@ Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents 
 | koncerto-workflow | YAML parsing, template rendering | FrontMatterParser, PromptRenderer, WorkflowCache | core |
 | koncerto-workspace | Workspace isolation, hooks | WorkspaceManager, ShellHookExecutor, WorkspaceKey | core, logging |
 | koncerto-linear | Linear GraphQL integration | LinearGraphQLClient, DefaultLinearClient, IssueMapper | core |
-| koncerto-agent | Agent subprocess management | CodexAppServerClient, DefaultAgentRunner, AgentEvent | core, logging, workflow, workspace |
+| koncerto-agent | Agent abstraction & runtimes | AgentRuntime, AgentRuntimeFactory, CodexRuntime, OpencodeRuntime, AgentEvent | core, logging, workflow, workspace |
 | koncerto-orchestrator | Poll loop, dispatch, retry | Orchestrator, RuntimeState | core, logging, workflow, workspace, agent, linear |
 | koncerto-dashboard | REST API, HTML dashboard | ApiV1Controller, DashboardController | core, orchestrator |
 | koncerto-app | Application entry point | KoncertoApplication, Beans, CliRunner | All modules |
@@ -128,14 +128,14 @@ Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents 
 ```
 ┌─────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
 │ Linear  │────►│Orchestr. │────►│  Agent   │────►│ Linear   │
-│ (Todo)  │     │ (poll)   │     │ (Codex)  │     │ (Done)   │
-└─────────┘     └────┬─────┘     └────┬─────┘     └──────────┘
-                     │                │
-                     ▼                ▼
-               ┌──────────┐    ┌──────────┐
-               │ Workspace│    │  Events  │
-               │ (create) │    │ (stream) │
-               └──────────┘    └──────────┘
+│ (Todo)  │     │ (poll)   │     │ (Codex/  │     │ (Done)   │
+└─────────┘     └────┬─────┘     │ opencode)│     └──────────┘
+                     │           └────┬─────┘           
+                     ▼                ▼                
+               ┌──────────┐    ┌──────────┐            
+               │ Workspace│    │  Events  │            
+               │ (create) │    │ (stream) │            
+               └──────────┘    └──────────┘            
 ```
 
 ### 4.2 Dispatch Flow
@@ -147,7 +147,8 @@ Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents 
    - Create workspace via WorkspaceManager
    - Execute after_create hook
    - Render prompt via WorkflowCache.current()
-   - Start agent via AgentRunner.run()
+   - Select agent runtime via AgentRuntimeFactory (Codex or opencode)
+   - Start agent via AgentRuntime.run()
 5. **Monitor** → Agent emits events, orchestrator tracks state
 6. **Complete** → Detect terminal state, clean up workspace
 
@@ -245,6 +246,8 @@ sealed class Result<out T, out E> {
 | Core | IllegalStateException | Config validation failures |
 | Linear | LinearError | MissingApiKey, Status, GraphQlErrors |
 | Agent | AgentError | SubprocessFailure, TurnTimeout |
+| Agent | CodexError | CodexProtocolError, CodexSpawnError |
+| Agent | OpencodeError | OpencodeProtocolError, OpencodeSpawnError |
 | Workspace | WorkspaceError | HookExecutionFailed |
 
 ### 6.3 Recovery Strategies
@@ -285,9 +288,12 @@ ServiceConfig.fromMapOrError()
 |-------|------|-------|
 | tracker.api_key | Required, not blank | missing_tracker_api_key |
 | tracker.project_slug | Required, not blank | missing_tracker_project_slug |
+| agent.kind | codex or opencode | invalid_agent_kind |
 | agent.max_concurrent_agents | >= 1 | — |
 | agent.max_turns | >= 1 | — |
 | workspace.root | Valid path | — |
+| codex.command | Valid command | — |
+| opencode.command | Valid command | — |
 
 ## 8. Testing Strategy
 
@@ -357,7 +363,7 @@ ServiceConfig.fromMapOrError()
 | JDK | 21+ |
 | Memory | 512 MB |
 | Disk | 1 GB (for workspaces) |
-| Network | Linear API access, Codex binary |
+| Network | Linear API access, Codex binary, opencode binary |
 
 ### 9.3 Docker (Future)
 
@@ -397,13 +403,15 @@ ENTRYPOINT ["java", "-jar", "/app/koncerto.jar"]
 | Serialization | Gson vs kotlinx.serialization | kotlinx.serialization | Compile-time, no reflection |
 | Templating | FreeMarker vs liqp | liqp | Simple, Liquid syntax |
 | Testing | JUnit4 vs JUnit5 | JUnit5 | Modern, parameterized tests |
+| Agent Runtime | Single (Codex) vs Multiple | Multiple (Codex, opencode) | Flexibility, user choice, future-proofing |
+| Agent Abstraction | Direct implementation vs Interface | AgentRuntime interface | Extensibility, testability, clean architecture |
 
 ## 13. Future Considerations
 
 | Area | Options | Trade-offs |
 |------|---------|------------|
 | Multi-project | Support multiple Linear projects | Complexity vs flexibility |
-| Agent types | Support different agent runtimes | Implementation effort vs value |
+| Agent types | Support additional agent runtimes | Implementation effort vs value |
 | Persistence | Database for audit trail | Storage vs observability |
 | Auth | API key or OAuth for dashboard | Security vs simplicity |
 | Monitoring | Prometheus metrics | Integration effort vs observability |

@@ -1,8 +1,8 @@
 # Epic 6: Agent Runtime
 
-**Story Points:** 21  
+**Story Points:** 25  
 **Priority:** P0  
-**Status:** Complete  
+**Status:** In Progress  
 
 ---
 
@@ -48,7 +48,7 @@
 ### User Story
 - **As a** developer
 - **I want** JSON-RPC message models
-- **So that** Codex protocol messages are strongly typed
+- **So that** agent protocol messages are strongly typed
 
 ### Acceptance Criteria
 - [ ] JsonRpcRequest with id, method, params
@@ -100,26 +100,55 @@
 
 ---
 
-## Story 6.4: CodexAppServerClient
+## Story 6.4: AgentRuntime Abstraction
 
 **ID:** 6.4  
-**Title:** CodexAppServerClient  
-**Points:** 10  
+**Title:** AgentRuntime Abstraction  
+**Points:** 3  
 **Priority:** P0  
 
 ### User Story
 - **As a** developer
-- **I want** a client to communicate with Codex app-server
-- **So that** I can start agent processes and receive events
+- **I want** an agent runtime abstraction
+- **So that** multiple agent runtimes can be supported
 
 ### Acceptance Criteria
-- [ ] start() spawns process and begins reading
-- [ ] send() writes JSON-RPC requests to stdin
-- [ ] stop() closes process gracefully
-- [ ] Read stdout for JSON-RPC messages
-- [ ] Read stderr for debug logging
+- [ ] AgentRuntime interface with spawn, send, stop, events
+- [ ] AgentRuntimeFactory for creating runtime instances
+- [ ] AgentRuntimeConfig data class for configuration
+- [ ] Support agent.kind = codex | opencode
+- [ ] Unit tests cover factory and interface
+
+### Technical Notes
+- Define common operations all runtimes must support
+- Factory reads config.agent.kind to select implementation
+- Each runtime handles its own protocol specifics
+
+### Implementation
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/AgentRuntime.kt`
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/AgentRuntimeFactory.kt`
+- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/AgentRuntimeFactoryTest.kt`
+
+---
+
+## Story 6.5: CodexRuntime
+
+**ID:** 6.5  
+**Title:** CodexRuntime  
+**Points:** 8  
+**Priority:** P0  
+
+### User Story
+- **As a** developer
+- **I want** Codex runtime implementation
+- **So that** Codex agents can be spawned and managed
+
+### Acceptance Criteria
+- [ ] Implements AgentRuntime interface
+- [ ] Spawn codex app-server process
+- [ ] Manage stdin/stdout pipes
+- [ ] Handle Codex-specific JSON-RPC protocol
 - [ ] Emit AgentEvent for each message type
-- [ ] Handle process startup failures
 - [ ] Extract token usage from turn completed events
 - [ ] Thread-safe request ID generation
 - [ ] Unit tests cover all cases
@@ -131,40 +160,94 @@
 - AtomicLong for request IDs
 
 ### Implementation
-- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/CodexAppServerClient.kt`
-- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/CodexAppServerClientTest.kt`
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/CodexRuntime.kt`
+- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/CodexRuntimeTest.kt`
 
 ---
 
-## Story 6.5: AgentRunner
+## Story 6.6: OpencodeRuntime
 
-**ID:** 6.5  
-**Title:** AgentRunner  
-**Points:** 4  
+**ID:** 6.6  
+**Title:** OpencodeRuntime  
+**Points:** 8  
 **Priority:** P0  
 
 ### User Story
 - **As a** developer
-- **I want** a high-level runner for agent execution
-- **So that** agent runs are orchestrated with workspace and hooks
+- **I want** opencode runtime implementation
+- **So that** opencode agents can be spawned and managed
 
 ### Acceptance Criteria
-- [ ] run() executes agent with issue and prompt
-- [ ] Create workspace for issue identifier
-- [ ] Run afterCreate and beforeRun hooks
-- [ ] Render prompt with issue context
-- [ ] Send initialize, thread/start, turn/start messages
-- [ ] Run afterRun hook on completion
-- [ ] Emit events via Flow
-- [ ] Return EmptyResult on success/failure
+- [ ] Implements AgentRuntime interface
+- [ ] Spawn opencode subprocess
+- [ ] Manage stdin/stdout pipes
+- [ ] Handle opencode-specific JSON-RPC protocol
+- [ ] Emit AgentEvent for each message type
+- [ ] Extract token usage from turn completed events
+- [ ] Thread-safe request ID generation
 - [ ] Unit tests cover all cases
 
 ### Technical Notes
-- Use WorkspaceManager for directory management
-- Use PromptRenderer for template rendering
-- Map Issue to template context
-- SharedFlow for event emission
+- Research opencode CLI interface and protocol
+- Use ProcessBuilder for process spawning
+- Read stdout/stderr in coroutine scope
+- Channel-based event emission
+- AtomicLong for request IDs
 
 ### Implementation
-- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/AgentRunner.kt`
-- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/AgentRunnerTest.kt`
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/OpencodeRuntime.kt`
+- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/OpencodeRuntimeTest.kt`
+
+---
+
+## Story 6.7: Turn Timeout
+
+**ID:** 6.7  
+**Title:** Turn Timeout  
+**Points:** 2  
+**Priority:** P0  
+
+### User Story
+- **As a** developer
+- **I want** turn timeout
+- **So that** hangs don't block forever
+
+### Acceptance Criteria
+- [ ] Configurable timeout per turn
+- [ ] Kill process on timeout
+- [ ] Unit tests
+
+### Technical Notes
+- Use withTimeout for turn execution
+- Clean up process on timeout
+
+### Implementation
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/TurnTimeout.kt`
+- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/TurnTimeoutTest.kt`
+
+---
+
+## Story 6.8: Stall Detection
+
+**ID:** 6.8  
+**Title:** Stall Detection  
+**Points:** 2  
+**Priority:** P0  
+
+### User Story
+- **As a** developer
+- **I want** stall detection
+- **So that** unresponsive agents are killed
+
+### Acceptance Criteria
+- [ ] Detect no-output conditions
+- [ ] Terminate after timeout
+- [ ] Unit tests
+
+### Technical Notes
+- Track last message timestamp
+- Background coroutine checks for stalls
+
+### Implementation
+- File: `koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/StallDetector.kt`
+- Tests: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/StallDetectorTest.kt`

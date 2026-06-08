@@ -1,8 +1,8 @@
 # Epic 9: Application Assembly
 
-**Story Points:** 5  
+**Story Points:** 8  
 **Priority:** P0  
-**Status:** Complete  
+**Status:** In Progress  
 
 ---
 
@@ -41,7 +41,7 @@
 
 **ID:** 9.2  
 **Title:** Beans Configuration  
-**Points:** 2  
+**Points:** 3  
 **Priority:** P0  
 
 ### User Story
@@ -56,7 +56,8 @@
 - [ ] Bean: ServiceConfig from workflow definition
 - [ ] Bean: WorkspaceManager with hook executor
 - [ ] Bean: LinearClient with GraphQL client
-- [ ] Bean: AgentRunner
+- [ ] Bean: AgentRuntimeFactory (for Codex/opencode selection)
+- [ ] Bean: AgentRunner with runtime factory
 - [ ] Bean: RuntimeState from config
 - [ ] Bean: Orchestrator with all dependencies
 
@@ -65,6 +66,7 @@
 - @Value for property injection
 - Create logs directory if needed
 - Load workflow from path at startup
+- AgentRuntimeFactory selects runtime based on config.agent.kind
 
 ### Implementation
 - File: `koncerto-app/src/main/kotlin/com/anomaly/koncerto/app/Beans.kt`
@@ -126,3 +128,35 @@
 
 ### Implementation
 - File: `koncerto-app/src/test/kotlin/com/anomaly/koncerto/app/AppTest.kt`
+
+---
+
+## Story 9.5: Agent Configuration Support
+
+**ID:** 9.5  
+**Title:** Agent Configuration Support  
+**Points:** 2  
+**Priority:** P0  
+
+### User Story
+- **As an** operator
+- **I want** to configure which agent runtime to use
+- **So that** I can choose between Codex and opencode
+
+### Acceptance Criteria
+- [ ] agent.kind field in WORKFLOW.md config (codex or opencode)
+- [ ] codex.command configuration for Codex runtime
+- [ ] opencode.command configuration for opencode runtime
+- [ ] Validate agent.kind is one of: codex, opencode
+- [ ] Default to codex if not specified
+- [ ] Unit tests for configuration parsing
+
+### Technical Notes
+- Add agent.kind to ServiceConfig
+- Add codex and opencode sub-configs
+- Validate commands exist
+- Support environment variable references
+
+### Implementation
+- File: `koncerto-core/src/main/kotlin/com/anomaly/koncerto/core/config/ServiceConfig.kt`
+- Tests: `koncerto-core/src/test/kotlin/com/anomaly/koncerto/core/config/ServiceConfigTest.kt`
