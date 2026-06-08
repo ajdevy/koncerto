@@ -17,7 +17,8 @@ class DispatchService(
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
-    private val projectSlug: String
+    private val projectSlug: String,
+    private val retryExecutor: RetryExecutor = RetryExecutor(config.maxRetryBackoffMs)
 ) {
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         val candidates = try {
@@ -48,19 +49,13 @@ class DispatchService(
 
     fun scheduleRetry(issue: Issue, error: String) {
         state.running.remove(issue.id)
-        val existing = state.retryAttempts[issue.id]
-        val nextAttempt = (existing?.attempt ?: 0) + 1
-        val delayMs =
-            (10_000L * (1L shl (nextAttempt - 1).coerceAtMost(20))).coerceAtMost(config.maxRetryBackoffMs)
-        val entry = RetryEntry(
-            issue.id, issue.identifier, nextAttempt,
-            System.currentTimeMillis() + delayMs, error
-        )
+        val previousAttempt = state.retryAttempts[issue.id]?.attempt ?: 0
+        val entry = retryExecutor.createEntry(issue.id, issue.identifier, previousAttempt, error)
         state.retryAttempts[issue.id] = entry
         logger.info(
             "retry_scheduled",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
-            "attempt" to nextAttempt, "delay_ms" to delayMs
+            "attempt" to entry.attempt, "delay_ms" to (entry.dueAtMs - System.currentTimeMillis())
         )
     }
 
