@@ -1,0 +1,39 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "header, diff, flags, components"
+  behavior: default
+
+flags:
+  core:
+    paths:
+      - koncerto-core/
+  logging:
+    paths:
+      - koncerto-logging/
+  workflow:
+    paths:
+      - koncerto-workflow/
+  workspace:
+    paths:
+      - koncerto-workspace/
+  linear:
+    paths:
+      - koncerto-linear/
+  agent:
+    paths:
+      - koncerto-agent/
+  orchestrator:
+    paths:
+      - koncerto-orchestrator/
+  dashboard:
+    paths:
+      - koncerto-dashboard/
