@@ -28,7 +28,9 @@ interface AgentRunner {
     suspend fun run(
         issue: Issue,
         attempt: Int?,
-        prompt: String
+        prompt: String,
+        agentKindOverride: String? = null,
+        commandOverride: String? = null
     ): EmptyResult<IllegalStateException>
 }
 
@@ -46,7 +48,9 @@ class DefaultAgentRunner(
     override suspend fun run(
         issue: Issue,
         attempt: Int?,
-        prompt: String
+        prompt: String,
+        agentKindOverride: String?,
+        commandOverride: String?
     ): EmptyResult<IllegalStateException> = runCatchingResult {
         val workspace = workspaces.ensureWorkspace(issue.identifier)
         workspaces.assertInsideRoot(workspace.path)
@@ -54,8 +58,10 @@ class DefaultAgentRunner(
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
 
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
-        val command = if (config.agentKind == "opencode") config.opencodeCommand else config.codexCommand
-        val runtime = factory.create(config.agentKind, command, workspace.path)
+        val effectiveKind = agentKindOverride ?: config.agentKind
+        val command = commandOverride
+            ?: if (effectiveKind == "opencode") config.opencodeCommand else config.codexCommand
+        val runtime = factory.create(effectiveKind, command, workspace.path)
         if (!runtime.start()) throw IllegalStateException("startup_failed")
 
         val rendered = PromptRenderer.render(

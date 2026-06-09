@@ -13,6 +13,9 @@ interface LinearClient {
     suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue>
     suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue>
     suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String>
+    suspend fun fetchIssueById(issueId: String): Issue?
+    suspend fun resolveStateId(projectSlug: String, stateName: String): String?
+    suspend fun updateIssueState(issueId: String, stateId: String)
 }
 
 class DefaultLinearClient(
@@ -58,6 +61,35 @@ class DefaultLinearClient(
           nodes(filter: { id: { in: ${'$'}ids } }) {
             ... on Issue { id state { name } }
           }
+        }
+    """.trimIndent()
+
+    internal val issueByIdQuery = """
+        query IssueById(${'$'}id: String!) {
+          issue(id: ${'$'}id) {
+            id identifier title description priority url branchName createdAt updatedAt
+            state { name }
+            labels { nodes { name } }
+            blockedBy: relations(filter: { type: { eq: "blocks" } }) {
+              nodes {
+                ... on Issue { id identifier state { name } }
+              }
+            }
+          }
+        }
+    """.trimIndent()
+
+    internal val teamStatesQuery = """
+        query TeamStates(${'$'}projectSlug: String!) {
+          project(slugId: ${'$'}projectSlug) {
+            team { states { nodes { id name } } }
+          }
+        }
+    """.trimIndent()
+
+    internal val updateIssueStateMutation = """
+        mutation IssueUpdate(${'$'}id: String!, ${'$'}stateId: String!) {
+          issueUpdate(id: ${'$'}id, input: { stateId: ${'$'}stateId }) { success }
         }
     """.trimIndent()
 
@@ -116,5 +148,36 @@ class DefaultLinearClient(
             if (state != null) map[id] = state
         }
         return map
+    }
+
+    override suspend fun fetchIssueById(issueId: String): Issue? {
+        val vars = buildJsonObject { put("id", issueId) }
+        val resp = graphql.execute(issueByIdQuery, vars)
+        val issueNode = (resp["data"] as? JsonObject)?.get("issue") as? JsonObject ?: return null
+        return IssueMapper.fromLinear(issueNode)
+    }
+
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
+        val vars = buildJsonObject { put("projectSlug", projectSlug) }
+        val resp = graphql.execute(teamStatesQuery, vars)
+        val project = (resp["data"] as? JsonObject)?.get("project") as? JsonObject ?: return null
+        val team = project["team"] as? JsonObject ?: return null
+        val states = (team["states"] as? JsonObject)?.get("nodes") as? JsonArray ?: return null
+        for (node in states) {
+            val obj = node as? JsonObject ?: continue
+            val name = (obj["name"] as? JsonPrimitive)?.content ?: continue
+            if (name.equals(stateName, ignoreCase = true)) {
+                return (obj["id"] as? JsonPrimitive)?.content
+            }
+        }
+        return null
+    }
+
+    override suspend fun updateIssueState(issueId: String, stateId: String) {
+        val vars = buildJsonObject {
+            put("id", issueId)
+            put("stateId", stateId)
+        }
+        graphql.execute(updateIssueStateMutation, vars)
     }
 }

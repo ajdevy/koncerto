@@ -574,9 +574,10 @@ class OrchestratorTest {
         agentKind = "codex",
         codexCommand = "codex app-server", codexApprovalPolicy = null,
         codexThreadSandbox = null, codexTurnSandboxPolicy = null,
-        opencodeCommand = "opencode",
-        turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000
-    )
+            opencodeCommand = "opencode",
+            turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+            stages = emptyMap()
+        )
 
     private fun runningEntry(id: String, identifier: String) = RunningEntry(
         issue = Issue(
@@ -600,6 +601,13 @@ class FakeLinearClient(private val candidates: List<Issue>) : LinearClient {
 
     override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> =
         candidates.filter { issueIds.contains(it.id) }.associate { it.id to it.state }
+
+    override suspend fun fetchIssueById(issueId: String): Issue? =
+        candidates.firstOrNull { it.id == issueId }
+
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
+
+    override suspend fun updateIssueState(issueId: String, stateId: String) {}
 }
 
 class FakeLinearClientWithStates(private val stateMap: Map<String, String>) : LinearClient {
@@ -607,6 +615,12 @@ class FakeLinearClientWithStates(private val stateMap: Map<String, String>) : Li
     override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> = emptyList()
     override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> =
         issueIds.filter { it in stateMap }.associateWith { stateMap[it]!! }
+
+    override suspend fun fetchIssueById(issueId: String): Issue? = null
+
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
+
+    override suspend fun updateIssueState(issueId: String, stateId: String) {}
 }
 
 class FakeLinearClientThrowing : LinearClient {
@@ -618,13 +632,29 @@ class FakeLinearClientThrowing : LinearClient {
 
     override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> =
         throw RuntimeException("API down")
+
+    override suspend fun fetchIssueById(issueId: String): Issue? =
+        throw RuntimeException("API down")
+
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? =
+        throw RuntimeException("API down")
+
+    override suspend fun updateIssueState(issueId: String, stateId: String) {
+        throw RuntimeException("API down")
+    }
 }
 
 class FakeAgentRunner : AgentRunner {
     val dispatched = mutableListOf<Issue>()
     private val flow = MutableSharedFlow<AgentEvent>()
     override fun events() = flow.asSharedFlow()
-    override suspend fun run(issue: Issue, attempt: Int?, prompt: String): EmptyResult<IllegalStateException> {
+    override suspend fun run(
+        issue: Issue,
+        attempt: Int?,
+        prompt: String,
+        agentKindOverride: String?,
+        commandOverride: String?
+    ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Success(Unit)
     }
@@ -634,7 +664,13 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
     val dispatched = mutableListOf<Issue>()
     private val flow = MutableSharedFlow<AgentEvent>()
     override fun events() = flow.asSharedFlow()
-    override suspend fun run(issue: Issue, attempt: Int?, prompt: String): EmptyResult<IllegalStateException> {
+    override suspend fun run(
+        issue: Issue,
+        attempt: Int?,
+        prompt: String,
+        agentKindOverride: String?,
+        commandOverride: String?
+    ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Failure(IllegalStateException(errorMsg))
     }

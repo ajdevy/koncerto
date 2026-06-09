@@ -47,10 +47,11 @@ class AgentRunnerTest {
         codexThreadSandbox = null,
         codexTurnSandboxPolicy = null,
         opencodeCommand = opencodeCommand,
-        turnTimeoutMs = 3600000,
-        readTimeoutMs = 5000,
-        stallTimeoutMs = 300000
-    )
+            turnTimeoutMs = 3600000,
+            readTimeoutMs = 5000,
+            stallTimeoutMs = 300000,
+            stages = emptyMap()
+        )
 
     private fun sampleIssue(): Issue = Issue(
         id = "1",

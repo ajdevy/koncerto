@@ -29,7 +29,8 @@ data class ServiceConfig(
     val opencodeCommand: String,
     val turnTimeoutMs: Long,
     val readTimeoutMs: Long,
-    val stallTimeoutMs: Long
+    val stallTimeoutMs: Long,
+    val stages: Map<String, StageAgentConfig>
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
 
@@ -52,6 +53,8 @@ data class ServiceConfig(
             val hooksConfig = parseHooksConfig(map["hooks"] as? Map<*, *>)
             val agentSection = parseAgentSection(map["agent"] as? Map<*, *>)
             val codexSection = parseCodexSection(map["codex"] as? Map<*, *>, map["opencode"] as? Map<*, *>, agentSection.kind)
+
+            val stages = parseStages(map["agent"] as? Map<*, *>)
 
             ServiceConfig(
                 trackerKind = trackerSection.kind,
@@ -76,7 +79,8 @@ data class ServiceConfig(
                 opencodeCommand = codexSection.opencodeCommand,
                 turnTimeoutMs = codexSection.turnTimeoutMs,
                 readTimeoutMs = codexSection.readTimeoutMs,
-                stallTimeoutMs = codexSection.stallTimeoutMs
+                stallTimeoutMs = codexSection.stallTimeoutMs,
+                stages = stages
             )
         }
 
@@ -97,6 +101,22 @@ data class ServiceConfig(
             val maxRetryBackoffMs: Long,
             val perState: Map<String, Int>
         )
+
+        private fun parseStages(agentMap: Map<*, *>?): Map<String, StageAgentConfig> {
+            val rawStages = agentMap?.get("stages") as? Map<*, *> ?: return emptyMap()
+            return rawStages.mapNotNull { (k, v) ->
+                val stageName = (k as? String)?.lowercase() ?: return@mapNotNull null
+                val stageMap = v as? Map<*, *> ?: return@mapNotNull null
+                stageName to StageAgentConfig(
+                    prompt = stageMap["prompt"] as? String,
+                    model = stageMap["model"] as? String,
+                    maxConcurrent = (stageMap["max_concurrent"] as? Number)?.toInt(),
+                    agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
+                    command = stageMap["command"] as? String,
+                    onCompleteState = stageMap["on_complete_state"] as? String
+                )
+            }.toMap()
+        }
 
         private data class CodexSection(
             val command: String,
@@ -226,4 +246,13 @@ data class HooksConfig(
     val afterRun: String?,
     val beforeRemove: String?,
     val timeoutMs: Long
+)
+
+data class StageAgentConfig(
+    val prompt: String?,
+    val model: String?,
+    val maxConcurrent: Int?,
+    val agentKind: String?,
+    val command: String?,
+    val onCompleteState: String?
 )

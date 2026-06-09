@@ -53,6 +53,7 @@ class Orchestrator(
         try {
             reconcile()
             runPreflight()
+            dispatchService.dispatchDueRetries(scope!!)
             dispatchService.fetchAndDispatch(scope!!)
         } catch (e: Exception) {
             logger.failure("tick_failed", emptyMap(), e)

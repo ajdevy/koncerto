@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import org.junit.jupiter.api.Test
 
 class ServiceConfigTest {
@@ -119,5 +120,82 @@ class ServiceConfigTest {
             workflowFileDir = "/some/dir"
         )
         assertThat(config.workspaceRoot.toString()).isEqualTo("/some/dir/ws")
+    }
+
+    @Test
+    fun `stages defaults to empty when not specified`() {
+        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        assertThat(config.stages).isEqualTo(emptyMap())
+    }
+
+    @Test
+    fun `parse single stage with all fields`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "agent" to mapOf(
+                    "kind" to "opencode",
+                    "stages" to mapOf(
+                        "Todo" to mapOf(
+                            "prompt" to "prompts/implement.md",
+                            "model" to "claude-sonnet-4-5",
+                            "max_concurrent" to 3,
+                            "agent_kind" to "opencode",
+                            "command" to "opencode-dev",
+                            "on_complete_state" to "In Review"
+                        )
+                    )
+                ),
+                "opencode" to mapOf("command" to "opencode")
+            ),
+            workflowFileDir = "/tmp"
+        )
+        val todo = config.stages["todo"]
+        assertThat(todo).isNotNull()
+        assertThat(todo!!.prompt).isEqualTo("prompts/implement.md")
+        assertThat(todo.model).isEqualTo("claude-sonnet-4-5")
+        assertThat(todo.maxConcurrent).isEqualTo(3)
+        assertThat(todo.agentKind).isEqualTo("opencode")
+        assertThat(todo.command).isEqualTo("opencode-dev")
+        assertThat(todo.onCompleteState).isEqualTo("In Review")
+    }
+
+    @Test
+    fun `parse multiple stages`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "agent" to mapOf(
+                    "kind" to "opencode",
+                    "stages" to mapOf(
+                        "Todo" to mapOf("prompt" to "impl.md", "max_concurrent" to 3),
+                        "In Review" to mapOf("prompt" to "review.md", "max_concurrent" to 1)
+                    )
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.stages.keys).isEqualTo(setOf("todo", "in review"))
+        assertThat(config.stages["todo"]?.prompt).isEqualTo("impl.md")
+        assertThat(config.stages["in review"]?.prompt).isEqualTo("review.md")
+    }
+
+    @Test
+    fun `stage with partial fields gets nulls for missing`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "agent" to mapOf(
+                    "stages" to mapOf(
+                        "Todo" to mapOf("prompt" to "only-prompt.md")
+                    )
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        val todo = config.stages["todo"]
+        assertThat(todo).isNotNull()
+        assertThat(todo!!.model).isNull()
+        assertThat(todo.maxConcurrent).isNull()
+        assertThat(todo.agentKind).isNull()
+        assertThat(todo.command).isNull()
+        assertThat(todo.onCompleteState).isNull()
     }
 }

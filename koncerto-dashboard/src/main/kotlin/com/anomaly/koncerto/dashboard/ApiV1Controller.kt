@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.dashboard
 
+import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import kotlinx.serialization.Serializable
 import org.springframework.web.bind.annotation.GetMapping
@@ -11,7 +12,10 @@ import reactor.core.publisher.Mono
 
 @RestController
 @RequestMapping("/api/v1")
-class ApiV1Controller(private val state: RuntimeState) {
+class ApiV1Controller(
+    private val state: RuntimeState,
+    private val config: ServiceConfig
+) {
 
     @Serializable
     data class StateSnapshot(
@@ -102,4 +106,35 @@ class ApiV1Controller(private val state: RuntimeState) {
 
     @PostMapping("/refresh")
     fun refresh(): Mono<RefreshResponse> = Mono.just(RefreshResponse(status = "ok"))
+
+    @Serializable
+    data class StageModel(
+        val stage: String,
+        val model: String?,
+        val agentKind: String?,
+        val prompt: String?
+    )
+
+    @Serializable
+    data class ModelsResponse(
+        val agentKind: String,
+        val configuredStages: List<StageModel>,
+        val totalStages: Int
+    )
+
+    @GetMapping("/models", produces = ["application/json"])
+    fun models(): Mono<ModelsResponse> = Mono.just(
+        ModelsResponse(
+            agentKind = config.agentKind,
+            configuredStages = config.stages.map { (state, stage) ->
+                StageModel(
+                    stage = state,
+                    model = stage.model,
+                    agentKind = stage.agentKind,
+                    prompt = stage.prompt
+                )
+            },
+            totalStages = config.stages.size
+        )
+    )
 }
