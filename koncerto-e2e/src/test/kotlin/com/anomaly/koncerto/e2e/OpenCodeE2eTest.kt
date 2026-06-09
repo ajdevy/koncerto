@@ -33,12 +33,12 @@ class OpenCodeE2eTest {
                 val output = runOutput.output
 
                 val helloFile = workspaceDir.resolve("hello_world.py")
+                val runProcess = runOutput.process
+                val exitCode = runProcess.exitValue()
                 if (Files.exists(helloFile)) {
                     val content = helloFile.toFile().readText()
                     assertThat(content).contains("Hello")
                 } else {
-                    val runProcess = runOutput.process
-                    val exitCode = runProcess.exitValue()
                     if (exitCode != 0) {
                         println("opencode run exited with code $exitCode, output: ${output.take(2000)}")
                     }
@@ -103,18 +103,22 @@ class OpenCodeE2eTest {
     private data class RunResult(val process: Process, val output: String)
 
     private fun runTask(cmd: String, port: Int): RunResult {
+        val model = System.getenv("OPENCODE_MODEL") ?: "opencode/deepseek-v4-flash-free"
         val task = "Create a Python script named hello_world.py " +
             "in the workspace root directory. " +
             "The script should print " +
             "'Hello from Koncerto E2E' when executed."
+        val url = "http://localhost:$port"
         val proc = ProcessBuilder(
             cmd, "run",
-            "--attach", "http://localhost:$port",
+            "--attach", url,
+            "--model", model,
             "--dangerously-skip-permissions",
             task
         )
             .redirectErrorStream(true)
             .start()
+        proc.outputStream.close()
 
         val output = StringBuilder()
         val reader = BufferedReader(InputStreamReader(proc.inputStream))
@@ -131,7 +135,8 @@ class OpenCodeE2eTest {
         if (!exited) {
             proc.destroyForcibly()
             proc.waitFor(5, TimeUnit.SECONDS)
-            throw AssertionError("opencode run timed out after 120s")
+            val outPreview = output.toString().take(2000)
+            throw AssertionError("opencode run timed out after 120s. Output so far:\n$outPreview")
         }
         captureThread.join(1000)
         return RunResult(proc, output.toString())
