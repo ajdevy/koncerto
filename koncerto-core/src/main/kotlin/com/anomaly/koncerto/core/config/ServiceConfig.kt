@@ -127,6 +127,7 @@ data class ServiceConfig(
             val readTimeoutMs = (map?.get("read_timeout_ms") as? Number)?.toLong() ?: 5_000L
             val stallTimeoutMs = (map?.get("stall_timeout_ms") as? Number)?.toLong() ?: 300_000L
             val stages = parseStages(map)
+            val agents = parseAgents(map)
 
             return AgentProjectConfig(
                 kind = kind,
@@ -138,7 +139,8 @@ data class ServiceConfig(
                 turnTimeoutMs = turnTimeoutMs,
                 readTimeoutMs = readTimeoutMs,
                 stallTimeoutMs = stallTimeoutMs,
-                stages = stages
+                stages = stages,
+                agents = agents
             )
         }
 
@@ -153,7 +155,23 @@ data class ServiceConfig(
                     maxConcurrent = (stageMap["max_concurrent"] as? Number)?.toInt(),
                     agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
                     command = stageMap["command"] as? String,
-                    onCompleteState = stageMap["on_complete_state"] as? String
+                    onCompleteState = stageMap["on_complete_state"] as? String,
+                    agent = stageMap["agent"] as? String
+                )
+            }.toMap()
+        }
+
+        internal fun parseAgents(agentMap: Map<*, *>?): Map<String, AgentProviderConfig> {
+            val rawAgents = agentMap?.get("agents") as? Map<*, *> ?: return emptyMap()
+            return rawAgents.mapNotNull { (k, v) ->
+                val name = (k as? String) ?: return@mapNotNull null
+                val agentMap = v as? Map<*, *> ?: return@mapNotNull null
+                val kind = (agentMap["kind"] as? String) ?: return@mapNotNull null
+                name to AgentProviderConfig(
+                    kind = kind,
+                    command = agentMap["command"] as? String,
+                    model = agentMap["model"] as? String,
+                    maxConcurrent = (agentMap["max_concurrent"] as? Number)?.toInt()
                 )
             }.toMap()
         }
@@ -216,13 +234,22 @@ data class HooksConfig(
 )
 
 @kotlinx.serialization.Serializable
+data class AgentProviderConfig(
+    val kind: String,
+    val command: String? = null,
+    val model: String? = null,
+    val maxConcurrent: Int? = null
+)
+
+@kotlinx.serialization.Serializable
 data class StageAgentConfig(
     val prompt: String?,
     val model: String?,
     val maxConcurrent: Int?,
     val agentKind: String?,
     val command: String?,
-    val onCompleteState: String?
+    val onCompleteState: String?,
+    val agent: String? = null
 )
 
 data class GitConfig(

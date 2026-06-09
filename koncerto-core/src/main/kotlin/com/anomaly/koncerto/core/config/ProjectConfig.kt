@@ -34,5 +34,6 @@ data class AgentProjectConfig(
     val turnTimeoutMs: Long = 3600000,
     val readTimeoutMs: Long = 5000,
     val stallTimeoutMs: Long = 300000,
-    val stages: Map<String, StageAgentConfig> = emptyMap()
+    val stages: Map<String, StageAgentConfig> = emptyMap(),
+    val agents: Map<String, AgentProviderConfig> = emptyMap()
 )
