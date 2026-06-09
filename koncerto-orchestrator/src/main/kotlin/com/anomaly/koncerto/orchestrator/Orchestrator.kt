@@ -8,6 +8,7 @@ import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workflow.WorkflowCache
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -23,6 +24,8 @@ class Orchestrator(
     private val logger: StructuredLogger,
     private val runtimeStates: Map<String, RuntimeState> = emptyMap()
 ) {
+    internal val issueProjectMap = ConcurrentHashMap<String, String>()
+
     internal val dispatchServices: Map<String, DispatchService> =
         config.projects.mapValues { (slug, projectConfig) ->
             val state = runtimeStates[slug] ?: RuntimeState().also {
@@ -40,7 +43,8 @@ class Orchestrator(
         state: RuntimeState,
         slug: String
     ): DispatchService = DispatchService(
-        projectConfig, state, linear, agentRunner, workflowCache, logger, slug, workspaces
+        projectConfig, state, linear, agentRunner, workflowCache, logger, slug, workspaces,
+        issueProjectMap = issueProjectMap
     )
 
     fun start(scope: CoroutineScope) {
@@ -65,7 +69,11 @@ class Orchestrator(
 
     private suspend fun tick() {
         for ((slug, projectConfig) in config.projects) {
-            val ds = dispatchServices[slug] ?: continue
+            val ds = dispatchServices[slug]
+            if (ds == null) {
+                logger.warn("tick_no_dispatch_service", mapOf("project_slug" to slug))
+                continue
+            }
             val state = ds.state
             try {
                 reconcile(state, projectConfig)
@@ -128,13 +136,21 @@ class Orchestrator(
         when (event) {
             is AgentEvent.TurnCompleted -> {
                 event.usage?.let { u ->
-                    for (state in runtimeStates.values) {
-                        state.tokenTotals = state.tokenTotals.copy(
-                            inputTokens = state.tokenTotals.inputTokens + u.inputTokens,
-                            outputTokens = state.tokenTotals.outputTokens + u.outputTokens,
-                            totalTokens = state.tokenTotals.totalTokens + u.totalTokens
+                    val state = dispatchServices.values.firstOrNull { ds ->
+                        ds.state.running.values.any { it.threadId == event.threadId }
+                    }?.state
+                    if (state == null) {
+                        logger.warn(
+                            "turn_completed_no_running_entry",
+                            mapOf("thread_id" to event.threadId)
                         )
+                        return@let
                     }
+                    state.tokenTotals = state.tokenTotals.copy(
+                        inputTokens = state.tokenTotals.inputTokens + u.inputTokens,
+                        outputTokens = state.tokenTotals.outputTokens + u.outputTokens,
+                        totalTokens = state.tokenTotals.totalTokens + u.totalTokens
+                    )
                 }
             }
             else -> {}

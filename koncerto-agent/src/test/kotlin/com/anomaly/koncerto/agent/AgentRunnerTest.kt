@@ -32,7 +32,6 @@ class AgentRunnerTest {
         agentKind: String = "codex"
     ): ServiceConfig = ServiceConfig(
         pollIntervalMs = 30000,
-        maxRetryBackoffMs = 300000,
         projects = mapOf("default" to ProjectConfig(
             tracker = TrackerConfig(
                 kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",

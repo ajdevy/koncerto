@@ -7,7 +7,6 @@ import java.nio.file.Paths
 
 data class ServiceConfig(
     val pollIntervalMs: Long = 30000,
-    val maxRetryBackoffMs: Long = 300000,
     val projects: Map<String, ProjectConfig> = emptyMap(),
     val hooks: HooksConfig = HooksConfig(null, null, null, null, 60000),
     val gitConfig: GitConfig = GitConfig()
@@ -28,14 +27,12 @@ data class ServiceConfig(
             workflowFileDir: String
         ): Result<ServiceConfig, IllegalStateException> = runCatchingResult {
             val pollIntervalMs = parsePollIntervalMs(map)
-            val maxRetryBackoffMs = parseMaxRetryBackoffMs(map)
             val hooks = parseHooksConfig(map["hooks"] as? Map<*, *>)
             val git = parseGitConfig(map["git"] as? Map<*, *>)
             val projects = parseProjects(map["projects"] as? Map<*, *>, workflowFileDir)
 
             ServiceConfig(
                 pollIntervalMs = pollIntervalMs,
-                maxRetryBackoffMs = maxRetryBackoffMs,
                 projects = projects,
                 hooks = hooks,
                 gitConfig = git
@@ -45,10 +42,6 @@ data class ServiceConfig(
         private fun parsePollIntervalMs(map: Map<String, Any?>): Long {
             val raw = map["poll_interval_ms"] ?: (map["polling"] as? Map<*, *>)?.get("interval_ms")
             return (raw as? Number)?.toLong() ?: 30_000L
-        }
-
-        private fun parseMaxRetryBackoffMs(map: Map<String, Any?>): Long {
-            return (map["max_retry_backoff_ms"] as? Number)?.toLong() ?: 300_000L
         }
 
         private fun parseProjects(

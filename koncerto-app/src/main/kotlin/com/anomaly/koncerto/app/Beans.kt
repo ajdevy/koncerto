@@ -105,7 +105,9 @@ class Beans {
     ): AgentRunner = DefaultAgentRunner(
         config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
         onAgentOutput = { issueId, line ->
-            runtimeStates.values.forEach { it.appendOutput(issueId, line) }
+            runtimeStates.values.firstOrNull {
+                it.running.containsKey(issueId) || it.claimed.contains(issueId)
+            }?.appendOutput(issueId, line)
         }
     )
 

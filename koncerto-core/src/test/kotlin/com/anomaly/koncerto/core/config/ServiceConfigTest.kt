@@ -24,7 +24,6 @@ class ServiceConfigTest {
         )
 
         assertThat(config.pollIntervalMs).isEqualTo(30_000L)
-        assertThat(config.maxRetryBackoffMs).isEqualTo(300_000L)
         assertThat(config.project().tracker.activeStates).containsExactly("Todo", "In Progress")
         assertThat(config.project().tracker.terminalStates).containsExactly("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
         assertThat(config.project().tracker.requiredLabels).isEqualTo(emptyList())

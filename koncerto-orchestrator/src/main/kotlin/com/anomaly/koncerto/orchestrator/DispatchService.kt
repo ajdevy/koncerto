@@ -10,6 +10,7 @@ import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -22,7 +23,8 @@ class DispatchService(
     private val logger: StructuredLogger,
     private val projectSlug: String,
     private val workspaces: WorkspaceManager? = null,
-    private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs)
+    private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs),
+    private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap()
 ) {
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         val candidates = try {
@@ -80,6 +82,7 @@ class DispatchService(
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
         if (issue.id in state.claimed) return
         state.claimed.add(issue.id)
+        issueProjectMap[issue.id] = projectSlug
         logger.info(
             "dispatch_start",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)

@@ -63,7 +63,6 @@ class DashboardUiTestConfig {
     @Bean
     fun uiTestServiceConfig(): ServiceConfig = ServiceConfig(
         pollIntervalMs = 30000L,
-        maxRetryBackoffMs = 300000L,
         projects = mapOf("default" to ProjectConfig(
             tracker = TrackerConfig(
                 kind = "linear", endpoint = "x", apiKey = "", projectSlug = "",

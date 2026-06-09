@@ -23,7 +23,6 @@ class ApiV1ControllerTest {
 
     private fun minimalConfig() = ServiceConfig(
         pollIntervalMs = 30000,
-        maxRetryBackoffMs = 300000,
         projects = mapOf("default" to ProjectConfig(
             tracker = TrackerConfig(
                 kind = "", endpoint = "x", apiKey = "", projectSlug = "",

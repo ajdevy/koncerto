@@ -231,6 +231,7 @@ class OrchestratorTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig()
         val state = RuntimeState()
+        state.running["1"] = runningEntry("1", "A-1").copy(threadId = "t1")
         val linear = FakeLinearClient(emptyList())
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
@@ -253,6 +254,7 @@ class OrchestratorTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig()
         val state = RuntimeState()
+        state.running["1"] = runningEntry("1", "A-1").copy(threadId = "t1")
         val linear = FakeLinearClient(emptyList())
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
@@ -592,7 +594,6 @@ class OrchestratorTest {
 
     private fun sampleConfig() = ServiceConfig(
         pollIntervalMs = 30000,
-        maxRetryBackoffMs = 300000,
         projects = mapOf(defaultProjectSlug to sampleProjectConfig()),
         hooks = com.anomaly.koncerto.core.config.HooksConfig(null, null, null, null, 60000),
         gitConfig = com.anomaly.koncerto.core.config.GitConfig()
