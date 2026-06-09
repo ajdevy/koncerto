@@ -26,4 +26,19 @@ dependencies {
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.playwright)
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform {
+        excludeTags("ui")
+    }
+}
+
+tasks.register<Test>("uiTest") {
+    useJUnitPlatform {
+        includeTags("ui")
+    }
+    group = "verification"
+    description = "Runs Playwright UI tests against the dashboard"
 }
