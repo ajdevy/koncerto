@@ -809,6 +809,105 @@ class OrchestratorTest {
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
+    @Test
+    fun `two projects each get their own runtime`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc1 = sampleProjectConfig().copy(
+            tracker = sampleProjectConfig().tracker.copy(projectSlug = "p1")
+        )
+        val pc2 = sampleProjectConfig().copy(
+            tracker = sampleProjectConfig().tracker.copy(projectSlug = "p2")
+        )
+        val config = ServiceConfig(projects = mapOf("alpha" to pc1, "beta" to pc2))
+        val linear = FakeLinearClient(emptyList())
+        val runner = FakeAgentRunner()
+        val logger = StructuredLogger(emptyList())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = WorkflowCache(),
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined)
+        )
+        assertThat(orch.projects.size).isEqualTo(2)
+        assertThat(orch.projects["alpha"]?.config?.tracker?.projectSlug).isEqualTo("p1")
+        assertThat(orch.projects["beta"]?.config?.tracker?.projectSlug).isEqualTo("p2")
+        assertThat(orch.projects["alpha"]?.state === orch.projects["beta"]?.state).isEqualTo(false)
+    }
+
+    @Test
+    fun `multi-project tick handles failure in one project gracefully`() = runBlocking {
+        val root1 = Files.createTempDirectory("orch-good-")
+        val root2 = Files.createTempDirectory("orch-bad-")
+        val mgr1 = WorkspaceManager(root1, HookExecutor { _, _ -> })
+        val mgr2 = WorkspaceManager(root2, HookExecutor { _, _ -> })
+        val goodPc = sampleProjectConfig().copy(
+            agent = sampleProjectConfig().agent.copy(command = null) // will trigger preflight warn but not crash
+        )
+        val badPc = sampleProjectConfig().copy(
+            agent = sampleProjectConfig().agent.copy(maxTurns = 0) // will throw on parse
+        )
+        val config = ServiceConfig(
+            pollIntervalMs = 30000,
+            projects = mapOf("good" to goodPc, "bad" to badPc)
+        )
+        val linear = FakeLinearClient(emptyList())
+        val runner = FakeAgentRunner()
+        val logger = StructuredLogger(emptyList())
+        val s1 = RuntimeState()
+        val s2 = RuntimeState()
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { if (it == goodPc) mgr1 else mgr2 },
+            agentRunner = runner,
+            workflowCache = WorkflowCache(),
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf("good" to s1, "bad" to s2)
+        )
+        assertThat(orch.projects.size).isEqualTo(2)
+    }
+
+    @Test
+    fun `multi-project issueProjectMap tracks across projects`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc1 = sampleProjectConfig().copy(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p1"
+            )
+        )
+        val pc2 = sampleProjectConfig().copy(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p2"
+            )
+        )
+        val config = ServiceConfig(projects = mapOf("p1" to pc1, "p2" to pc2))
+        val cache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi {{ issue.identifier }}")) }
+        val linear = FakeLinearClient(listOf(
+            sampleIssue("1", "A-1", "Todo"),
+            sampleIssue("2", "B-1", "Todo")
+        ))
+        val runner = FakeAgentRunner()
+        val logger = StructuredLogger(emptyList())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined)
+        )
+        orch.runDispatchSync()
+        assertThat(orch.issueProjectMap.containsKey("1")).isTrue()
+        assertThat(orch.issueProjectMap.containsKey("2")).isTrue()
+    }
+
     private fun sampleIssue(id: String, identifier: String, state: String) = Issue(
         id = id, identifier = identifier, title = "t", description = null,
         priority = 5, state = state, branchName = null, url = null,
