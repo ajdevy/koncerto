@@ -60,4 +60,59 @@ class ResultTest {
         result.onFailure { captured = it }
         assertThat(captured).isSameAs(error)
     }
+
+    @Test
+    fun `onFailure does not run for Success`() {
+        var captured: Throwable? = null
+        val result: Result<Int, RuntimeException> = Result.Success(5)
+        result.onFailure { captured = it }
+        assertThat(captured).isNull()
+    }
+
+    @Test
+    fun `getOrNull returns value for Success`() {
+        val result: Result<Int, RuntimeException> = Result.Success(42)
+        assertThat(result.getOrNull()).isEqualTo(42)
+    }
+
+    @Test
+    fun `getOrNull returns null for Failure`() {
+        val result: Result<Int, RuntimeException> = Result.Failure(RuntimeException("boom"))
+        assertThat(result.getOrNull()).isNull()
+    }
+
+    @Test
+    fun `exceptionOrNull returns error for Failure`() {
+        val error = RuntimeException("boom")
+        val result: Result<Int, RuntimeException> = Result.Failure(error)
+        assertThat(result.exceptionOrNull()).isSameAs(error)
+    }
+
+    @Test
+    fun `exceptionOrNull returns null for Success`() {
+        val result: Result<Int, RuntimeException> = Result.Success(5)
+        assertThat(result.exceptionOrNull()).isNull()
+    }
+
+    @Test
+    fun `runCatchingResult returns Success when block succeeds`() {
+        val result: Result<Int, RuntimeException> = runCatchingResult { 42 }
+        assertThat(result).isEqualTo(Result.Success(42))
+    }
+
+    @Test
+    fun `runCatchingResult returns Failure when block throws`() {
+        val result: Result<Int, RuntimeException> = runCatchingResult {
+            throw RuntimeException("boom")
+        }
+        assertThat(result.exceptionOrNull()?.message).isEqualTo("boom")
+    }
+
+    @Test
+    fun `EmptyResult is alias for Result of Unit`() {
+        val success: EmptyResult<RuntimeException> = Result.Success(Unit)
+        val failure: EmptyResult<RuntimeException> = Result.Failure(RuntimeException("boom"))
+        assertThat(success).isEqualTo(Result.Success(Unit))
+        assertThat(failure.exceptionOrNull()?.message).isEqualTo("boom")
+    }
 }

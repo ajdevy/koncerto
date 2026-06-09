@@ -45,6 +45,46 @@ class StructuredLoggerTest {
         assertThat(a.lines.size).isEqualTo(1)
         assertThat(b.lines.size).isEqualTo(1)
     }
+
+    @Test
+    fun `warn logs at warn level with warning outcome`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.warn("disk_space", mapOf("free_mb" to "100"))
+        val output = sink.lines.single()
+        assertThat(output).contains("level=warn")
+        assertThat(output).contains("action=disk_space")
+        assertThat(output).contains("outcome=warning")
+    }
+
+    @Test
+    fun `error logs at error level with failed outcome`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.error("api_down", mapOf("endpoint" to "linear"))
+        val output = sink.lines.single()
+        assertThat(output).contains("level=error")
+        assertThat(output).contains("outcome=failed")
+    }
+
+    @Test
+    fun `debug logs at debug level with completed outcome`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.debug("poll", mapOf("count" to "5"))
+        val output = sink.lines.single()
+        assertThat(output).contains("level=debug")
+        assertThat(output).contains("outcome=completed")
+    }
+
+    @Test
+    fun `values with whitespace are quoted`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.info("test", mapOf("msg" to "hello world"))
+        val output = sink.lines.single()
+        assertThat(output).contains("msg=\"hello world\"")
+    }
 }
 
 class StringListSink : LogSink {

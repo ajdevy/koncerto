@@ -3,6 +3,7 @@ package com.anomaly.koncerto.linear
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.model.UserRef
@@ -1389,6 +1390,260 @@ class LinearClientTest {
             assertThat(query).contains("IssueAssigneeUpdate")
             assertThat(vars["id"]).isEqualTo(JsonPrimitive("issue-1"))
             assertThat(vars["assigneeId"]).isEqualTo(JsonPrimitive("user-42"))
+        }
+
+        @Test
+        fun `resolveStateId returns state id when found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-2"))
+                                            put("name", JsonPrimitive("Done"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Done")
+            assertThat(result).isEqualTo("state-2")
+        }
+
+        @Test
+        fun `resolveStateId matches case-insensitively`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("todo"))
+                                        })
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-2"))
+                                            put("name", JsonPrimitive("In Progress"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Todo")
+            assertThat(result).isEqualTo("state-1")
+        }
+
+        @Test
+        fun `resolveStateId returns null when project missing`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {})
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Done")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `resolveStateId returns null when team missing`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {})
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Done")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `resolveStateId returns null when states missing`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {})
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Done")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `resolveStateId returns null when state not found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Blocked")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `resolveStateId skips non-JsonObject nodes`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(JsonPrimitive("not-an-object"))
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Todo")
+            assertThat(result).isEqualTo("state-1")
+        }
+
+        @Test
+        fun `resolveStateId skips nodes without name`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-0"))
+                                        })
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveStateId("proj", "Todo")
+            assertThat(result).isEqualTo("state-1")
+        }
+
+        @Test
+        fun `updateIssueState sends correct mutation`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {})
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.updateIssueState("issue-1", "state-2")
+
+            assertThat(fake.calls.size).isEqualTo(1)
+            val (query, vars) = fake.calls[0]
+            assertThat(query).contains("IssueUpdate")
+            assertThat(vars["id"]).isEqualTo(JsonPrimitive("issue-1"))
+            assertThat(vars["stateId"]).isEqualTo(JsonPrimitive("state-2"))
+        }
+
+        @Test
+        fun `fetchIssueById returns issue when found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issue", buildJsonObject {
+                            put("id", JsonPrimitive("issue-1"))
+                            put("identifier", JsonPrimitive("ABC-1"))
+                            put("title", JsonPrimitive("T1"))
+                            put("description", JsonNull)
+                            put("priority", JsonNull)
+                            put("url", JsonNull)
+                            put("branchName", JsonNull)
+                            put("createdAt", JsonNull)
+                            put("updatedAt", JsonNull)
+                            put("state", buildJsonObject {
+                                put("name", JsonPrimitive("Todo"))
+                            })
+                            put("labels", buildJsonObject {
+                                put("nodes", buildJsonArray {})
+                            })
+                            put("blockedBy", buildJsonObject {
+                                put("nodes", buildJsonArray {})
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val issue = sut.fetchIssueById("issue-1")
+            assertThat(issue).isNotNull()
+            assertThat(issue!!.id).isEqualTo("issue-1")
+            assertThat(issue.identifier).isEqualTo("ABC-1")
+        }
+
+        @Test
+        fun `fetchIssueById returns null when issue not found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {})
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val issue = sut.fetchIssueById("issue-unknown")
+            assertThat(issue).isNull()
         }
 
         @Test

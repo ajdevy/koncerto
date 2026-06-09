@@ -192,6 +192,22 @@ class AgentEventTest {
     }
 
     @Test
+    fun `ClarificationRequested stores all properties`() {
+        val event = AgentEvent.ClarificationRequested(
+            issueId = "1",
+            filePath = "/tmp/.koncerto/clarification.md",
+            content = "Need specs",
+            pid = 42L,
+            timestamp = ts
+        )
+        assertThat(event.issueId).isEqualTo("1")
+        assertThat(event.filePath).isEqualTo("/tmp/.koncerto/clarification.md")
+        assertThat(event.content).isEqualTo("Need specs")
+        assertThat(event.pid).isEqualTo(42L)
+        assertThat(event.timestamp).isEqualTo(ts)
+    }
+
+    @Test
     fun `sealed class hierarchy - all types are AgentEvent`() {
         val events: List<AgentEvent> = listOf(
             AgentEvent.SessionStarted("t", "u", 1L, ts),
@@ -205,9 +221,10 @@ class AgentEventTest {
             AgentEvent.UnsupportedToolCall("n", 1L, ts),
             AgentEvent.Notification("m", null, 1L, ts),
             AgentEvent.OtherMessage("m", null, 1L, ts),
-            AgentEvent.Malformed("r", 1L, ts)
+            AgentEvent.Malformed("r", 1L, ts),
+            AgentEvent.ClarificationRequested("1", "/path", "Need specs", 1L, ts)
         )
-        assertThat(events.size).isEqualTo(12)
+        assertThat(events.size).isEqualTo(13)
         events.forEach { assertThat(it is AgentEvent).isEqualTo(true) }
     }
 }

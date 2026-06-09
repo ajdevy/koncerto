@@ -26,6 +26,16 @@ class WorkflowLoaderTest {
     }
 
     @Test
+    fun `invalid front matter throws workflow_parse_error`() {
+        val tmp = Files.createTempFile("workflow-bad", ".md")
+        Files.writeString(tmp, "---\ninvalid: [\n---\nbody")
+        val ex = assertThrows<IllegalStateException> {
+            WorkflowLoader.loadFromPath(tmp)
+        }
+        assertThat(ex.message ?: "").contains("workflow_front_matter_not_a_map")
+    }
+
+    @Test
     fun `missing file throws missing_workflow_file error`() {
         val ex = assertThrows<IllegalStateException> {
             WorkflowLoader.loadFromPath(java.nio.file.Paths.get("/nonexistent/WORKFLOW.md"))

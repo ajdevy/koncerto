@@ -117,6 +117,25 @@ class AgentRunnerTest {
     }
 
     @Test
+    fun `AttemptResult stores all properties`() {
+        val issue = sampleIssue()
+        val root = Files.createTempDirectory("agent-runner-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = mgr.ensureWorkspace(issue.identifier)
+        val usage = TokenUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150)
+        val result = AttemptResult(
+            issue = issue,
+            workspace = workspace,
+            outcome = AttemptResult.Outcome.SUCCEEDED,
+            tokenUsage = usage
+        )
+        assertThat(result.issue.id).isEqualTo("1")
+        assertThat(result.workspace.path).isEqualTo(workspace.path)
+        assertThat(result.outcome).isEqualTo(AttemptResult.Outcome.SUCCEEDED)
+        assertThat(result.tokenUsage.totalTokens).isEqualTo(150L)
+    }
+
+    @Test
     fun `AttemptResult Outcome enum has all values`() {
         val outcomes = AttemptResult.Outcome.entries
         assertThat(outcomes.size).isEqualTo(6)
