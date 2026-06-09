@@ -35,7 +35,7 @@ class GitWorkflowTest {
     }
 
     private fun initGitRepo() {
-        val pb = ProcessBuilder("git", "init")
+        val pb = ProcessBuilder("git", "init", "--initial-branch=main")
             .directory(repoDir.toFile())
             .redirectErrorStream(true)
             .start()
