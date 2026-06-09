@@ -589,4 +589,106 @@ class ServiceConfigTest {
         )
         assertThat(config.pollIntervalMs).isEqualTo(20000L)
     }
+
+    @Test
+    fun `parse agent providers from config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "agents" to mapOf(
+                            "fast" to mapOf("kind" to "codex", "model" to "claude-sonnet-4"),
+                            "thorough" to mapOf("kind" to "opencode", "command" to "opencode-custom")
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.agents.size).isEqualTo(2)
+        assertThat(config.project().agent.agents["fast"]?.kind).isEqualTo("codex")
+        assertThat(config.project().agent.agents["fast"]?.model).isEqualTo("claude-sonnet-4")
+        assertThat(config.project().agent.agents["thorough"]?.kind).isEqualTo("opencode")
+        assertThat(config.project().agent.agents["thorough"]?.command).isEqualTo("opencode-custom")
+        assertThat(config.project().agent.agents["thorough"]?.model).isNull()
+    }
+
+    @Test
+    fun `parse stage agent reference`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "stages" to mapOf(
+                            "implement" to mapOf("agent" to "fast", "prompt" to "do it")
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.stages["implement"]?.agent).isEqualTo("fast")
+    }
+
+    @Test
+    fun `parse empty agents defaults to empty map`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("kind" to "opencode")
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.agents).isEqualTo(emptyMap())
+    }
+
+    @Test
+    fun `parse stage without agent reference defaults null`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "stages" to mapOf("implement" to mapOf("prompt" to "do it"))
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.stages["implement"]?.agent).isNull()
+    }
+
+    @Test
+    fun `parse agent providers with missing kind is skipped`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "agents" to mapOf(
+                            "good" to mapOf("kind" to "codex"),
+                            "no-kind" to mapOf("command" to "run")
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.agents.size).isEqualTo(1)
+        assertThat(config.project().agent.agents["good"]?.kind).isEqualTo("codex")
+        assertThat(config.project().agent.agents["no-kind"]).isNull()
+    }
 }
