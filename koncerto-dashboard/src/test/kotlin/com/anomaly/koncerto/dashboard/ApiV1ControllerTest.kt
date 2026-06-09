@@ -3,6 +3,7 @@ package com.anomaly.koncerto.dashboard
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
@@ -27,7 +28,8 @@ class ApiV1ControllerTest {
         codexThreadSandbox = null, codexTurnSandboxPolicy = null,
         opencodeCommand = "opencode",
         turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-        stages = emptyMap()
+        stages = emptyMap(),
+        gitConfig = GitConfig()
     )
 
     @Test
@@ -35,7 +37,7 @@ class ApiV1ControllerTest {
         val state = RuntimeState()
         state.maxConcurrentAgents = 5
 
-        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null)
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue,
             threadId = "t-1",
@@ -65,7 +67,7 @@ class ApiV1ControllerTest {
     @Test
     fun `byIdentifier returns issue details when found`() {
         val state = RuntimeState()
-        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null)
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue,
             threadId = "t-1",

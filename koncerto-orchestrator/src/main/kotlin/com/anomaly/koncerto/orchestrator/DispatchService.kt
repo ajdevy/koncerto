@@ -6,7 +6,9 @@ import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
+import java.nio.file.Files
 import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -19,6 +21,7 @@ class DispatchService(
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
     private val projectSlug: String,
+    private val workspaces: WorkspaceManager? = null,
     private val retryExecutor: RetryExecutor = RetryExecutor(config.maxRetryBackoffMs)
 ) {
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
@@ -96,13 +99,18 @@ class DispatchService(
         scope.launch {
             val result = agentRunner.run(issue, attempt, prompt, agentKind, command)
             result.onSuccess {
-                state.completed.add(issue.id)
                 state.claimed.remove(issue.id)
-                logger.info(
-                    "dispatch_completed",
-                    mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
-                )
-                transitionOnComplete(issue, stageConfig)
+                val clarificationContent = readClarification(issue.identifier)
+                if (clarificationContent != null) {
+                    handleClarification(issue.id, clarificationContent)
+                } else {
+                    state.completed.add(issue.id)
+                    logger.info(
+                        "dispatch_completed",
+                        mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
+                    )
+                    transitionOnComplete(issue, stageConfig)
+                }
             }.onFailure { err ->
                 scheduleRetry(issue, err.message ?: "unknown")
             }
@@ -154,6 +162,51 @@ class DispatchService(
                 "target_state" to targetState
             ), e)
         }
+    }
+
+    private suspend fun readClarification(identifier: String): String? {
+        val ws = workspaces ?: return null
+        val workspace = runCatching { ws.ensureWorkspace(identifier) }.getOrNull() ?: return null
+        val path = workspace.path.resolve(".koncerto").resolve("clarification.md")
+        return if (Files.exists(path)) runCatching { Files.readString(path) }.getOrNull() else null
+    }
+
+    suspend fun handleClarification(issueId: String, clarificationContent: String) {
+        val issue = linear.fetchIssueById(issueId) ?: return
+        logger.info("clarification_received", mapOf(
+            "issue_id" to issueId,
+            "issue_identifier" to issue.identifier
+        ))
+
+        linear.createComment(issueId, clarificationContent)
+
+        val blockedStateId = linear.resolveStateId(projectSlug, config.blockedState)
+        if (blockedStateId != null) {
+            linear.updateIssueState(issueId, blockedStateId)
+            logger.info("state_transitioned", mapOf(
+                "issue_id" to issueId,
+                "from_state" to issue.state,
+                "to_state" to config.blockedState
+            ))
+        } else {
+            logger.warn("blocked_state_not_found", mapOf("blocked_state" to config.blockedState))
+        }
+
+        val creator = issue.creator
+        val assigneeId = when {
+            creator != null && !creator.isBot -> creator.id
+            config.projectAdmin != null -> config.projectAdmin
+            else -> null
+        }
+        if (assigneeId != null) {
+            linear.updateIssueAssignee(issueId, assigneeId)
+            logger.info("assignee_updated", mapOf(
+                "issue_id" to issueId,
+                "assignee_id" to assigneeId
+            ))
+        }
+
+        state.blocked.add(issueId)
     }
 
     private fun resolveModel(issue: Issue, stageConfig: StageAgentConfig?): String? {

@@ -2,6 +2,7 @@ package com.anomaly.koncerto.linear
 
 import com.anomaly.koncerto.core.model.BlockerRef
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.model.UserRef
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,6 +37,13 @@ object IssueMapper {
             )
         } ?: emptyList()
         
+        val creator: UserRef? = (node["creator"] as? JsonObject)?.let { creatorObj ->
+            UserRef(
+                id = creatorObj.string("id"),
+                displayName = creatorObj.string("displayName"),
+                isBot = (creatorObj["isBot"] as? JsonPrimitive)?.content?.toBoolean() ?: false
+            )
+        }
         val createdAt = node.optionalString("createdAt")?.let { runCatching { Instant.parse(it) }.getOrNull() }
         val updatedAt = node.optionalString("updatedAt")?.let { runCatching { Instant.parse(it) }.getOrNull() }
         return Issue(
@@ -49,6 +57,7 @@ object IssueMapper {
             url = url,
             labels = labels,
             blockedBy = blockedBy,
+            creator = creator,
             createdAt = createdAt,
             updatedAt = updatedAt
         )

@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.linear
 
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.model.UserRef
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -16,6 +17,9 @@ interface LinearClient {
     suspend fun fetchIssueById(issueId: String): Issue?
     suspend fun resolveStateId(projectSlug: String, stateName: String): String?
     suspend fun updateIssueState(issueId: String, stateId: String)
+    suspend fun createComment(issueId: String, body: String)
+    suspend fun updateIssueAssignee(issueId: String, assigneeId: String)
+    suspend fun fetchIssueCreator(issueId: String): UserRef?
 }
 
 class DefaultLinearClient(
@@ -70,6 +74,7 @@ class DefaultLinearClient(
             id identifier title description priority url branchName createdAt updatedAt
             state { name }
             labels { nodes { name } }
+            creator { id displayName isBot }
             blockedBy: relations(filter: { type: { eq: "blocks" } }) {
               nodes {
                 ... on Issue { id identifier state { name } }
@@ -90,6 +95,18 @@ class DefaultLinearClient(
     internal val updateIssueStateMutation = """
         mutation IssueUpdate(${'$'}id: String!, ${'$'}stateId: String!) {
           issueUpdate(id: ${'$'}id, input: { stateId: ${'$'}stateId }) { success }
+        }
+    """.trimIndent()
+
+    internal val createCommentMutation = """
+        mutation CommentCreate(${'$'}issueId: String!, ${'$'}body: String!) {
+          commentCreate(input: { issueId: ${'$'}issueId, body: ${'$'}body }) { success }
+        }
+    """.trimIndent()
+
+    internal val updateIssueAssigneeMutation = """
+        mutation IssueAssigneeUpdate(${'$'}id: String!, ${'$'}assigneeId: String!) {
+          issueUpdate(id: ${'$'}id, input: { assigneeId: ${'$'}assigneeId }) { success }
         }
     """.trimIndent()
 
@@ -179,5 +196,26 @@ class DefaultLinearClient(
             put("stateId", stateId)
         }
         graphql.execute(updateIssueStateMutation, vars)
+    }
+
+    override suspend fun createComment(issueId: String, body: String) {
+        val vars = buildJsonObject {
+            put("issueId", issueId)
+            put("body", body)
+        }
+        graphql.execute(createCommentMutation, vars)
+    }
+
+    override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {
+        val vars = buildJsonObject {
+            put("id", issueId)
+            put("assigneeId", assigneeId)
+        }
+        graphql.execute(updateIssueAssigneeMutation, vars)
+    }
+
+    override suspend fun fetchIssueCreator(issueId: String): UserRef? {
+        val issue = fetchIssueById(issueId)
+        return issue?.creator
     }
 }

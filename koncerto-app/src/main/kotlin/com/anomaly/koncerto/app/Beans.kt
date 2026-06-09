@@ -13,6 +13,7 @@ import com.anomaly.koncerto.logging.StderrSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
+import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.ShellHookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -77,12 +78,17 @@ class Beans {
     fun agentRuntimeFactory(logger: StructuredLogger): AgentRuntimeFactory = AgentRuntimeFactory(logger)
 
     @Bean
+    fun gitWorkflow(config: ServiceConfig, logger: StructuredLogger): GitWorkflow =
+        GitWorkflow(config.gitConfig, logger)
+
+    @Bean
     fun agentRunner(
         config: ServiceConfig,
         workspaces: WorkspaceManager,
         logger: StructuredLogger,
-        agentRuntimeFactory: AgentRuntimeFactory
-    ): AgentRunner = DefaultAgentRunner(config, workspaces, logger, agentRuntimeFactory)
+        agentRuntimeFactory: AgentRuntimeFactory,
+        gitWorkflow: GitWorkflow
+    ): AgentRunner = DefaultAgentRunner(config, workspaces, logger, agentRuntimeFactory, gitWorkflow)
 
     @Bean
     fun runtimeState(config: ServiceConfig): RuntimeState = RuntimeState().also {

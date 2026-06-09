@@ -5,6 +5,7 @@ import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.anomaly.koncerto.core.model.UserRef
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -563,6 +564,97 @@ class LinearClientTest {
         }
 
         @Test
+        fun `parses creator field`() {
+            val json = buildJsonObject {
+                put("id", JsonPrimitive("id-1"))
+                put("identifier", JsonPrimitive("ABC-1"))
+                put("title", JsonPrimitive("T1"))
+                put("description", JsonNull)
+                put("priority", JsonNull)
+                put("url", JsonNull)
+                put("branchName", JsonNull)
+                put("createdAt", JsonNull)
+                put("updatedAt", JsonNull)
+                put("state", buildJsonObject {
+                    put("name", JsonPrimitive("Todo"))
+                })
+                put("labels", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+                put("blockedBy", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+                put("creator", buildJsonObject {
+                    put("id", JsonPrimitive("user-1"))
+                    put("displayName", JsonPrimitive("Alice"))
+                    put("isBot", JsonPrimitive(false))
+                })
+            }
+
+            val issue = IssueMapper.fromLinear(json)
+            assertThat(issue.creator).isEqualTo(UserRef("user-1", "Alice", false))
+        }
+
+        @Test
+        fun `creator is null when missing`() {
+            val json = buildJsonObject {
+                put("id", JsonPrimitive("id-1"))
+                put("identifier", JsonPrimitive("ABC-1"))
+                put("title", JsonPrimitive("T1"))
+                put("description", JsonNull)
+                put("priority", JsonNull)
+                put("url", JsonNull)
+                put("branchName", JsonNull)
+                put("createdAt", JsonNull)
+                put("updatedAt", JsonNull)
+                put("state", buildJsonObject {
+                    put("name", JsonPrimitive("Todo"))
+                })
+                put("labels", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+                put("blockedBy", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+            }
+
+            val issue = IssueMapper.fromLinear(json)
+            assertThat(issue.creator).isNull()
+        }
+
+        @Test
+        fun `parses bot creator`() {
+            val json = buildJsonObject {
+                put("id", JsonPrimitive("id-1"))
+                put("identifier", JsonPrimitive("ABC-1"))
+                put("title", JsonPrimitive("T1"))
+                put("description", JsonNull)
+                put("priority", JsonNull)
+                put("url", JsonNull)
+                put("branchName", JsonNull)
+                put("createdAt", JsonNull)
+                put("updatedAt", JsonNull)
+                put("state", buildJsonObject {
+                    put("name", JsonPrimitive("Todo"))
+                })
+                put("labels", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+                put("blockedBy", buildJsonObject {
+                    put("nodes", buildJsonArray {})
+                })
+                put("creator", buildJsonObject {
+                    put("id", JsonPrimitive("bot-1"))
+                    put("displayName", JsonPrimitive("Linear Bot"))
+                    put("isBot", JsonPrimitive(true))
+                })
+            }
+
+            val issue = IssueMapper.fromLinear(json)
+            assertThat(issue.creator).isEqualTo(UserRef("bot-1", "Linear Bot", true))
+        }
+
+        @Test
         fun `label with non-JsonObject node is skipped`() {
             val json = buildJsonObject {
                 put("id", JsonPrimitive("id-1"))
@@ -766,6 +858,26 @@ class LinearClientTest {
         @Test
         fun `statesByIdsQuery has variable declarations`() {
             assertThat(sut.statesByIdsQuery).contains("\$ids")
+        }
+
+        @Test
+        fun `issueByIdQuery contains creator field`() {
+            assertThat(sut.issueByIdQuery).contains("creator")
+            assertThat(sut.issueByIdQuery).contains("displayName")
+            assertThat(sut.issueByIdQuery).contains("isBot")
+        }
+
+        @Test
+        fun `createCommentMutation contains required fields`() {
+            assertThat(sut.createCommentMutation).contains("commentCreate")
+            assertThat(sut.createCommentMutation).contains("\$issueId")
+            assertThat(sut.createCommentMutation).contains("\$body")
+        }
+
+        @Test
+        fun `updateIssueAssigneeMutation contains required fields`() {
+            assertThat(sut.updateIssueAssigneeMutation).contains("issueUpdate")
+            assertThat(sut.updateIssueAssigneeMutation).contains("\$assigneeId")
         }
     }
 
@@ -1233,6 +1345,104 @@ class LinearClientTest {
             assertThat(query).contains("StatesByIds")
             val ids = vars["ids"] as? kotlinx.serialization.json.JsonArray
             assertThat(ids != null && ids.size == 2).isTrue()
+        }
+
+        @Test
+        fun `createComment sends correct mutation`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("commentCreate", buildJsonObject {
+                            put("success", JsonPrimitive(true))
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.createComment("issue-1", "Hello from agent")
+
+            assertThat(fake.calls.size).isEqualTo(1)
+            val (query, vars) = fake.calls[0]
+            assertThat(query).contains("CommentCreate")
+            assertThat(vars["issueId"]).isEqualTo(JsonPrimitive("issue-1"))
+            assertThat(vars["body"]).isEqualTo(JsonPrimitive("Hello from agent"))
+        }
+
+        @Test
+        fun `updateIssueAssignee sends correct mutation`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issueUpdate", buildJsonObject {
+                            put("success", JsonPrimitive(true))
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.updateIssueAssignee("issue-1", "user-42")
+
+            assertThat(fake.calls.size).isEqualTo(1)
+            val (query, vars) = fake.calls[0]
+            assertThat(query).contains("IssueAssigneeUpdate")
+            assertThat(vars["id"]).isEqualTo(JsonPrimitive("issue-1"))
+            assertThat(vars["assigneeId"]).isEqualTo(JsonPrimitive("user-42"))
+        }
+
+        @Test
+        fun `fetchIssueCreator returns creator when issue exists`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issue", buildJsonObject {
+                            put("id", JsonPrimitive("issue-1"))
+                            put("identifier", JsonPrimitive("ABC-1"))
+                            put("title", JsonPrimitive("T1"))
+                            put("description", JsonNull)
+                            put("priority", JsonNull)
+                            put("url", JsonNull)
+                            put("branchName", JsonNull)
+                            put("createdAt", JsonNull)
+                            put("updatedAt", JsonNull)
+                            put("state", buildJsonObject {
+                                put("name", JsonPrimitive("Todo"))
+                            })
+                            put("labels", buildJsonObject {
+                                put("nodes", buildJsonArray {})
+                            })
+                            put("creator", buildJsonObject {
+                                put("id", JsonPrimitive("user-1"))
+                                put("displayName", JsonPrimitive("Alice"))
+                                put("isBot", JsonPrimitive(false))
+                            })
+                            put("blockedBy", buildJsonObject {
+                                put("nodes", buildJsonArray {})
+                            })
+                        })
+                    })
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val creator = sut.fetchIssueCreator("issue-1")
+
+            assertThat(creator).isEqualTo(UserRef("user-1", "Alice", false))
+        }
+
+        @Test
+        fun `fetchIssueCreator returns null when issue not found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {})
+                })
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            val creator = sut.fetchIssueCreator("issue-unknown")
+
+            assertThat(creator).isNull()
         }
     }
 }

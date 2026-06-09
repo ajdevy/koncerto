@@ -40,6 +40,7 @@ class RuntimeState {
     val claimed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
     val completed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
+    val blocked: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
     var tokenTotals = TokenTotals()
     @Volatile
     var codexRateLimits: Map<String, Any?> = emptyMap()

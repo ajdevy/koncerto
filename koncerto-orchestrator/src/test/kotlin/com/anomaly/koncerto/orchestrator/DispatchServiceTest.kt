@@ -7,6 +7,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
@@ -470,7 +471,8 @@ class DispatchServiceTest {
             codexThreadSandbox = null, codexTurnSandboxPolicy = null,
             opencodeCommand = "opencode",
             turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-            stages = stages
+            stages = stages,
+            gitConfig = GitConfig()
         )
 
         fun runningEntry(id: String, identifier: String) = RunningEntry(
@@ -498,11 +500,18 @@ private class SimpleLinear(private val candidates: List<Issue>) : LinearClient {
         candidates.firstOrNull { it.id == issueId }
     override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
     override suspend fun updateIssueState(issueId: String, stateId: String) {}
+    override suspend fun createComment(issueId: String, body: String) {}
+    override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+    override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? = null
 }
 
 private class TrackingLinearClient : LinearClient {
     var transitionedIssueId: String? = null
     var transitionedStateId: String? = null
+    var commentedIssueId: String? = null
+    var commentedBody: String? = null
+    var assignedIssueId: String? = null
+    var assignedUserId: String? = null
     private val candidates = mutableListOf<Issue>()
 
     fun addIssue(issue: Issue) { candidates.add(issue) }
@@ -517,6 +526,16 @@ private class TrackingLinearClient : LinearClient {
         transitionedIssueId = issueId
         transitionedStateId = stateId
     }
+    override suspend fun createComment(issueId: String, body: String) {
+        commentedIssueId = issueId
+        commentedBody = body
+    }
+    override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {
+        assignedIssueId = issueId
+        assignedUserId = assigneeId
+    }
+    override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? =
+        candidates.firstOrNull { it.id == issueId }?.creator
 }
 
 private class ThrowingLinearClient : LinearClient {
@@ -533,6 +552,10 @@ private class ThrowingLinearClient : LinearClient {
     override suspend fun updateIssueState(issueId: String, stateId: String) {
         throw RuntimeException("API down")
     }
+    override suspend fun createComment(issueId: String, body: String) { throw RuntimeException("API down") }
+    override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) { throw RuntimeException("API down") }
+    override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? =
+        throw RuntimeException("API down")
 }
 
 private class CollectingAgentRunner : AgentRunner {

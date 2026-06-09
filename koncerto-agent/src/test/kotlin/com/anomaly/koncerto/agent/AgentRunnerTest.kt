@@ -5,6 +5,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.model.Issue
@@ -47,11 +48,12 @@ class AgentRunnerTest {
         codexThreadSandbox = null,
         codexTurnSandboxPolicy = null,
         opencodeCommand = opencodeCommand,
-            turnTimeoutMs = 3600000,
-            readTimeoutMs = 5000,
-            stallTimeoutMs = 300000,
-            stages = emptyMap()
-        )
+        turnTimeoutMs = 3600000,
+        readTimeoutMs = 5000,
+        stallTimeoutMs = 300000,
+        stages = emptyMap(),
+        gitConfig = GitConfig()
+    )
 
     private fun sampleIssue(): Issue = Issue(
         id = "1",

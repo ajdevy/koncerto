@@ -4,8 +4,8 @@ import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
-import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workspace.WorkspaceManager
+import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workflow.WorkflowCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -23,7 +23,7 @@ class Orchestrator(
     private val logger: StructuredLogger,
     private val projectSlug: String,
     internal val dispatchService: DispatchService = DispatchService(
-        config, state, linear, agentRunner, workflowCache, logger, projectSlug
+        config, state, linear, agentRunner, workflowCache, logger, projectSlug, workspaces
     )
 ) {
     private var loopJob: Job? = null

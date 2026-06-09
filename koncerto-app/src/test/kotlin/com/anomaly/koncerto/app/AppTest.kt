@@ -24,7 +24,7 @@ class AppTest {
         val state = RuntimeState()
         state.maxConcurrentAgents = 2
 
-        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null)
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = com.anomaly.koncerto.orchestrator.RunningEntry(
             issue = issue,
             threadId = "t-1",

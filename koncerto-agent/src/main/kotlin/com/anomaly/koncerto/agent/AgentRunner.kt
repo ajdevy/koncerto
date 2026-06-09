@@ -5,6 +5,7 @@ import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.core.result.EmptyResult
 import com.anomaly.koncerto.core.result.runCatchingResult
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.Workspace
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.PromptRenderer
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.nio.file.Files
 
 data class AttemptResult(
     val issue: Issue,
@@ -38,7 +40,8 @@ class DefaultAgentRunner(
     private val config: ServiceConfig,
     private val workspaces: WorkspaceManager,
     private val logger: StructuredLogger,
-    private val runtimeFactory: AgentRuntimeFactory? = null
+    private val runtimeFactory: AgentRuntimeFactory? = null,
+    private val gitWorkflow: GitWorkflow? = null
 ) : AgentRunner {
 
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
@@ -56,6 +59,8 @@ class DefaultAgentRunner(
         workspaces.assertInsideRoot(workspace.path)
         config.hooks.afterCreate?.let { workspaces.runAfterCreate(workspace, it) }
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
+
+        gitWorkflow?.createBranch(workspace.path, issue.identifier)
 
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
         val effectiveKind = agentKindOverride ?: config.agentKind
@@ -85,6 +90,22 @@ class DefaultAgentRunner(
 
         runtime.stop()
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
+
+        val clarificationPath = workspace.path.resolve(".koncerto").resolve("clarification.md")
+        val clarificationRequested = Files.exists(clarificationPath)
+        if (clarificationRequested) {
+            logger.info("clarification_requested", mapOf("issue" to issue.identifier, "path" to clarificationPath.toString()))
+        }
+
+        if (!clarificationRequested) {
+            gitWorkflow?.let { gw ->
+                gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
+                val prUrl = gw.createPullRequest(workspace.path, issue.identifier, issue.title, issue.description)
+                if (prUrl != null) {
+                    logger.info("pr_created", mapOf("url" to prUrl, "issue" to issue.identifier))
+                }
+            }
+        }
     }
 
     private fun Issue.toTemplateMap(): Map<String, Any?> = mapOf(
