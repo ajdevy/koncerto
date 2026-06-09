@@ -50,45 +50,47 @@ git clone <repo-url> && cd koncerto
 
 ## Configuration
 
-Koncerto reads its config from a `WORKFLOW.md` file with YAML front matter:
+Koncerto reads its config from a `WORKFLOW.md` file with YAML front matter. The root section holds global settings (`poll_interval_ms`, `hooks`, `git`); each project lives under the `projects:` map keyed by slug:
 
 ```yaml
 ---
-tracker:
-  kind: linear
-  api_key: $LINEAR_API_KEY
-  project_slug: MYPROJECT
-  active_states:
-    - Todo
-    - In Progress
-  terminal_states:
-    - Done
-    - Cancelled
-polling:
-  interval_ms: 30000
-workspace:
-  root: /tmp/koncerto_workspaces
+poll_interval_ms: 30000
 hooks:
-  after_create: echo "workspace ready"
-  before_run: npm install
   timeout_ms: 60000
-agent:
-  kind: codex                    # "codex" (default) or "opencode"
-  max_concurrent_agents: 5
-  max_turns: 20
-  max_retry_backoff_ms: 300000
-codex:
-  command: codex app-server       # used when agent.kind = codex
-  turn_timeout_ms: 3600000
-  stall_timeout_ms: 300000
-opencode:
-  command: opencode               # used when agent.kind = opencode
+git:
+  enabled: true
+  branch_prefix: "feature/"
+  auto_commit: true
+  auto_push: true
+  create_pr: true
+  pr_base: main
+projects:
+  my-project:
+    tracker:
+      kind: linear
+      api_key: $LINEAR_API_KEY
+      project_slug: MYPROJECT
+      active_states:
+        - Todo
+        - In Progress
+      terminal_states:
+        - Done
+        - Cancelled
+    workspace:
+      root: /tmp/koncerto_workspaces/my-project
+    agent:
+      kind: opencode
+      max_concurrent_agents: 3
+      max_turns: 20
+      stages:
+        Todo:
+          prompt: prompts/implement.md
+          model: claude-sonnet-4
+          on_complete_state: "In Review"
+        "In Review":
+          prompt: prompts/review.md
+          on_complete_state: "Done"
 ---
-
-You are working on Linear issue {{ issue.identifier }}.
-
-Title: {{ issue.title }}
-Description: {{ issue.description }}
 ```
 
 ### Environment Variables
@@ -101,16 +103,46 @@ Description: {{ issue.description }}
 | `KONCERTO_WORKSPACE_ROOT` | Root dir for agent workspaces | `/tmp/symphony_workspaces` |
 | `KONCERTO_WEB_TYPE` | `reactive` to enable HTTP dashboard, `none` for headless | `none` |
 
-### Agent Providers
+### Agent Runtimes
 
-Koncerto supports multiple AI agent runtimes. Set `agent.kind` in `WORKFLOW.md` to switch:
+Koncerto supports multiple AI agent runtimes via `agent.kind`:
 
-| Provider | `agent.kind` | Command config | Protocol |
-|----------|-------------|----------------|----------|
-| **Codex** | `codex` (default) | `codex.command` | JSON-RPC over stdio (`codex app-server`) |
-| **Opencode** | `opencode` | `opencode.command` | JSON-RPC over stdio (`opencode`) |
+| Provider | `kind` | Command | Protocol |
+|----------|--------|---------|----------|
+| **Opencode** | `opencode` (default) | `opencode` | JSON-RPC over stdio |
+| **Codex** | `codex` | `codex app-server` | JSON-RPC over stdio |
 
-All providers implement the same `AgentRuntime` interface — events (session start, turn completion, token usage), lifecycle management, and error handling work identically regardless of provider. You can switch providers by changing a single config value.
+All providers implement the same `AgentRuntime` interface — events, lifecycle management, and error handling work identically regardless of provider.
+
+### Named Agent Providers
+
+You can define multiple agent providers per project and reference them per-stage or via Linear issue labels:
+
+```yaml
+agent:
+  kind: opencode                    # default fallback
+  max_concurrent_agents: 3
+  agents:
+    fast:
+      kind: codex
+      command: codex app-server
+      max_concurrent: 5
+    cheap:
+      kind: opencode
+      model: claude-sonnet-3-5-haiku
+      max_concurrent: 10
+  stages:
+    Todo:
+      prompt: prompts/implement.md
+      agent: fast                   # use the "fast" provider for this stage
+    "In Review":
+      prompt: prompts/review.md
+      agent: cheap                  # use the "cheap" provider
+```
+
+**Label overrides** on Linear issues override the stage provider:
+- `agent:fast` — use the named provider `fast` for this issue regardless of stage
+- `model:gpt-4o` — override the resolved provider's model for this issue
 
 ## Running
 
@@ -137,12 +169,19 @@ java -jar koncerto-app/build/libs/koncerto-app-*.jar WORKFLOW.md
 
 ## API Endpoints
 
+All endpoints are prefixed by project slug: `/api/v1/{project}/...`
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Live HTML dashboard |
-| `/api/v1/state` | GET | JSON snapshot (running, retrying, token totals) |
-| `/api/v1/{identifier}` | GET | Issue details by identifier |
-| `/api/v1/refresh` | POST | Trigger manual refresh |
+| `/api/v1/{project}/state` | GET | JSON snapshot (running, retrying, token totals) |
+| `/api/v1/{project}/{identifier}` | GET | Issue details by identifier |
+| `/api/v1/{project}/history` | GET | Historical run log |
+| `/api/v1/{project}/stages` | GET | Stage-level concurrency and status |
+| `/api/v1/{project}/refresh` | POST | Trigger manual refresh |
+| `/api/v1/running/{id}/pause` | POST | Pause a running agent |
+| `/api/v1/running/{id}/resume` | POST | Resume a paused agent |
+| `/api/v1/running/{id}/cancel` | POST | Cancel a running agent |
 
 ## Project Structure
 
@@ -153,10 +192,12 @@ koncerto/
 ├── koncerto-workflow/     YAML front matter parser, Liquid prompt renderer
 ├── koncerto-workspace/    Workspace isolation, hook execution
 ├── koncerto-linear/       Linear GraphQL client, IssueMapper
-├── koncerto-agent/        JSON-RPC framing, Codex subprocess, AgentRunner
+├── koncerto-agent/        JSON-RPC framing, agent subprocess, AgentRunner
 ├── koncerto-orchestrator/ Poll loop, dispatch, retry, reconciliation
+├── koncerto-metrics/      SQLite-backed persistent metrics store
 ├── koncerto-dashboard/    HTML dashboard, REST API
 ├── koncerto-app/          Spring Boot entry point, bean wiring
+├── koncerto-e2e/          End-to-end integration tests
 ├── WORKFLOW.md            Sample workflow configuration
 └── scripts/               Utility scripts
 ```
