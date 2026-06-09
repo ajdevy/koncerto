@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation(project(":koncerto-core"))
+    implementation(project(":koncerto-metrics"))
     implementation(project(":koncerto-orchestrator"))
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.kotlinx.coroutines.reactive)

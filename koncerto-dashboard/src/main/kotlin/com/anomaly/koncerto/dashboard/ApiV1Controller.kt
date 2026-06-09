@@ -2,14 +2,19 @@ package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
+import com.anomaly.koncerto.metrics.IssueMetrics
+import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import kotlinx.coroutines.reactive.asPublisher
 import kotlinx.serialization.Serializable
 import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.PutMapping
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.http.codec.ServerSentEvent
 import reactor.core.publisher.Flux
@@ -19,7 +24,8 @@ import reactor.core.publisher.Mono
 @RequestMapping("/api/v1")
 class ApiV1Controller(
     private val config: ServiceConfig,
-    private val runtimeStates: Map<String, RuntimeState> = emptyMap()
+    private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
+    private val metricsRepository: MetricsRepository? = null
 ) {
     private val primaryProjectConfig: com.anomaly.koncerto.core.config.ProjectConfig?
         get() = config.projects.values.firstOrNull()
@@ -167,4 +173,59 @@ class ApiV1Controller(
             totalStages = primaryProjectStages.size
         )
     )
+
+    @GetMapping("/history", produces = ["application/json"])
+    suspend fun history(
+        @RequestParam project: String? = null,
+        @RequestParam(defaultValue = "50") limit: Int = 50
+    ): List<IssueMetrics> {
+        return if (project != null) {
+            metricsRepository?.findByProject(project) ?: emptyList()
+        } else {
+            metricsRepository?.findAll() ?: emptyList()
+        }
+    }
+
+    @GetMapping("/stages", produces = ["application/json"])
+    fun stages(): Map<String, Any> {
+        return config.projects.mapValues { (slug, pc) ->
+            mapOf(
+                "agent" to mapOf("kind" to pc.agent.kind, "maxConcurrent" to pc.agent.maxConcurrentAgents),
+                "stages" to pc.agent.stages.mapValues { (_, sc) ->
+                    mapOf(
+                        "maxConcurrent" to sc.maxConcurrent,
+                        "onCompleteState" to sc.onCompleteState,
+                        "prompt" to sc.prompt
+                    )
+                }
+            )
+        }
+    }
+
+    @PutMapping("/running/{identifier}/pause")
+    fun pauseAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+        val found = runtimeStates.values.any { state ->
+            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && state.pauseAgent(id)
+        }
+        return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
+    }
+
+    @PutMapping("/running/{identifier}/resume")
+    fun resumeAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+        val found = runtimeStates.values.any { state ->
+            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && state.resumeAgent(id)
+        }
+        return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
+    }
+
+    @PutMapping("/running/{identifier}/cancel")
+    fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+        val found = runtimeStates.values.any { state ->
+            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && state.cancelAgent(id)
+        }
+        return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
+    }
 }

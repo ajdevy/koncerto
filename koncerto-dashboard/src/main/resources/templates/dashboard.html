@@ -2,6 +2,7 @@
 <html>
 <head>
     <title>Koncerto Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
     <style>
         body { font-family: monospace; padding: 1rem; background: #111; color: #eee; }
         h1 { color: #6cf; }
@@ -12,20 +13,64 @@
         .output { display: none; background: #000; color: #0f0; padding: 0.5rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; font-size: 0.8rem; }
         .output.open { display: block; }
         .btn-out { cursor: pointer; padding: 0.1rem 0.5rem; background: #333; color: #6cf; border: 1px solid #555; }
+        nav { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+        nav a { color: #6cf; text-decoration: none; padding: 0.25rem 0.5rem; }
+        nav a:hover { background: #222; }
+        section { margin-top: 1.5rem; }
+        select { background: #222; color: #eee; border: 1px solid #444; padding: 0.25rem; }
+        button { cursor: pointer; padding: 0.1rem 0.5rem; background: #333; color: #6cf; border: 1px solid #555; }
+        button.btn-danger { color: #f66; }
+        .concurrency-bar { margin: 0.5rem 0; }
+        .concurrency-bar .label { display: inline-block; width: 150px; }
+        .concurrency-bar .bar { display: inline-block; height: 1rem; background: #6cf; vertical-align: middle; border-radius: 2px; }
     </style>
 </head>
 <body>
     <h1>Koncerto Dashboard</h1>
     <p>Live orchestrator state</p>
+    <nav>
+        <a href="#running">Running</a>
+        <a href="#history">History</a>
+        <a href="#concurrency">Concurrency</a>
+        <a href="#tokens">Token Usage</a>
+    </nav>
     <div class="totals">
         <strong>Tokens:</strong> <span id="totals">loading...</span>
     </div>
-    <h2>Running</h2>
-    <table id="running"><thead><tr><th>Identifier</th><th>Thread</th><th>Turns</th><th>URL</th><th>Output</th></tr></thead><tbody></tbody></table>
-    <h2>Retrying</h2>
-    <table id="retrying"><thead><tr><th>Identifier</th><th>Attempt</th><th>Error</th></tr></thead><tbody></tbody></table>
+
+    <section id="running">
+        <h2>Running</h2>
+        <table id="running">
+            <thead><tr><th>Identifier</th><th>Project</th><th>Thread</th><th>Turns</th><th>URL</th><th>Controls</th><th>Output</th></tr></thead>
+            <tbody></tbody>
+        </table>
+        <h2>Retrying</h2>
+        <table id="retrying"><thead><tr><th>Identifier</th><th>Attempt</th><th>Error</th></tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="history">
+        <h2>History</h2>
+        <select id="project-filter"><option value="">All Projects</option></select>
+        <table id="history-table">
+            <thead><tr><th>Issue</th><th>Project</th><th>Runs</th><th>Tokens</th><th>Result</th><th>Last Run</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </section>
+
+    <section id="concurrency">
+        <h2>Stage Concurrency</h2>
+        <div id="concurrency-bars"></div>
+    </section>
+
+    <section id="tokens">
+        <h2>Token Usage</h2>
+        <canvas id="token-chart" width="800" height="300"></canvas>
+    </section>
+
     <script>
         const outputSources = {};
+        let tokenChartInstance = null;
+
         async function refresh() {
             const r = await fetch('/api/v1/state');
             const s = await r.json();
@@ -36,11 +81,17 @@
                 if (!ids.has(id)) { outputSources[id].close(); delete outputSources[id]; }
             }
             const rb = document.querySelector('#running tbody');
-            rb.innerHTML = s.running.map(x => `<tr><td>${x.issueIdentifier}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td><td><button class="btn-out" onclick="toggleOutput('${x.issueIdentifier}')">View</button></td></tr>` +
-                `<tr id="outrow-${x.issueIdentifier}" style="display:none"><td colspan="5"><pre class="output" id="out-${x.issueIdentifier}"></pre></td></tr>`).join('');
+            rb.innerHTML = s.running.map(x => {
+                const controls = x.paused
+                    ? `<button onclick="resumeAgent('${x.issueIdentifier}')">Resume</button>`
+                    : `<button onclick="pauseAgent('${x.issueIdentifier}')">Pause</button>`;
+                return `<tr><td>${x.issueIdentifier}</td><td>${x.projectSlug ?? ''}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td><td>${controls} <button class="btn-danger" onclick="cancelAgent('${x.issueIdentifier}')">Cancel</button></td><td><button class="btn-out" onclick="toggleOutput('${x.issueIdentifier}')">View</button></td></tr>` +
+                    `<tr id="outrow-${x.issueIdentifier}" style="display:none"><td colspan="7"><pre class="output" id="out-${x.issueIdentifier}"></pre></td></tr>`;
+            }).join('');
             const rt = document.querySelector('#retrying tbody');
             rt.innerHTML = s.retrying.map(x => `<tr><td>${x.identifier}</td><td>${x.attempt}</td><td>${x.error ?? ''}</td></tr>`).join('');
         }
+
         function toggleOutput(id) {
             const row = document.getElementById('outrow-' + id);
             if (!row) return;
@@ -61,12 +112,101 @@
                 outputSources[id].onerror = function() { closeOutput(id); };
             }
         }
+
         function closeOutput(id) {
             if (outputSources[id]) { outputSources[id].close(); delete outputSources[id]; }
             const row = document.getElementById('outrow-' + id);
             if (row) row.style.display = 'none';
         }
+
+        async function pauseAgent(id) {
+            await fetch('/api/v1/running/' + id + '/pause', { method: 'PUT' });
+            refresh();
+        }
+
+        async function resumeAgent(id) {
+            await fetch('/api/v1/running/' + id + '/resume', { method: 'PUT' });
+            refresh();
+        }
+
+        async function cancelAgent(id) {
+            await fetch('/api/v1/running/' + id + '/cancel', { method: 'PUT' });
+            refresh();
+        }
+
+        async function loadHistory(project) {
+            const url = project ? '/api/v1/history?project=' + encodeURIComponent(project) : '/api/v1/history';
+            const data = await (await fetch(url)).json();
+            const projects = new Set();
+            data.forEach(item => { if (item.projectSlug) projects.add(item.projectSlug); });
+            const filter = document.getElementById('project-filter');
+            const currentVal = filter.value;
+            filter.innerHTML = '<option value="">All Projects</option>' +
+                Array.from(projects).sort().map(p => '<option value="' + p + '">' + p + '</option>').join('');
+            filter.value = currentVal;
+
+            const tb = document.querySelector('#history-table tbody');
+            tb.innerHTML = data.length === 0
+                ? '<tr><td colspan="6">No history</td></tr>'
+                : data.map(x => `<tr><td>${x.issueIdentifier}</td><td>${x.projectSlug ?? ''}</td><td>${x.totalRuns}</td><td>${x.totalTokens}</td><td>${x.lastResult ?? ''}</td><td>${x.lastRunAt ? new Date(x.lastRunAt).toLocaleString() : ''}</td></tr>`).join('');
+        }
+
+        async function loadStages() {
+            const data = await (await fetch('/api/v1/stages')).json();
+            const container = document.getElementById('concurrency-bars');
+            container.innerHTML = Object.entries(data).map(([project, info]) => {
+                const stages = info.stages || {};
+                const maxConcurrent = info.agent?.maxConcurrent || 1;
+                const stageEntries = Object.entries(stages);
+                if (stageEntries.length === 0) return '<div class="concurrency-bar"><span class="label">' + project + ':</span> <em>no stages configured</em></div>';
+                return '<div><strong>' + project + ':</strong></div>' +
+                    stageEntries.map(([stage, cfg]) => {
+                        const cap = cfg.maxConcurrent || maxConcurrent;
+                        const pct = cap > 0 ? Math.min(100, 100) : 0;
+                        return '<div class="concurrency-bar"><span class="label">' + stage + ':</span> <span class="bar" style="width:' + (pct * 2) + 'px;background:#6cf;"></span> cap=' + cap +
+                            (cfg.onCompleteState ? ' &rarr; ' + cfg.onCompleteState : '') + '</div>';
+                    }).join('');
+            }).join('');
+        }
+
+        async function loadTokenChart() {
+            const data = await (await fetch('/api/v1/history')).json();
+            const byDate = {};
+            data.forEach(item => {
+                const date = item.lastRunAt ? item.lastRunAt.substring(0, 10) : 'unknown';
+                if (!byDate[date]) byDate[date] = { input: 0, output: 0, total: 0 };
+                byDate[date].input += item.totalInputTokens;
+                byDate[date].output += item.totalOutputTokens;
+                byDate[date].total += item.totalTokens;
+            });
+            const dates = Object.keys(byDate).sort();
+            if (tokenChartInstance) tokenChartInstance.destroy();
+            tokenChartInstance = new Chart(document.getElementById('token-chart'), {
+                type: 'line',
+                data: {
+                    labels: dates,
+                    datasets: [
+                        { label: 'Input', data: dates.map(d => byDate[d].input), borderColor: '#6cf', backgroundColor: 'transparent', tension: 0.2 },
+                        { label: 'Output', data: dates.map(d => byDate[d].output), borderColor: '#f6c', backgroundColor: 'transparent', tension: 0.2 },
+                        { label: 'Total', data: dates.map(d => byDate[d].total), borderColor: '#6fc', backgroundColor: 'transparent', tension: 0.2 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    plugins: { legend: { labels: { color: '#eee' } } },
+                    scales: { x: { ticks: { color: '#aaa' } }, y: { ticks: { color: '#aaa' } } }
+                }
+            });
+        }
+
+        document.getElementById('project-filter').addEventListener('change', function() {
+            loadHistory(this.value);
+        });
+
         refresh();
+        loadHistory();
+        loadStages();
+        loadTokenChart();
         setInterval(refresh, 5000);
     </script>
 </body>

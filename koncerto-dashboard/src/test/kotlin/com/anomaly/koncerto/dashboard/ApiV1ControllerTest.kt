@@ -1,9 +1,15 @@
 package com.anomaly.koncerto.dashboard
 
 import assertk.assertThat
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
+import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.config.AgentProjectConfig
+import com.anomaly.koncerto.metrics.IssueMetrics
+import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.metrics.TokenDaySummary
 import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
@@ -17,6 +23,7 @@ import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.orchestrator.TokenTotals
 import java.time.Instant
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 
 class ApiV1ControllerTest {
@@ -147,4 +154,127 @@ class ApiV1ControllerTest {
         assertThat(result!!.totalStages).isEqualTo(0)
         assertThat(result.configuredStages).isEqualTo(emptyList())
     }
+
+    @Test
+    fun `history returns all metrics`() {
+        val repo = FakeMetricsRepository()
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val result = runBlocking { controller.history(null, 50) }
+        assertThat(result.size).isEqualTo(2)
+        assertThat(result[0].issueIdentifier).isEqualTo("ABC-1")
+        assertThat(result[1].issueIdentifier).isEqualTo("DEF-2")
+    }
+
+    @Test
+    fun `history filters by project`() {
+        val repo = FakeMetricsRepository()
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val result = runBlocking { controller.history("project-x", 50) }
+        assertThat(result.size).isEqualTo(1)
+        assertThat(result[0].projectSlug).isEqualTo("project-x")
+    }
+
+    @Test
+    fun `history returns empty when no metrics`() {
+        val repo = FakeMetricsRepository(emptyList())
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val result = runBlocking { controller.history(null, 50) }
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `stages returns per-project stage config`() {
+        val state = RuntimeState()
+        val stages = mapOf(
+            "todo" to StageAgentConfig(
+                prompt = "impl.md", model = "claude-sonnet", maxConcurrent = 3,
+                agentKind = "opencode", command = null, onCompleteState = "In Progress"
+            )
+        )
+        val pc = minimalConfig().projects["default"]!!
+        val config = minimalConfig().copy(
+            projects = mapOf("default" to pc.copy(
+                agent = pc.agent.copy(kind = "opencode", maxConcurrentAgents = 5, stages = stages)
+            ))
+        )
+        val controller = ApiV1Controller(config, mapOf("default" to state))
+        val result = controller.stages()
+        assertThat(result.size).isEqualTo(1)
+        @Suppress("UNCHECKED_CAST")
+        val defaultEntry = result["default"] as Map<String, Any>
+        @Suppress("UNCHECKED_CAST")
+        val agent = defaultEntry["agent"] as Map<String, Any>
+        assertThat(agent["kind"]).isEqualTo("opencode")
+        assertThat(agent["maxConcurrent"]).isEqualTo(5)
+        @Suppress("UNCHECKED_CAST")
+        val stagesMap = defaultEntry["stages"] as Map<String, Map<String, Any?>>
+        assertThat(stagesMap["todo"]?.get("prompt")).isEqualTo("impl.md")
+        assertThat(stagesMap["todo"]?.get("onCompleteState")).isEqualTo("In Progress")
+    }
+
+    @Test
+    fun `pauseAgent returns 200 for existing identifier`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val response = controller.pauseAgent("ABC-1")
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(state.running["1"]?.paused).isEqualTo(true)
+    }
+
+    @Test
+    fun `resumeAgent returns 200 for existing identifier`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null, paused = true
+        )
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val response = controller.resumeAgent("ABC-1")
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(state.running["1"]?.paused).isEqualTo(false)
+    }
+
+    @Test
+    fun `cancelAgent returns 200 for existing identifier`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        state.claimed.add("1")
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val response = controller.cancelAgent("ABC-1")
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(state.running.containsKey("1")).isFalse()
+        assertThat(state.claimed.contains("1")).isFalse()
+    }
+
+    @Test
+    fun `pauseAgent returns 404 for unknown identifier`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val response = controller.pauseAgent("UNKNOWN")
+        assertThat(response.statusCodeValue).isEqualTo(404)
+    }
+}
+
+private class FakeMetricsRepository(private val allMetrics: List<IssueMetrics> = listOf(
+    IssueMetrics("1", "ABC-1", null, 5, 100, 50, 150, "SUCCESS", "2024-01-01", "2024-01-01", "2024-01-10"),
+    IssueMetrics("2", "DEF-2", "project-x", 3, 200, 100, 300, "FAILED", "2024-02-01", "2024-02-01", "2024-02-10")
+)) : MetricsRepository {
+    override suspend fun updateAfterRun(issueId: String, issueIdentifier: String, projectSlug: String?, result: String, inputTokens: Long, outputTokens: Long, totalTokens: Long) = Unit
+    override suspend fun findAll(): List<IssueMetrics> = allMetrics
+    override suspend fun findByProject(projectSlug: String?): List<IssueMetrics> = allMetrics.filter { it.projectSlug == projectSlug }
+    override suspend fun findById(issueId: String): IssueMetrics? = allMetrics.find { it.issueId == issueId }
+    override suspend fun tokenHistory(days: Int): List<TokenDaySummary> = emptyList()
 }

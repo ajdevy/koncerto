@@ -3,6 +3,8 @@ package com.anomaly.koncerto.orchestrator
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.model.Issue
@@ -168,6 +170,70 @@ class RuntimeStateTest {
         val copied = entry.copy(turnCount = 5)
         assertThat(copied.turnCount).isEqualTo(5)
         assertThat(copied.issue.id).isEqualTo("1")
+    }
+
+    @Test
+    fun `pauseAgent sets paused flag`() {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1")
+        val result = s.pauseAgent("a")
+        assertThat(result).isTrue()
+        assertThat(s.running["a"]?.paused).isEqualTo(true)
+    }
+
+    @Test
+    fun `resumeAgent clears paused flag`() {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1").copy(paused = true)
+        val result = s.resumeAgent("a")
+        assertThat(result).isTrue()
+        assertThat(s.running["a"]?.paused).isEqualTo(false)
+    }
+
+    @Test
+    fun `cancelAgent removes entry`() {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1")
+        s.claimed.add("a")
+        val result = s.cancelAgent("a")
+        assertThat(result).isTrue()
+        assertThat(s.running.containsKey("a")).isFalse()
+        assertThat(s.claimed.contains("a")).isFalse()
+    }
+
+    @Test
+    fun `cancelAgent removes output`() {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1")
+        s.appendOutput("a", "line1")
+        assertThat(s.outputFlow("a")).isNotNull()
+        s.cancelAgent("a")
+        assertThat(s.outputFlow("a")).isNull()
+    }
+
+    @Test
+    fun `pauseAgent returns false for unknown id`() {
+        val s = RuntimeState()
+        assertThat(s.pauseAgent("nonexistent")).isFalse()
+    }
+
+    @Test
+    fun `resumeAgent returns false for unknown id`() {
+        val s = RuntimeState()
+        assertThat(s.resumeAgent("nonexistent")).isFalse()
+    }
+
+    @Test
+    fun `cancelAgent returns false for unknown id`() {
+        val s = RuntimeState()
+        assertThat(s.cancelAgent("nonexistent")).isFalse()
+    }
+
+    @Test
+    fun `RunningEntry defaults paused and cancelled to false`() {
+        val entry = runningEntry("1", "A-1")
+        assertThat(entry.paused).isFalse()
+        assertThat(entry.cancelled).isFalse()
     }
 
     private fun runningEntry(id: String, identifier: String) = RunningEntry(

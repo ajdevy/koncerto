@@ -20,7 +20,9 @@ data class RunningEntry(
     val lastReportedInput: Long = 0,
     val lastReportedOutput: Long = 0,
     val lastReportedTotal: Long = 0,
-    val turnCount: Int = 1
+    val turnCount: Int = 1,
+    val paused: Boolean = false,
+    val cancelled: Boolean = false
 )
 
 data class RetryEntry(
@@ -71,4 +73,23 @@ class RuntimeState {
     }
 
     fun availableSlots(): Int = (maxConcurrentAgents - running.size).coerceAtLeast(0)
+
+    fun pauseAgent(issueId: String): Boolean {
+        val entry = running[issueId] ?: return false
+        running[issueId] = entry.copy(paused = true)
+        return true
+    }
+
+    fun resumeAgent(issueId: String): Boolean {
+        val entry = running[issueId] ?: return false
+        running[issueId] = entry.copy(paused = false)
+        return true
+    }
+
+    fun cancelAgent(issueId: String): Boolean {
+        val entry = running.remove(issueId) ?: return false
+        claimed.remove(issueId)
+        removeOutput(issueId)
+        return true
+    }
 }
