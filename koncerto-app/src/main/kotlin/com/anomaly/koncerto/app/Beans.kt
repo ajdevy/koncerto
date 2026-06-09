@@ -5,9 +5,7 @@ import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentRunner
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
-import com.anomaly.koncerto.linear.DefaultLinearClient
 import com.anomaly.koncerto.linear.LinearClient
-import com.anomaly.koncerto.linear.LinearGraphQLClient
 import com.anomaly.koncerto.logging.FileSink
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StderrSink
@@ -17,12 +15,10 @@ import com.anomaly.koncerto.metrics.SqliteMetricsRepository
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.workspace.GitWorkflow
-import com.anomaly.koncerto.workspace.ShellHookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import com.anomaly.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
-import java.nio.file.Path
 import java.nio.file.Paths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,28 +61,21 @@ class Beans {
         return ServiceConfig.fromMap(configMap, workflowFileDir)
     }
 
-    private fun firstProjectConfig(config: ServiceConfig): ProjectConfig =
-        config.projects.values.firstOrNull()
-            ?: throw IllegalStateException("At least one project must be configured in WORKFLOW.md")
-
     @Bean
-    fun workspaceManager(config: ServiceConfig, logger: StructuredLogger): WorkspaceManager {
-        val executor = ShellHookExecutor(config.hooks.timeoutMs, logger)
-        val projectConfig = firstProjectConfig(config)
-        val root = Path.of(projectConfig.workspace.root)
-        return WorkspaceManager(root, executor)
+    fun workspaceManagerFactory(
+        config: ServiceConfig,
+        logger: StructuredLogger
+    ): (ProjectConfig) -> WorkspaceManager = { pc ->
+        val executor = com.anomaly.koncerto.workspace.ShellHookExecutor(config.hooks.timeoutMs, logger)
+        WorkspaceManager(Paths.get(pc.workspace.root), executor)
     }
 
     @Bean
-    fun linearClient(config: ServiceConfig): LinearClient {
-        val projectConfig = firstProjectConfig(config)
-        val graphql = LinearGraphQLClient(
-            projectConfig.tracker.endpoint,
-            projectConfig.tracker.apiKey
-        )
-        val slug = projectConfig.tracker.projectSlug
+    fun linearClientFactory(): (ProjectConfig) -> LinearClient = { pc ->
+        val graphql = com.anomaly.koncerto.linear.LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey)
+        val slug = pc.tracker.projectSlug
             ?: throw IllegalStateException("missing_tracker_project_slug")
-        return DefaultLinearClient(graphql, slug)
+        com.anomaly.koncerto.linear.DefaultLinearClient(graphql, slug)
     }
 
     @Bean
@@ -133,15 +122,23 @@ class Beans {
     @Bean
     fun orchestrator(
         config: ServiceConfig,
-        linear: LinearClient,
-        workspaces: WorkspaceManager,
         runner: AgentRunner,
         cache: WorkflowCache,
         logger: StructuredLogger,
         scope: CoroutineScope,
+        linearClientFactory: (ProjectConfig) -> LinearClient,
+        workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager,
         runtimeStates: Map<String, RuntimeState>,
-        metricsRepository: MetricsRepository
+        metricsRepository: MetricsRepository?
     ): Orchestrator = Orchestrator(
-        config, linear, workspaces, runner, cache, logger, runtimeStates, metricsRepository
+        config = config,
+        linearClientFactory = linearClientFactory,
+        workspaceManagerFactory = workspaceManagerFactory,
+        agentRunner = runner,
+        workflowCache = cache,
+        logger = logger,
+        scope = scope,
+        runtimeStates = runtimeStates,
+        metricsRepository = metricsRepository
     )
 }
