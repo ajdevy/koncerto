@@ -3,10 +3,14 @@ package com.anomaly.koncerto.dashboard
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
+import com.anomaly.koncerto.core.config.TrackerConfig
+import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.orchestrator.RetryEntry
 import com.anomaly.koncerto.orchestrator.RunningEntry
@@ -18,17 +22,23 @@ import org.junit.jupiter.api.Test
 class ApiV1ControllerTest {
 
     private fun minimalConfig() = ServiceConfig(
-        trackerKind = null, trackerEndpoint = "x", trackerApiKey = null, trackerProjectSlug = null,
-        requiredLabels = emptyList(), activeStates = emptyList(), terminalStates = emptyList(),
-        pollIntervalMs = 30000, workspaceRoot = java.nio.file.Path.of("/tmp"),
+        pollIntervalMs = 30000,
+        maxRetryBackoffMs = 300000,
+        projects = mapOf("default" to ProjectConfig(
+            tracker = TrackerConfig(
+                kind = "", endpoint = "x", apiKey = "", projectSlug = "",
+                requiredLabels = emptyList(), activeStates = emptyList(), terminalStates = emptyList()
+            ),
+            workspace = WorkspaceConfig(root = "/tmp"),
+            agent = AgentProjectConfig(
+                kind = "opencode", command = "opencode",
+                maxConcurrentAgents = 1, maxTurns = 1, maxRetryBackoffMs = 300000,
+                maxConcurrentAgentsByState = emptyMap(),
+                turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                stages = emptyMap()
+            )
+        )),
         hooks = HooksConfig(null, null, null, null, 60000),
-        maxConcurrentAgents = 1, maxTurns = 1, maxRetryBackoffMs = 300000,
-        maxConcurrentAgentsByState = emptyMap(), agentKind = "opencode",
-        codexCommand = "codex app-server", codexApprovalPolicy = null,
-        codexThreadSandbox = null, codexTurnSandboxPolicy = null,
-        opencodeCommand = "opencode",
-        turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-        stages = emptyMap(),
         gitConfig = GitConfig()
     )
 
@@ -51,7 +61,7 @@ class ApiV1ControllerTest {
         )
         state.retryAttempts["2"] = RetryEntry("2", "ABC-2", 1, System.currentTimeMillis() + 60000, "timeout")
 
-        val controller = ApiV1Controller(state, minimalConfig())
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
         val snapshot = controller.state().block()
 
         assertThat(snapshot!!.running.size).isEqualTo(1)
@@ -77,7 +87,7 @@ class ApiV1ControllerTest {
             turnCount = 3
         )
 
-        val controller = ApiV1Controller(state, minimalConfig())
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
         val result = controller.byIdentifier("ABC-1").block()
 
         assertThat(result!!.issueId).isEqualTo("1")
@@ -89,7 +99,7 @@ class ApiV1ControllerTest {
     @Test
     fun `byIdentifier returns not_found when missing`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(state, minimalConfig())
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
         val result = controller.byIdentifier("MISSING").block()
 
         assertThat(result!!.error).isEqualTo("not_found")
@@ -98,7 +108,7 @@ class ApiV1ControllerTest {
     @Test
     fun `refresh returns ok`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(state, minimalConfig())
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
         val result = controller.refresh().block()
 
         assertThat(result!!.status).isEqualTo("ok")
@@ -113,8 +123,13 @@ class ApiV1ControllerTest {
                 agentKind = "opencode", command = null, onCompleteState = null
             )
         )
-        val config = minimalConfig().copy(agentKind = "opencode", stages = stages)
-        val controller = ApiV1Controller(state, config)
+        val pc = minimalConfig().projects["default"]!!
+        val config = minimalConfig().copy(
+            projects = mapOf("default" to pc.copy(
+                agent = pc.agent.copy(kind = "opencode", stages = stages)
+            ))
+        )
+        val controller = ApiV1Controller(config, mapOf("default" to state))
         val result = controller.models().block()
 
         assertThat(result!!.agentKind).isEqualTo("opencode")
@@ -127,7 +142,7 @@ class ApiV1ControllerTest {
     @Test
     fun `models returns empty list when no stages configured`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(state, minimalConfig())
+        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
         val result = controller.models().block()
 
         assertThat(result!!.totalStages).isEqualTo(0)

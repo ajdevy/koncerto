@@ -10,84 +10,114 @@ import org.junit.jupiter.api.Test
 
 class ServiceConfigTest {
 
+    private fun ServiceConfig.project(): ProjectConfig =
+        projects["default"] ?: throw IllegalStateException("missing default project")
+
     @Test
     fun `defaults are applied when fields are missing`() {
-        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        val config = ServiceConfig(
+            projects = mapOf("default" to ProjectConfig(
+                tracker = TrackerConfig(kind = "linear", endpoint = "https://api.linear.app/graphql", apiKey = "", projectSlug = ""),
+                workspace = WorkspaceConfig(root = "/tmp/test"),
+                agent = AgentProjectConfig()
+            ))
+        )
 
         assertThat(config.pollIntervalMs).isEqualTo(30_000L)
-        assertThat(config.activeStates).containsExactly("Todo", "In Progress")
-        assertThat(config.terminalStates).containsExactly("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
-        assertThat(config.requiredLabels).isEqualTo(emptyList())
-        assertThat(config.maxConcurrentAgents).isEqualTo(10)
-        assertThat(config.maxTurns).isEqualTo(20)
         assertThat(config.maxRetryBackoffMs).isEqualTo(300_000L)
-        assertThat(config.turnTimeoutMs).isEqualTo(3_600_000L)
-        assertThat(config.readTimeoutMs).isEqualTo(5_000L)
-        assertThat(config.stallTimeoutMs).isEqualTo(300_000L)
+        assertThat(config.project().tracker.activeStates).containsExactly("Todo", "In Progress")
+        assertThat(config.project().tracker.terminalStates).containsExactly("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
+        assertThat(config.project().tracker.requiredLabels).isEqualTo(emptyList())
+        assertThat(config.project().agent.maxConcurrentAgents).isEqualTo(2)
+        assertThat(config.project().agent.maxTurns).isEqualTo(20)
+        assertThat(config.project().agent.maxRetryBackoffMs).isEqualTo(300_000L)
+        assertThat(config.project().agent.turnTimeoutMs).isEqualTo(3_600_000L)
+        assertThat(config.project().agent.readTimeoutMs).isEqualTo(5_000L)
+        assertThat(config.project().agent.stallTimeoutMs).isEqualTo(300_000L)
         assertThat(config.hooksTimeoutMs()).isEqualTo(60_000L)
-        assertThat(config.codexCommand).isEqualTo("codex app-server")
-        assertThat(config.agentKind).isEqualTo("codex")
-        assertThat(config.opencodeCommand).isEqualTo("opencode")
+        assertThat(config.project().agent.kind).isEqualTo("opencode")
+        assertThat(config.project().agent.command).isNull()
         assertThat(config.gitConfig.enabled).isEqualTo(false)
         assertThat(config.gitConfig.branchPrefix).isEqualTo("feature/")
         assertThat(config.gitConfig.autoCommit).isEqualTo(true)
         assertThat(config.gitConfig.autoPush).isEqualTo(false)
         assertThat(config.gitConfig.createPr).isEqualTo(false)
         assertThat(config.gitConfig.prBase).isEqualTo("main")
-        assertThat(config.blockedState).isEqualTo("Blocked")
-        assertThat(config.projectAdmin).isNull()
+        assertThat(config.project().tracker.blockedState).isEqualTo("Blocked")
+        assertThat(config.project().tracker.projectAdmin).isNull()
     }
 
     @Test
-    fun `agent kind defaults to codex when not specified`() {
-        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
-        assertThat(config.agentKind).isEqualTo("codex")
+    fun `agent kind defaults to opencode when not specified`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.kind).isEqualTo("opencode")
     }
 
     @Test
     fun `agent kind codex is accepted`() {
         val config = ServiceConfig.fromMap(
-            mapOf("agent" to mapOf("kind" to "codex")),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("kind" to "codex")
+                )
+            )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.agentKind).isEqualTo("codex")
+        assertThat(config.project().agent.kind).isEqualTo("codex")
     }
 
     @Test
     fun `agent kind opencode is accepted`() {
         val config = ServiceConfig.fromMap(
-            mapOf(
-                "agent" to mapOf("kind" to "opencode"),
-                "opencode" to mapOf("command" to "opencode-my-build")
-            ),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("kind" to "opencode", "command" to "opencode-my-build")
+                )
+            )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.agentKind).isEqualTo("opencode")
-        assertThat(config.opencodeCommand).isEqualTo("opencode-my-build")
+        assertThat(config.project().agent.kind).isEqualTo("opencode")
+        assertThat(config.project().agent.command).isEqualTo("opencode-my-build")
     }
 
     @Test
-    fun `agent kind invalid throws`() {
-        val result = ServiceConfig.fromMapOrError(
-            mapOf("agent" to mapOf("kind" to "invalid-agent")),
-            workflowFileDir = "/tmp"
-        )
-        assertThat(result.exceptionOrNull()).isNotNull()
-    }
-
-    @Test
-    fun `opencode command defaults to opencode`() {
+    fun `opencode command defaults to null`() {
         val config = ServiceConfig.fromMap(
-            mapOf("agent" to mapOf("kind" to "opencode")),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("kind" to "opencode")
+                )
+            )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.opencodeCommand).isEqualTo("opencode")
+        assertThat(config.project().agent.command).isNull()
     }
 
     @Test
     fun `tracker kind is required and validated`() {
         val result = ServiceConfig.fromMapOrError(
-            mapOf("tracker" to mapOf("project_slug" to "p")),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("project_slug" to "p", "api_key" to "k"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
             workflowFileDir = "/tmp"
         )
         assertThat(result.exceptionOrNull()).isNotNull()
@@ -98,16 +128,20 @@ class ServiceConfigTest {
         try {
             System.setProperty("LINEAR_API_KEY_FOR_TEST", "secret")
             val config = ServiceConfig.fromMap(
-                mapOf(
-                    "tracker" to mapOf(
-                        "kind" to "linear",
-                        "api_key" to "\$LINEAR_API_KEY_FOR_TEST",
-                        "project_slug" to "proj"
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf(
+                            "kind" to "linear",
+                            "api_key" to "\$LINEAR_API_KEY_FOR_TEST",
+                            "project_slug" to "proj"
+                        ),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
                     )
-                ),
+                )),
                 workflowFileDir = "/tmp"
             )
-            assertThat(config.trackerApiKey).isEqualTo("secret")
+            assertThat(config.project().tracker.apiKey).isEqualTo("secret")
         } finally {
             System.clearProperty("LINEAR_API_KEY_FOR_TEST")
         }
@@ -116,49 +150,74 @@ class ServiceConfigTest {
     @Test
     fun `workspace root expands tilde`() {
         val config = ServiceConfig.fromMap(
-            mapOf("workspace" to mapOf("root" to "~/workspaces")),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "~/workspaces"),
+                    "agent" to mapOf()
+                )
+            )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.workspaceRoot.toString()).isEqualTo("${System.getProperty("user.home")}/workspaces")
+        assertThat(config.project().workspace.root).isEqualTo("${System.getProperty("user.home")}/workspaces")
     }
 
     @Test
     fun `relative workspace root resolves against workflow file dir`() {
         val config = ServiceConfig.fromMap(
-            mapOf("workspace" to mapOf("root" to "ws")),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "ws"),
+                    "agent" to mapOf()
+                )
+            )),
             workflowFileDir = "/some/dir"
         )
-        assertThat(config.workspaceRoot.toString()).isEqualTo("/some/dir/ws")
+        assertThat(config.project().workspace.root).isEqualTo("/some/dir/ws")
     }
 
     @Test
     fun `stages defaults to empty when not specified`() {
-        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
-        assertThat(config.stages).isEqualTo(emptyMap())
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.stages).isEqualTo(emptyMap())
     }
 
     @Test
     fun `parse single stage with all fields`() {
         val config = ServiceConfig.fromMap(
-            mapOf(
-                "agent" to mapOf(
-                    "kind" to "opencode",
-                    "stages" to mapOf(
-                        "Todo" to mapOf(
-                            "prompt" to "prompts/implement.md",
-                            "model" to "claude-sonnet-4-5",
-                            "max_concurrent" to 3,
-                            "agent_kind" to "opencode",
-                            "command" to "opencode-dev",
-                            "on_complete_state" to "In Review"
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "command" to "opencode",
+                        "stages" to mapOf(
+                            "Todo" to mapOf(
+                                "prompt" to "prompts/implement.md",
+                                "model" to "claude-sonnet-4-5",
+                                "max_concurrent" to 3,
+                                "agent_kind" to "opencode",
+                                "command" to "opencode-dev",
+                                "on_complete_state" to "In Review"
+                            )
                         )
                     )
-                ),
-                "opencode" to mapOf("command" to "opencode")
-            ),
+                )
+            )),
             workflowFileDir = "/tmp"
         )
-        val todo = config.stages["todo"]
+        val todo = config.project().agent.stages["todo"]
         assertThat(todo).isNotNull()
         assertThat(todo!!.prompt).isEqualTo("prompts/implement.md")
         assertThat(todo.model).isEqualTo("claude-sonnet-4-5")
@@ -171,35 +230,43 @@ class ServiceConfigTest {
     @Test
     fun `parse multiple stages`() {
         val config = ServiceConfig.fromMap(
-            mapOf(
-                "agent" to mapOf(
-                    "kind" to "opencode",
-                    "stages" to mapOf(
-                        "Todo" to mapOf("prompt" to "impl.md", "max_concurrent" to 3),
-                        "In Review" to mapOf("prompt" to "review.md", "max_concurrent" to 1)
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "stages" to mapOf(
+                            "Todo" to mapOf("prompt" to "impl.md", "max_concurrent" to 3),
+                            "In Review" to mapOf("prompt" to "review.md", "max_concurrent" to 1)
+                        )
                     )
                 )
-            ),
+            )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.stages.keys).isEqualTo(setOf("todo", "in review"))
-        assertThat(config.stages["todo"]?.prompt).isEqualTo("impl.md")
-        assertThat(config.stages["in review"]?.prompt).isEqualTo("review.md")
+        assertThat(config.project().agent.stages.keys).isEqualTo(setOf("todo", "in review"))
+        assertThat(config.project().agent.stages["todo"]?.prompt).isEqualTo("impl.md")
+        assertThat(config.project().agent.stages["in review"]?.prompt).isEqualTo("review.md")
     }
 
     @Test
     fun `stage with partial fields gets nulls for missing`() {
         val config = ServiceConfig.fromMap(
-            mapOf(
-                "agent" to mapOf(
-                    "stages" to mapOf(
-                        "Todo" to mapOf("prompt" to "only-prompt.md")
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "stages" to mapOf(
+                            "Todo" to mapOf("prompt" to "only-prompt.md")
+                        )
                     )
                 )
-            ),
+            )),
             workflowFileDir = "/tmp"
         )
-        val todo = config.stages["todo"]
+        val todo = config.project().agent.stages["todo"]
         assertThat(todo).isNotNull()
         assertThat(todo!!.model).isNull()
         assertThat(todo.maxConcurrent).isNull()
@@ -258,8 +325,17 @@ class ServiceConfigTest {
 
     @Test
     fun `blockedState defaults to Blocked when tracker has no blocked_state`() {
-        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
-        assertThat(config.blockedState).isEqualTo("Blocked")
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().tracker.blockedState).isEqualTo("Blocked")
     }
 
     @Test
@@ -267,11 +343,19 @@ class ServiceConfigTest {
         System.setProperty("KONCERTO_TEST_KEY", "k")
         try {
             val config = ServiceConfig.fromMap(
-                mapOf("tracker" to mapOf("kind" to "linear", "project_slug" to "p",
-                    "api_key" to "\$KONCERTO_TEST_KEY", "blocked_state" to "Waiting")),
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf(
+                            "kind" to "linear", "project_slug" to "p",
+                            "api_key" to "\$KONCERTO_TEST_KEY", "blocked_state" to "Waiting"
+                        ),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )),
                 workflowFileDir = "/tmp"
             )
-            assertThat(config.blockedState).isEqualTo("Waiting")
+            assertThat(config.project().tracker.blockedState).isEqualTo("Waiting")
         } finally {
             System.clearProperty("KONCERTO_TEST_KEY")
         }
@@ -279,8 +363,17 @@ class ServiceConfigTest {
 
     @Test
     fun `projectAdmin defaults to null`() {
-        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
-        assertThat(config.projectAdmin).isNull()
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().tracker.projectAdmin).isNull()
     }
 
     @Test
@@ -288,11 +381,19 @@ class ServiceConfigTest {
         System.setProperty("KONCERTO_TEST_KEY", "k")
         try {
             val config = ServiceConfig.fromMap(
-                mapOf("tracker" to mapOf("kind" to "linear", "project_slug" to "p",
-                    "api_key" to "\$KONCERTO_TEST_KEY", "project_admin" to "user-1")),
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf(
+                            "kind" to "linear", "project_slug" to "p",
+                            "api_key" to "\$KONCERTO_TEST_KEY", "project_admin" to "user-1"
+                        ),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )),
                 workflowFileDir = "/tmp"
             )
-            assertThat(config.projectAdmin).isEqualTo("user-1")
+            assertThat(config.project().tracker.projectAdmin).isEqualTo("user-1")
         } finally {
             System.clearProperty("KONCERTO_TEST_KEY")
         }
@@ -302,7 +403,13 @@ class ServiceConfigTest {
     fun `fromMap throws on invalid config`() {
         val ex = org.junit.jupiter.api.assertThrows<IllegalStateException> {
             ServiceConfig.fromMap(
-                mapOf("tracker" to mapOf("kind" to "", "project_slug" to "p")),
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf("kind" to "", "project_slug" to "p", "api_key" to "k"),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )),
                 workflowFileDir = "/tmp"
             )
         }
@@ -314,25 +421,29 @@ class ServiceConfigTest {
         System.setProperty("KONCERTO_TEST_KEY", "k")
         try {
             val config = ServiceConfig.fromMap(
-                mapOf(
-                    "tracker" to mapOf(
-                        "kind" to "linear",
-                        "api_key" to "\$KONCERTO_TEST_KEY",
-                        "project_slug" to "p",
-                        "required_labels" to listOf(" bugfix ", " feature "),
-                        "active_states" to listOf("Active", "Review"),
-                        "terminal_states" to listOf("Done", "Wontfix"),
-                        "blocked_state" to "Waiting",
-                        "project_admin" to "admin-1"
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf(
+                            "kind" to "linear",
+                            "api_key" to "\$KONCERTO_TEST_KEY",
+                            "project_slug" to "p",
+                            "required_labels" to listOf(" bugfix ", " feature "),
+                            "active_states" to listOf("Active", "Review"),
+                            "terminal_states" to listOf("Done", "Wontfix"),
+                            "blocked_state" to "Waiting",
+                            "project_admin" to "admin-1"
+                        ),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
                     )
-                ),
+                )),
                 workflowFileDir = "/tmp"
             )
-            assertThat(config.requiredLabels).isEqualTo(listOf("bugfix", "feature"))
-            assertThat(config.activeStates).isEqualTo(listOf("Active", "Review"))
-            assertThat(config.terminalStates).isEqualTo(listOf("Done", "Wontfix"))
-            assertThat(config.blockedState).isEqualTo("Waiting")
-            assertThat(config.projectAdmin).isEqualTo("admin-1")
+            assertThat(config.project().tracker.requiredLabels).isEqualTo(listOf("bugfix", "feature"))
+            assertThat(config.project().tracker.activeStates).isEqualTo(listOf("Active", "Review"))
+            assertThat(config.project().tracker.terminalStates).isEqualTo(listOf("Done", "Wontfix"))
+            assertThat(config.project().tracker.blockedState).isEqualTo("Waiting")
+            assertThat(config.project().tracker.projectAdmin).isEqualTo("admin-1")
         } finally {
             System.clearProperty("KONCERTO_TEST_KEY")
         }
@@ -341,7 +452,7 @@ class ServiceConfigTest {
     @Test
     fun `parsePollingInterval uses explicit value`() {
         val config = ServiceConfig.fromMap(
-            mapOf("polling" to mapOf("interval_ms" to 5000)),
+            mapOf("poll_interval_ms" to 5000),
             workflowFileDir = "/tmp"
         )
         assertThat(config.pollIntervalMs).isEqualTo(5000L)
@@ -350,7 +461,13 @@ class ServiceConfigTest {
     @Test
     fun `parseAgentSection maxTurns zero throws`() {
         val result = ServiceConfig.fromMapOrError(
-            mapOf("agent" to mapOf("kind" to "codex", "max_turns" to 0)),
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("max_turns" to 0)
+                )
+            )),
             workflowFileDir = "/tmp"
         )
         assertThat(result.exceptionOrNull()).isNotNull()
@@ -359,79 +476,45 @@ class ServiceConfigTest {
     @Test
     fun `parseAgentSection perState with valid entries`() {
         val config = ServiceConfig.fromMap(
-            mapOf("agent" to mapOf(
-                "kind" to "codex",
-                "max_concurrent_agents_by_state" to mapOf(
-                    "Todo" to 3,
-                    "In Review" to 2
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "max_concurrent_agents_by_state" to mapOf(
+                            "Todo" to 3,
+                            "In Review" to 2
+                        )
+                    )
                 )
             )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.maxConcurrentAgentsByState["todo"]).isEqualTo(3)
-        assertThat(config.maxConcurrentAgentsByState["in review"]).isEqualTo(2)
+        assertThat(config.project().agent.maxConcurrentAgentsByState["todo"]).isEqualTo(3)
+        assertThat(config.project().agent.maxConcurrentAgentsByState["in review"]).isEqualTo(2)
     }
 
     @Test
     fun `parseAgentSection perState filters invalid entries`() {
         val config = ServiceConfig.fromMap(
-            mapOf("agent" to mapOf(
-                "kind" to "codex",
-                "max_concurrent_agents_by_state" to mapOf(
-                    123 to 3,
-                    "Review" to "not-a-number",
-                    "Blocked" to 0,
-                    "Todo" to 2
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "max_concurrent_agents_by_state" to mapOf(
+                            123 to 3,
+                            "Review" to "not-a-number",
+                            "Blocked" to 0,
+                            "Todo" to 2
+                        )
+                    )
                 )
             )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.maxConcurrentAgentsByState.size).isEqualTo(1)
-        assertThat(config.maxConcurrentAgentsByState["todo"]).isEqualTo(2)
-    }
-
-    @Test
-    fun `parseCodexSection blank command for codex throws`() {
-        val result = ServiceConfig.fromMapOrError(
-            mapOf("codex" to mapOf("command" to "")),
-            workflowFileDir = "/tmp"
-        )
-        assertThat(result.exceptionOrNull()).isNotNull()
-    }
-
-    @Test
-    fun `parseCodexSection blank command for opencode throws`() {
-        val result = ServiceConfig.fromMapOrError(
-            mapOf(
-                "agent" to mapOf("kind" to "opencode"),
-                "opencode" to mapOf("command" to "")
-            ),
-            workflowFileDir = "/tmp"
-        )
-        assertThat(result.exceptionOrNull()).isNotNull()
-    }
-
-    @Test
-    fun `parseCodexSection with explicit config values`() {
-        val config = ServiceConfig.fromMap(
-            mapOf(
-                "codex" to mapOf(
-                    "approval_policy" to mapOf("required" to true),
-                    "thread_sandbox" to "docker",
-                    "turn_sandbox_policy" to mapOf("readonly" to true),
-                    "turn_timeout_ms" to 1_800_000,
-                    "read_timeout_ms" to 10_000,
-                    "stall_timeout_ms" to 600_000
-                )
-            ),
-            workflowFileDir = "/tmp"
-        )
-        assertThat(config.codexApprovalPolicy).isEqualTo(mapOf("required" to true))
-        assertThat(config.codexThreadSandbox).isEqualTo("docker")
-        assertThat(config.codexTurnSandboxPolicy).isEqualTo(mapOf("readonly" to true))
-        assertThat(config.turnTimeoutMs).isEqualTo(1_800_000L)
-        assertThat(config.readTimeoutMs).isEqualTo(10_000L)
-        assertThat(config.stallTimeoutMs).isEqualTo(600_000L)
+        assertThat(config.project().agent.maxConcurrentAgentsByState.size).isEqualTo(1)
+        assertThat(config.project().agent.maxConcurrentAgentsByState["todo"]).isEqualTo(2)
     }
 
     @Test
@@ -445,17 +528,66 @@ class ServiceConfigTest {
     @Test
     fun `parseStages with invalid entries is filtered out`() {
         val config = ServiceConfig.fromMap(
-            mapOf("agent" to mapOf(
-                "kind" to "codex",
-                "stages" to mapOf(
-                    123 to mapOf("prompt" to "should-be-skipped"),
-                    "Review" to "not-a-map",
-                    "Todo" to mapOf("prompt" to "implement.md")
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "stages" to mapOf(
+                            123 to mapOf("prompt" to "should-be-skipped"),
+                            "Review" to "not-a-map",
+                            "Todo" to mapOf("prompt" to "implement.md")
+                        )
+                    )
                 )
             )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.stages.size).isEqualTo(1)
-        assertThat(config.stages["todo"]?.prompt).isEqualTo("implement.md")
+        assertThat(config.project().agent.stages.size).isEqualTo(1)
+        assertThat(config.project().agent.stages["todo"]?.prompt).isEqualTo("implement.md")
+    }
+
+    @Test
+    fun `multiple projects parsed`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "frontend" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k1", "project_slug" to "frontend-app"),
+                    "workspace" to mapOf("root" to "/tmp/frontend"),
+                    "agent" to mapOf("kind" to "opencode")
+                ),
+                "backend" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k2", "project_slug" to "backend-app"),
+                    "workspace" to mapOf("root" to "/tmp/backend"),
+                    "agent" to mapOf("kind" to "codex")
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.projects.size).isEqualTo(2)
+        assertThat(config.projects["frontend"]?.tracker?.projectSlug).isEqualTo("frontend-app")
+        assertThat(config.projects["frontend"]?.agent?.kind).isEqualTo("opencode")
+        assertThat(config.projects["frontend"]?.workspace?.root).isEqualTo("/tmp/frontend")
+        assertThat(config.projects["backend"]?.tracker?.projectSlug).isEqualTo("backend-app")
+        assertThat(config.projects["backend"]?.agent?.kind).isEqualTo("codex")
+        assertThat(config.projects["backend"]?.workspace?.root).isEqualTo("/tmp/backend")
+    }
+
+    @Test
+    fun `poll_interval_ms at top level`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("poll_interval_ms" to 15000),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.pollIntervalMs).isEqualTo(15000L)
+    }
+
+    @Test
+    fun `polling interval_ms legacy format`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("polling" to mapOf("interval_ms" to 20000)),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.pollIntervalMs).isEqualTo(20000L)
     }
 }

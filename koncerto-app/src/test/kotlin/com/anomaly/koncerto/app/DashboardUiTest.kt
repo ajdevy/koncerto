@@ -3,6 +3,7 @@ package com.anomaly.koncerto.app
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.dashboard.ApiV1Controller
 import com.anomaly.koncerto.dashboard.DashboardController
@@ -84,7 +85,7 @@ class DashboardUiTest {
     @Test
     fun `page loads token totals from state endpoint`() {
         page.navigate(url("/"))
-        page.waitForTimeout(1000)
+        page.waitForTimeout(1000.0)
         val totals = page.locator("#totals")
         assertThat(totals.textContent()).contains("in=100")
         assertThat(totals.textContent()).contains("total=150")
@@ -97,7 +98,7 @@ class DashboardUiTest {
         assertThat(buttons.count()).isEqualTo(2)
 
         buttons.nth(0).click()
-        page.waitForTimeout(500)
+        page.waitForTimeout(500.0)
 
         val outputRow = page.locator("#outrow-ABC-1")
         assertThat(outputRow.isVisible()).isTrue()
@@ -106,7 +107,7 @@ class DashboardUiTest {
         assertThat(outputPre.textContent()).contains("[stdout] Turn completed")
 
         buttons.nth(0).click()
-        page.waitForTimeout(300)
+        page.waitForTimeout(300.0)
         assertThat(outputRow.isVisible()).isFalse()
     }
 
@@ -114,7 +115,7 @@ class DashboardUiTest {
     fun `output area shows stderr prefixed lines`() {
         page.navigate(url("/"))
         page.locator("button.btn-out").nth(0).click()
-        page.waitForTimeout(500)
+        page.waitForTimeout(500.0)
 
         val outputPre = page.locator("#out-ABC-1")
         assertThat(outputPre.textContent()).contains("[stderr] debug: workspace ready")
@@ -125,7 +126,7 @@ class DashboardUiTest {
     fun `output uses EventSource for live streaming`() {
         page.navigate(url("/"))
         page.locator("button.btn-out").first().click()
-        page.waitForTimeout(500)
+        page.waitForTimeout(500.0)
 
         val outputPre = page.locator("#out-ABC-1")
         val text = outputPre.textContent()

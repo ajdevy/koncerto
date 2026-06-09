@@ -1,8 +1,12 @@
 package com.anomaly.koncerto.app
 
+import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.config.TrackerConfig
+import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.orchestrator.RuntimeState
@@ -54,20 +58,28 @@ class DashboardUiTestConfig {
     }
 
     @Bean
+    fun uiTestRuntimeStates(): Map<String, RuntimeState> = mapOf("default" to uiTestRuntimeState())
+
+    @Bean
     fun uiTestServiceConfig(): ServiceConfig = ServiceConfig(
-        trackerKind = null, trackerEndpoint = "x", trackerApiKey = null,
-        trackerProjectSlug = null, requiredLabels = emptyList(),
-        activeStates = emptyList(), terminalStates = emptyList(),
-        blockedState = "Blocked", projectAdmin = null,
         pollIntervalMs = 30000L,
-        workspaceRoot = Paths.get(System.getProperty("java.io.tmpdir"), "ui-test"),
+        maxRetryBackoffMs = 300000L,
+        projects = mapOf("default" to ProjectConfig(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "", projectSlug = "",
+                requiredLabels = emptyList(), activeStates = emptyList(), terminalStates = emptyList(),
+                blockedState = "Blocked", projectAdmin = null
+            ),
+            workspace = WorkspaceConfig(root = Paths.get(System.getProperty("java.io.tmpdir"), "ui-test").toString()),
+            agent = AgentProjectConfig(
+                kind = "opencode", command = "opencode",
+                maxConcurrentAgents = 10, maxTurns = 20, maxRetryBackoffMs = 300000L,
+                maxConcurrentAgentsByState = emptyMap(),
+                turnTimeoutMs = 3600000L, readTimeoutMs = 5000L, stallTimeoutMs = 300000L,
+                stages = emptyMap()
+            )
+        )),
         hooks = HooksConfig(null, null, null, null, 60000L),
-        maxConcurrentAgents = 10, maxTurns = 20, maxRetryBackoffMs = 300000L,
-        maxConcurrentAgentsByState = emptyMap(), agentKind = "opencode",
-        codexCommand = "codex app-server", codexApprovalPolicy = null,
-        codexThreadSandbox = null, codexTurnSandboxPolicy = null,
-        opencodeCommand = "opencode",
-        turnTimeoutMs = 3600000L, readTimeoutMs = 5000L, stallTimeoutMs = 300000L,
-        stages = emptyMap(), gitConfig = GitConfig()
+        gitConfig = GitConfig()
     )
 }

@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import kotlinx.coroutines.reactive.asPublisher
 import kotlinx.serialization.Serializable
@@ -17,9 +18,15 @@ import reactor.core.publisher.Mono
 @RestController
 @RequestMapping("/api/v1")
 class ApiV1Controller(
-    private val state: RuntimeState,
-    private val config: ServiceConfig
+    private val config: ServiceConfig,
+    private val runtimeStates: Map<String, RuntimeState> = emptyMap()
 ) {
+    private val primaryProjectConfig: com.anomaly.koncerto.core.config.ProjectConfig?
+        get() = config.projects.values.firstOrNull()
+    private val primaryProjectStages: Map<String, StageAgentConfig>
+        get() = primaryProjectConfig?.agent?.stages ?: emptyMap()
+    private val state: RuntimeState?
+        get() = runtimeStates.values.firstOrNull()
 
     @Serializable
     data class StateSnapshot(
@@ -61,32 +68,41 @@ class ApiV1Controller(
 
     @GetMapping("/running/{identifier}/output/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamOutput(@PathVariable identifier: String): Flux<ServerSentEvent<String>> {
-        val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
+        val s = state ?: return Flux.empty()
+        val entry = s.running.values.firstOrNull { it.issue.identifier == identifier }
             ?: return Flux.empty()
-        val flow = state.outputFlow(entry.issue.id) ?: return Flux.empty()
+        val flow = s.outputFlow(entry.issue.id) ?: return Flux.empty()
         return Flux.from(flow.asPublisher())
             .map { line: String -> ServerSentEvent.builder(line).event("output").build() }
     }
 
     @GetMapping("/state", produces = ["application/json"])
-    fun state(): Mono<StateSnapshot> = Mono.just(
-        StateSnapshot(
-            running = state.running.values.map {
+    fun state(): Mono<StateSnapshot> {
+        val s = state ?: return Mono.just(StateSnapshot(emptyList(), emptyList(), Totals(0, 0, 0, 0), emptyMap()))
+        val allRunning = runtimeStates.values.flatMap { rs ->
+            rs.running.values.map {
                 RunningRow(
                     it.issue.id, it.issue.identifier, it.threadId, it.turnId, it.turnCount,
                     it.inputTokens, it.outputTokens, it.totalTokens, it.issue.url
                 )
-            },
-            retrying = state.retryAttempts.values.map {
+            }
+        }
+        val allRetrying = runtimeStates.values.flatMap { rs ->
+            rs.retryAttempts.values.map {
                 RetryingRow(it.issueId, it.identifier, it.attempt, it.dueAtMs, it.error)
-            },
-            tokenTotals = Totals(
-                state.tokenTotals.inputTokens, state.tokenTotals.outputTokens,
-                state.tokenTotals.totalTokens, state.tokenTotals.secondsRunning
-            ),
-            rateLimits = state.codexRateLimits.mapValues { it.value.toString() }
-        )
-    )
+            }
+        }
+        val tokens = runtimeStates.values.fold(Totals(0, 0, 0, 0)) { acc, rs ->
+            Totals(
+                acc.inputTokens + rs.tokenTotals.inputTokens,
+                acc.outputTokens + rs.tokenTotals.outputTokens,
+                acc.totalTokens + rs.tokenTotals.totalTokens,
+                acc.secondsRunning + rs.tokenTotals.secondsRunning
+            )
+        }
+        val limits = s.codexRateLimits.mapValues { it.value.toString() }
+        return Mono.just(StateSnapshot(allRunning, allRetrying, tokens, limits))
+    }
 
     @Serializable
     data class IssueDetail(
@@ -103,7 +119,8 @@ class ApiV1Controller(
 
     @GetMapping("/{identifier}", produces = ["application/json"])
     fun byIdentifier(@PathVariable identifier: String): Mono<IssueDetail> {
-        val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
+        val s = state ?: return Mono.just(IssueDetail(error = "not_found"))
+        val entry = s.running.values.firstOrNull { it.issue.identifier == identifier }
         return if (entry != null) {
             Mono.just(
                 IssueDetail(
@@ -138,8 +155,8 @@ class ApiV1Controller(
     @GetMapping("/models", produces = ["application/json"])
     fun models(): Mono<ModelsResponse> = Mono.just(
         ModelsResponse(
-            agentKind = config.agentKind,
-            configuredStages = config.stages.map { (state, stage) ->
+            agentKind = primaryProjectConfig?.agent?.kind ?: "opencode",
+            configuredStages = primaryProjectStages.map { (state, stage) ->
                 StageModel(
                     stage = state,
                     model = stage.model,
@@ -147,7 +164,7 @@ class ApiV1Controller(
                     prompt = stage.prompt
                 )
             },
-            totalStages = config.stages.size
+            totalStages = primaryProjectStages.size
         )
     )
 }

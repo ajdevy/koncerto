@@ -5,9 +5,13 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.config.TrackerConfig
+import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
@@ -25,33 +29,25 @@ class AgentRunnerTest {
 
     private fun sampleConfig(
         command: String = "codex app-server",
-        agentKind: String = "codex",
-        opencodeCommand: String = "opencode"
+        agentKind: String = "codex"
     ): ServiceConfig = ServiceConfig(
-        trackerKind = "linear",
-        trackerEndpoint = "x",
-        trackerApiKey = "k",
-        trackerProjectSlug = "p",
-        requiredLabels = emptyList(),
-        activeStates = listOf("Todo"),
-        terminalStates = listOf("Done"),
         pollIntervalMs = 30000,
-        workspaceRoot = java.nio.file.Path.of("/tmp"),
-        hooks = HooksConfig(null, null, null, null, 60000),
-        maxConcurrentAgents = 1,
-        maxTurns = 1,
         maxRetryBackoffMs = 300000,
-        maxConcurrentAgentsByState = emptyMap(),
-        agentKind = agentKind,
-        codexCommand = command,
-        codexApprovalPolicy = null,
-        codexThreadSandbox = null,
-        codexTurnSandboxPolicy = null,
-        opencodeCommand = opencodeCommand,
-        turnTimeoutMs = 3600000,
-        readTimeoutMs = 5000,
-        stallTimeoutMs = 300000,
-        stages = emptyMap(),
+        projects = mapOf("default" to ProjectConfig(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
+                requiredLabels = emptyList(), activeStates = listOf("Todo"), terminalStates = listOf("Done")
+            ),
+            workspace = WorkspaceConfig(root = "/tmp"),
+            agent = AgentProjectConfig(
+                kind = agentKind, command = command,
+                maxConcurrentAgents = 1, maxTurns = 1, maxRetryBackoffMs = 300000,
+                maxConcurrentAgentsByState = emptyMap(),
+                turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                stages = emptyMap()
+            )
+        )),
+        hooks = HooksConfig(null, null, null, null, 60000),
         gitConfig = GitConfig()
     )
 
@@ -77,7 +73,7 @@ class AgentRunnerTest {
         val config = sampleConfig(command = "false")
         val runner = DefaultAgentRunner(config, mgr, noopLogger())
         val issue = sampleIssue()
-        val result = runner.run(issue, attempt = null, prompt = "Hi {{ issue.identifier }}")
+        val result = runner.run(issue, attempt = null, prompt = "Hi {{ issue.identifier }}", commandOverride = "false")
         assertThat(result).isNotNull()
     }
 
@@ -103,7 +99,7 @@ class AgentRunnerTest {
         val config = sampleConfig(command = "false")
         val runner = DefaultAgentRunner(config, mgr, noopLogger())
         val issue = sampleIssue()
-        val result = runner.run(issue, attempt = null, prompt = "Hello")
+        val result = runner.run(issue, attempt = null, prompt = "Hello", commandOverride = "false")
         assertThat(result).isNotNull()
     }
 
@@ -154,8 +150,7 @@ class AgentRunnerTest {
         val config = sampleConfig(command = "false")
         val runner = DefaultAgentRunner(config, mgr, noopLogger())
         val issue = sampleIssue()
-        runner.run(issue, attempt = null, prompt = "test")
-        // Workspace directory should have been created
+        runner.run(issue, attempt = null, prompt = "test", commandOverride = "false")
         val wsPath = root.resolve("ABC-1")
         assertThat(Files.exists(wsPath)).isTrue()
     }
@@ -180,7 +175,7 @@ class AgentRunnerTest {
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()
-        val config = sampleConfig(command = script, agentKind = "opencode", opencodeCommand = script)
+        val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(config, mgr, noopLogger())
         val issue = sampleIssue()
         val result = runner.run(issue, attempt = 1, prompt = "Fix {{ issue.title }}")

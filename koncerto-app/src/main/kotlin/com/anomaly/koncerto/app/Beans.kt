@@ -3,6 +3,7 @@ package com.anomaly.koncerto.app
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentRunner
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.DefaultLinearClient
 import com.anomaly.koncerto.linear.LinearClient
@@ -19,6 +20,7 @@ import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import com.anomaly.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.Paths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,16 +63,27 @@ class Beans {
         return ServiceConfig.fromMap(configMap, workflowFileDir)
     }
 
+    private fun firstProjectConfig(config: ServiceConfig): ProjectConfig =
+        config.projects.values.firstOrNull()
+            ?: throw IllegalStateException("At least one project must be configured in WORKFLOW.md")
+
     @Bean
     fun workspaceManager(config: ServiceConfig, logger: StructuredLogger): WorkspaceManager {
         val executor = ShellHookExecutor(config.hooks.timeoutMs, logger)
-        return WorkspaceManager(config.workspaceRoot, executor)
+        val projectConfig = firstProjectConfig(config)
+        val root = Path.of(projectConfig.workspace.root)
+        return WorkspaceManager(root, executor)
     }
 
     @Bean
     fun linearClient(config: ServiceConfig): LinearClient {
-        val graphql = LinearGraphQLClient(config.trackerEndpoint, config.trackerApiKey)
-        val slug = config.trackerProjectSlug ?: throw IllegalStateException("missing_tracker_project_slug")
+        val projectConfig = firstProjectConfig(config)
+        val graphql = LinearGraphQLClient(
+            projectConfig.tracker.endpoint,
+            projectConfig.tracker.apiKey
+        )
+        val slug = projectConfig.tracker.projectSlug
+            ?: throw IllegalStateException("missing_tracker_project_slug")
         return DefaultLinearClient(graphql, slug)
     }
 
@@ -88,31 +101,35 @@ class Beans {
         logger: StructuredLogger,
         agentRuntimeFactory: AgentRuntimeFactory,
         gitWorkflow: GitWorkflow,
-        runtimeState: RuntimeState
+        runtimeStates: Map<String, RuntimeState>
     ): AgentRunner = DefaultAgentRunner(
         config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
-        onAgentOutput = { issueId, line -> runtimeState.appendOutput(issueId, line) }
+        onAgentOutput = { issueId, line ->
+            runtimeStates.values.forEach { it.appendOutput(issueId, line) }
+        }
     )
 
     @Bean
-    fun runtimeState(config: ServiceConfig): RuntimeState = RuntimeState().also {
-        it.pollIntervalMs = config.pollIntervalMs
-        it.maxConcurrentAgents = config.maxConcurrentAgents
-        it.workspaceRoot = config.workspaceRoot
+    fun runtimeStates(
+        config: ServiceConfig
+    ): Map<String, RuntimeState> = config.projects.mapValues { (_, projectConfig) ->
+        RuntimeState().also {
+            it.pollIntervalMs = config.pollIntervalMs
+            it.maxConcurrentAgents = projectConfig.agent.maxConcurrentAgents
+        }
     }
 
     @Bean
     fun orchestrator(
         config: ServiceConfig,
-        state: RuntimeState,
         linear: LinearClient,
         workspaces: WorkspaceManager,
         runner: AgentRunner,
         cache: WorkflowCache,
         logger: StructuredLogger,
-        scope: CoroutineScope
+        scope: CoroutineScope,
+        runtimeStates: Map<String, RuntimeState>
     ): Orchestrator = Orchestrator(
-        config, state, linear, workspaces, runner, cache, logger,
-        config.trackerProjectSlug ?: "unknown"
+        config, linear, workspaces, runner, cache, logger, runtimeStates
     )
 }

@@ -7,10 +7,11 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentRunner
-import com.anomaly.koncerto.core.config.GitConfig
-import com.anomaly.koncerto.core.config.HooksConfig
-import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.config.AgentProjectConfig
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
+import com.anomaly.koncerto.core.config.TrackerConfig
+import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.config.WorkflowDefinition
 import com.anomaly.koncerto.orchestrator.RetryEntry
 import com.anomaly.koncerto.core.model.BlockerRef
@@ -55,9 +56,9 @@ class DispatchServiceTest {
                 e.copy(issue = e.issue.copy(state = "Todo"))
             }
         }
-        val config = config().copy(maxConcurrentAgentsByState = mapOf("todo" to 1))
+        val projectConfig = config().copy(agent = config().agent.copy(maxConcurrentAgentsByState = mapOf("todo" to 1)))
         val runner = CollectingAgentRunner()
-        val svc = createService(config = config, state = state, runner = runner)
+        val svc = createService(config = projectConfig, state = state, runner = runner)
         runDispatch(svc)
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -69,10 +70,10 @@ class DispatchServiceTest {
                 e.copy(issue = e.issue.copy(state = "Todo"))
             }
         }
-        val config = config().copy(maxConcurrentAgentsByState = mapOf("todo" to 2))
+        val projectConfig = config().copy(agent = config().agent.copy(maxConcurrentAgentsByState = mapOf("todo" to 2)))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = config, state = state, runner = runner,
+            config = projectConfig, state = state, runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo"), issue("2", "A-2", "Todo"))
         )
         runDispatch(svc)
@@ -128,8 +129,8 @@ class DispatchServiceTest {
 
     @Test
     fun `scheduleRetry caps backoff at maxRetryBackoffMs`() {
-        val config = config().copy(maxRetryBackoffMs = 60_000)
-        val (svc, state) = createServiceWithState(config = config)
+        val projectConfig = config().copy(agent = config().agent.copy(maxRetryBackoffMs = 60_000))
+        val (svc, state) = createServiceWithState(config = projectConfig)
         repeat(10) { svc.scheduleRetry(issue("1", "A-1", "Todo"), "err") }
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
@@ -153,10 +154,10 @@ class DispatchServiceTest {
 
     @Test
     fun `matchesRequiredLabels skips issues without required labels`() {
-        val config = config().copy(requiredLabels = listOf("bugfix"))
+        val projectConfig = config().copy(tracker = config().tracker.copy(requiredLabels = listOf("bugfix")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = config, runner = runner,
+            config = projectConfig, runner = runner,
             candidates = listOf(
                 issue("1", "A-1", "Todo", labels = listOf("feature")),
                 issue("2", "A-2", "Todo", labels = listOf("bugfix")),
@@ -169,10 +170,10 @@ class DispatchServiceTest {
 
     @Test
     fun `matchesRequiredLabels is case insensitive`() {
-        val config = config().copy(requiredLabels = listOf("BugFix"))
+        val projectConfig = config().copy(tracker = config().tracker.copy(requiredLabels = listOf("BugFix")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = config, runner = runner,
+            config = projectConfig, runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo", labels = listOf("bugfix")))
         )
         runDispatch(svc)
@@ -221,10 +222,10 @@ class DispatchServiceTest {
 
     @Test
     fun `isBlockedForTodo only applies to todo state`() {
-        val config = config().copy(activeStates = listOf("Todo", "In Progress"))
+        val projectConfig = config().copy(tracker = config().tracker.copy(activeStates = listOf("Todo", "In Progress")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = config, runner = runner,
+            config = projectConfig, runner = runner,
             candidates = listOf(
                 issue("1", "A-1", "In Progress", blockers = listOf(BlockerRef("b1", "B-1", "Todo")))
             )
@@ -424,8 +425,9 @@ class DispatchServiceTest {
 
             val state = RuntimeState()
             val runner = CollectingAgentRunner()
+            val projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked"))
             val svc = createService(
-                config = config().copy(blockedState = "Blocked"),
+                config = projectConfig,
                 state = state,
                 linear = trackingLinear,
                 workspaces = workspaces,
@@ -462,11 +464,13 @@ class DispatchServiceTest {
 
             val state = RuntimeState()
             val runner = CollectingAgentRunner()
+            val stages = mapOf("todo" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = "In Review"
+            ))
+            val projectConfig = config(stages = stages).copy(tracker = config().tracker.copy(blockedState = "Blocked"))
             val svc = createService(
-                config = config(stages = mapOf("todo" to StageAgentConfig(
-                    prompt = "test", model = null, maxConcurrent = null,
-                    agentKind = null, command = null, onCompleteState = "In Review"
-                ))).copy(blockedState = "Blocked"),
+                config = projectConfig,
                 state = state,
                 linear = trackingLinear,
                 workspaces = workspaces,
@@ -474,15 +478,12 @@ class DispatchServiceTest {
                 runner = runner
             )
 
-            // First dispatch → clarification detected
             runDispatchAwait(svc)
             assertThat(state.blocked.contains("1")).isTrue()
 
-            // Simulate resolution: remove clarification.md, move issue back to active
             Files.delete(workspace.path.resolve(".koncerto").resolve("clarification.md"))
             state.blocked.remove("1")
 
-            // Re-dispatch for the same issue (still "Todo" in candidates)
             runDispatchAwait(svc)
 
             assertThat(runner.dispatched.size).isEqualTo(2)
@@ -513,7 +514,7 @@ class DispatchServiceTest {
     }
 
     private fun createService(
-        config: ServiceConfig = config(),
+        config: ProjectConfig = config(),
         state: RuntimeState = RuntimeState(),
         linear: LinearClient? = null,
         candidates: List<Issue>? = null,
@@ -528,7 +529,7 @@ class DispatchServiceTest {
     }
 
     private fun createServiceWithState(
-        config: ServiceConfig = config()
+        config: ProjectConfig = config()
     ): Pair<DispatchService, RuntimeState> {
         val state = RuntimeState()
         val svc = createService(config = config, state = state)
@@ -547,22 +548,21 @@ class DispatchServiceTest {
             createdAt = null, updatedAt = null
         )
 
-        fun config(stages: Map<String, StageAgentConfig> = emptyMap()) = ServiceConfig(
-            trackerKind = "linear", trackerEndpoint = "x", trackerApiKey = "k", trackerProjectSlug = "p",
-            requiredLabels = emptyList(),
-            activeStates = listOf("Todo"), terminalStates = listOf("Done"),
-            pollIntervalMs = 30000,
-            workspaceRoot = java.nio.file.Path.of("/tmp"),
-            hooks = HooksConfig(null, null, null, null, 60000),
-            maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
-            maxConcurrentAgentsByState = emptyMap(),
-            agentKind = "codex",
-            codexCommand = "codex app-server", codexApprovalPolicy = null,
-            codexThreadSandbox = null, codexTurnSandboxPolicy = null,
-            opencodeCommand = "opencode",
-            turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-            stages = stages,
-            gitConfig = GitConfig()
+        fun config(stages: Map<String, StageAgentConfig> = emptyMap()) = ProjectConfig(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
+                requiredLabels = emptyList(),
+                activeStates = listOf("Todo"), terminalStates = listOf("Done"),
+                blockedState = "Blocked", projectAdmin = null
+            ),
+            workspace = WorkspaceConfig(root = "/tmp"),
+            agent = AgentProjectConfig(
+                kind = "codex", command = "codex app-server",
+                maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
+                maxConcurrentAgentsByState = emptyMap(),
+                turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                stages = stages
+            )
         )
 
         fun runningEntry(id: String, identifier: String) = RunningEntry(

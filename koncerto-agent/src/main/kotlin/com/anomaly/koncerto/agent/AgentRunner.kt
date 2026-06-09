@@ -67,9 +67,8 @@ class DefaultAgentRunner(
         gitWorkflow?.createBranch(workspace.path, issue.identifier)
 
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
-        val effectiveKind = agentKindOverride ?: config.agentKind
-        val command = commandOverride
-            ?: if (effectiveKind == "opencode") config.opencodeCommand else config.codexCommand
+        val effectiveKind = agentKindOverride ?: "opencode"
+        val command = commandOverride ?: effectiveKind
         val runtime = factory.create(effectiveKind, command, workspace.path)
         if (!runtime.start()) throw IllegalStateException("startup_failed")
 

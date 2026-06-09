@@ -1,7 +1,7 @@
 package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentRunner
-import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
@@ -14,19 +14,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 class DispatchService(
-    private val config: ServiceConfig,
-    private val state: RuntimeState,
+    val projectConfig: ProjectConfig,
+    val state: RuntimeState,
     private val linear: LinearClient,
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
     private val projectSlug: String,
     private val workspaces: WorkspaceManager? = null,
-    private val retryExecutor: RetryExecutor = RetryExecutor(config.maxRetryBackoffMs)
+    private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs)
 ) {
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         val candidates = try {
-            linear.fetchCandidateIssues(projectSlug, config.activeStates)
+            linear.fetchCandidateIssues(projectSlug, projectConfig.tracker.activeStates)
         } catch (e: Exception) {
             logger.failure("fetch_candidates_failed", emptyMap(), e)
             return
@@ -43,7 +43,7 @@ class DispatchService(
 
         for (issue in sorted) {
             if (state.availableSlots() <= 0) break
-            val perStateLimit = config.maxConcurrentAgentsByState[issue.normalizedState]
+            val perStateLimit = projectConfig.agent.maxConcurrentAgentsByState[issue.normalizedState]
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
             val perStateCap = perStateLimit ?: state.maxConcurrentAgents
             if (currentForState >= perStateCap) continue
@@ -64,16 +64,16 @@ class DispatchService(
     }
 
     private fun matchesRequiredLabels(issue: Issue): Boolean {
-        if (config.requiredLabels.isEmpty()) return true
+        if (projectConfig.tracker.requiredLabels.isEmpty()) return true
         val issueLabels = issue.labels.toSet()
-        return config.requiredLabels.all { it.trim().lowercase() in issueLabels }
+        return projectConfig.tracker.requiredLabels.all { it.trim().lowercase() in issueLabels }
     }
 
     private fun isBlockedForTodo(issue: Issue): Boolean {
         if (!issue.normalizedState.equals("todo", ignoreCase = true)) return false
         return issue.blockedBy.any { blocker ->
             val s = blocker.state?.lowercase() ?: return@any true
-            config.terminalStates.none { it.equals(s, ignoreCase = true) }
+            projectConfig.tracker.terminalStates.none { it.equals(s, ignoreCase = true) }
         }
     }
 
@@ -85,10 +85,10 @@ class DispatchService(
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         )
 
-        val stageConfig = config.stages[issue.normalizedState]
+        val stageConfig = projectConfig.agent.stages[issue.normalizedState]
         val prompt = stageConfig?.prompt ?: workflowCache.current().promptTemplate
-        val agentKind = stageConfig?.agentKind ?: config.agentKind
-        val command = stageConfig?.command
+        val agentKind = stageConfig?.agentKind ?: projectConfig.agent.kind
+        val command = stageConfig?.command ?: projectConfig.agent.command
         val model = resolveModel(issue, stageConfig)
 
         val extra = mutableMapOf("prompt_source" to if (stageConfig?.prompt != null) "stage" else "global")
@@ -180,22 +180,22 @@ class DispatchService(
 
         linear.createComment(issueId, clarificationContent)
 
-        val blockedStateId = linear.resolveStateId(projectSlug, config.blockedState)
+        val blockedStateId = linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
         if (blockedStateId != null) {
             linear.updateIssueState(issueId, blockedStateId)
             logger.info("state_transitioned", mapOf(
                 "issue_id" to issueId,
                 "from_state" to issue.state,
-                "to_state" to config.blockedState
+                "to_state" to projectConfig.tracker.blockedState
             ))
         } else {
-            logger.warn("blocked_state_not_found", mapOf("blocked_state" to config.blockedState))
+            logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
         }
 
         val creator = issue.creator
         val assigneeId = when {
             creator != null && !creator.isBot -> creator.id
-            config.projectAdmin != null -> config.projectAdmin
+            projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
             else -> null
         }
         if (assigneeId != null) {
