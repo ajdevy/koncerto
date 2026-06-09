@@ -9,5 +9,6 @@ include(
     "koncerto-agent",
     "koncerto-orchestrator",
     "koncerto-dashboard",
-    "koncerto-app"
+    "koncerto-app",
+    "koncerto-e2e"
 )
