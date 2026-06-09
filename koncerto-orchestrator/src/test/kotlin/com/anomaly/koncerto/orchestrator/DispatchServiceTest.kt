@@ -680,6 +680,22 @@ class DispatchServiceTest {
         assertThat(resolved.kind).isEqualTo("codex")
     }
 
+    @Test
+    fun `resolveAgent warns when stage references non-existent provider`() {
+        val (svc, _) = createServiceWithState(config(
+            agents = emptyMap(),
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = "nonexistent"
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress")
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
     companion object {
         fun issue(
             id: String, identifier: String, state: String,

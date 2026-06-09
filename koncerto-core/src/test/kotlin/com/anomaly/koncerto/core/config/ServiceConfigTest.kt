@@ -691,4 +691,26 @@ class ServiceConfigTest {
         assertThat(config.project().agent.agents["good"]?.kind).isEqualTo("codex")
         assertThat(config.project().agent.agents["no-kind"]).isNull()
     }
+
+    @Test
+    fun `parse agent providers skips entries with non-string keys`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "agents" to mapOf(
+                            123 to mapOf("kind" to "codex"),
+                            "valid" to mapOf("kind" to "opencode")
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.agents.size).isEqualTo(1)
+        assertThat(config.project().agent.agents["valid"]?.kind).isEqualTo("opencode")
+    }
 }
