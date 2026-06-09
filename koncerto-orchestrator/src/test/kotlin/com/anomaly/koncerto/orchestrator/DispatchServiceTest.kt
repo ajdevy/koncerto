@@ -15,11 +15,15 @@ import com.anomaly.koncerto.core.config.WorkflowDefinition
 import com.anomaly.koncerto.orchestrator.RetryEntry
 import com.anomaly.koncerto.core.model.BlockerRef
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.model.UserRef
 import com.anomaly.koncerto.core.result.EmptyResult
 import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.workspace.HookExecutor
+import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
+import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -404,6 +408,91 @@ class DispatchServiceTest {
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
 
+    @Test
+    fun `clarification requested blocks issue assigns and transitions state`() {
+        val root = Files.createTempDirectory("clarify-test-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val creator = UserRef("user-1", "Alice", false)
+            val testIssue = issue("1", "A-1", "Todo").copy(creator = creator)
+            trackingLinear.addIssue(testIssue)
+
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.createDirectories(workspace.path.resolve(".koncerto"))
+            Files.writeString(workspace.path.resolve(".koncerto").resolve("clarification.md"), "Need specs")
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            val svc = createService(
+                config = config().copy(blockedState = "Blocked"),
+                state = state,
+                linear = trackingLinear,
+                workspaces = workspaces,
+                candidates = listOf(testIssue),
+                runner = runner
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+            assertThat(state.blocked.contains("1")).isTrue()
+            assertThat(state.completed.contains("1")).isFalse()
+            assertThat(trackingLinear.commentedIssueId).isEqualTo("1")
+            assertThat(trackingLinear.commentedBody).isEqualTo("Need specs")
+            assertThat(trackingLinear.transitionedIssueId).isEqualTo("1")
+            assertThat(trackingLinear.assignedUserId).isEqualTo("user-1")
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `issue re-dispatched when unblocked and back in active state`() {
+        val root = Files.createTempDirectory("clarify-redispatch-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val creator = UserRef("user-1", "Alice", false)
+            val testIssue = issue("1", "A-1", "Todo").copy(creator = creator)
+            trackingLinear.addIssue(testIssue)
+
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.createDirectories(workspace.path.resolve(".koncerto"))
+            Files.writeString(workspace.path.resolve(".koncerto").resolve("clarification.md"), "Need specs")
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            val svc = createService(
+                config = config(stages = mapOf("todo" to StageAgentConfig(
+                    prompt = "test", model = null, maxConcurrent = null,
+                    agentKind = null, command = null, onCompleteState = "In Review"
+                ))).copy(blockedState = "Blocked"),
+                state = state,
+                linear = trackingLinear,
+                workspaces = workspaces,
+                candidates = listOf(testIssue),
+                runner = runner
+            )
+
+            // First dispatch → clarification detected
+            runDispatchAwait(svc)
+            assertThat(state.blocked.contains("1")).isTrue()
+
+            // Simulate resolution: remove clarification.md, move issue back to active
+            Files.delete(workspace.path.resolve(".koncerto").resolve("clarification.md"))
+            state.blocked.remove("1")
+
+            // Re-dispatch for the same issue (still "Todo" in candidates)
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(2)
+            assertThat(state.completed.contains("1")).isTrue()
+            assertThat(state.blocked.contains("1")).isFalse()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private fun runDispatch(svc: DispatchService) {
         runBlocking {
             svc.fetchAndDispatch(CoroutineScope(coroutineContext))
@@ -429,12 +518,13 @@ class DispatchServiceTest {
         linear: LinearClient? = null,
         candidates: List<Issue>? = null,
         runner: AgentRunner = CollectingAgentRunner(),
-        cache: WorkflowCache? = null
+        cache: WorkflowCache? = null,
+        workspaces: WorkspaceManager? = null
     ): DispatchService {
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val logger = StructuredLogger(emptyList())
         val client = linear ?: candidates?.let { SimpleLinear(it) } ?: SimpleLinear(emptyList())
-        return DispatchService(config, state, client, runner, wc, logger, "proj")
+        return DispatchService(config, state, client, runner, wc, logger, "proj", workspaces)
     }
 
     private fun createServiceWithState(
