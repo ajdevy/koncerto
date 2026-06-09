@@ -26,6 +26,7 @@ import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
@@ -52,7 +53,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-3", "A-1")
     }
@@ -76,7 +86,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -100,7 +119,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(2)
     }
@@ -116,7 +144,16 @@ class OrchestratorTest {
         val linear = FakeLinearClient(listOf(sampleIssue("1", "A-1", "Todo")))
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -132,7 +169,16 @@ class OrchestratorTest {
         val linear = FakeLinearClient(listOf(sampleIssue("1", "A-1", "Todo")))
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -149,9 +195,17 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
-        orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcile(state, sampleProjectConfig())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -168,9 +222,17 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
-        orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcile(state, sampleProjectConfig())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -186,9 +248,17 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
-        orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcile(state, sampleProjectConfig())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isTrue()
     }
 
@@ -202,9 +272,17 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
-        orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcile(state, sampleProjectConfig())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
         assertThat(state.running.size).isEqualTo(0)
     }
 
@@ -219,9 +297,17 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
-        orch.scope = CoroutineScope(coroutineContext)
-        orch.reconcile(state, sampleProjectConfig())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isTrue()
     }
 
@@ -236,7 +322,16 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         val event = AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1",
             usage = TokenUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
@@ -259,7 +354,16 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.handleAgentEvent(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1",
             usage = TokenUsage(inputTokens = 100, outputTokens = 50, totalTokens = 150),
@@ -285,7 +389,16 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.handleAgentEvent(AgentEvent.TurnCompleted(
             threadId = "t1", turnId = "r1", usage = null, pid = 1234L
         ))
@@ -304,7 +417,16 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.handleAgentEvent(AgentEvent.TurnFailed(
             threadId = "t1", turnId = "r1", error = "boom", pid = 1234L
         ))
@@ -321,7 +443,16 @@ class OrchestratorTest {
         val linear = FakeLinearClient(listOf(sampleIssue("1", "A-1", "Todo")))
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(state.claimed.contains("1")).isEqualTo(false)
         assertThat(state.completed.contains("1")).isTrue()
@@ -337,10 +468,19 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         val issue = sampleIssue("1", "A-1", "Todo")
         val beforeMs = System.currentTimeMillis()
-        orch.dispatchServices[defaultProjectSlug]!!.scheduleRetry(issue, "timeout error")
+        orch.projects[defaultProjectSlug]!!.dispatch.scheduleRetry(issue, "timeout error")
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(1)
@@ -359,10 +499,19 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         val issue = sampleIssue("1", "A-1", "Todo")
-        orch.dispatchServices[defaultProjectSlug]!!.scheduleRetry(issue, "err1")
-        orch.dispatchServices[defaultProjectSlug]!!.scheduleRetry(issue, "err2")
+        orch.projects[defaultProjectSlug]!!.dispatch.scheduleRetry(issue, "err1")
+        orch.projects[defaultProjectSlug]!!.dispatch.scheduleRetry(issue, "err2")
         assertThat(state.retryAttempts["1"]?.attempt).isEqualTo(2)
         assertThat(state.retryAttempts["1"]?.error).isEqualTo("err2")
     }
@@ -378,9 +527,18 @@ class OrchestratorTest {
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         val issue = sampleIssue("1", "A-1", "Todo")
-        repeat(10) { orch.dispatchServices[defaultProjectSlug]!!.scheduleRetry(issue, "err") }
+        repeat(10) { orch.projects[defaultProjectSlug]!!.dispatch.scheduleRetry(issue, "err") }
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
         assertThat(entry!!.attempt).isEqualTo(10)
@@ -405,7 +563,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-2")
     }
@@ -423,7 +590,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
@@ -445,7 +621,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-2")
     }
@@ -466,7 +651,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
@@ -487,7 +681,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -509,7 +712,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         yield()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
@@ -525,7 +737,16 @@ class OrchestratorTest {
         val linear = FakeLinearClient(listOf(sampleIssue("1", "A-1", "Todo")))
         val runner = FailingAgentRunner("agent crashed")
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(state.retryAttempts.containsKey("1")).isTrue()
         assertThat(state.retryAttempts["1"]?.attempt).isEqualTo(1)
@@ -542,7 +763,16 @@ class OrchestratorTest {
         val linear = FakeLinearClientThrowing()
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -565,7 +795,16 @@ class OrchestratorTest {
         )
         val runner = FakeAgentRunner()
         val logger = StructuredLogger(emptyList())
-        val orch = Orchestrator(config, linear, mgr, runner, cache, logger, mapOf(defaultProjectSlug to state))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
         orch.runDispatchSync()
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -708,7 +947,6 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
 
 fun Orchestrator.runDispatchSync() {
     runBlocking {
-        scope = CoroutineScope(coroutineContext)
-        dispatchServices.values.forEach { it.fetchAndDispatch(scope!!) }
+        projects.values.forEach { it.dispatch.fetchAndDispatch(this) }
     }
 }
