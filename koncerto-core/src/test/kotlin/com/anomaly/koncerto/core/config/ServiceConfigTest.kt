@@ -27,6 +27,14 @@ class ServiceConfigTest {
         assertThat(config.codexCommand).isEqualTo("codex app-server")
         assertThat(config.agentKind).isEqualTo("codex")
         assertThat(config.opencodeCommand).isEqualTo("opencode")
+        assertThat(config.gitConfig.enabled).isEqualTo(false)
+        assertThat(config.gitConfig.branchPrefix).isEqualTo("feature/")
+        assertThat(config.gitConfig.autoCommit).isEqualTo(true)
+        assertThat(config.gitConfig.autoPush).isEqualTo(false)
+        assertThat(config.gitConfig.createPr).isEqualTo(false)
+        assertThat(config.gitConfig.prBase).isEqualTo("main")
+        assertThat(config.blockedState).isEqualTo("Blocked")
+        assertThat(config.projectAdmin).isNull()
     }
 
     @Test
@@ -197,5 +205,95 @@ class ServiceConfigTest {
         assertThat(todo.agentKind).isNull()
         assertThat(todo.command).isNull()
         assertThat(todo.onCompleteState).isNull()
+    }
+
+    @Test
+    fun `git config defaults when not specified`() {
+        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        assertThat(config.gitConfig.enabled).isEqualTo(false)
+        assertThat(config.gitConfig.branchPrefix).isEqualTo("feature/")
+        assertThat(config.gitConfig.autoCommit).isEqualTo(true)
+        assertThat(config.gitConfig.autoPush).isEqualTo(false)
+        assertThat(config.gitConfig.createPr).isEqualTo(false)
+        assertThat(config.gitConfig.prBase).isEqualTo("main")
+    }
+
+    @Test
+    fun `git config parses all fields`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "git" to mapOf(
+                    "enabled" to true,
+                    "branch_prefix" to "fix/",
+                    "auto_commit" to false,
+                    "auto_push" to true,
+                    "create_pr" to true,
+                    "pr_base" to "develop"
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.gitConfig.enabled).isEqualTo(true)
+        assertThat(config.gitConfig.branchPrefix).isEqualTo("fix/")
+        assertThat(config.gitConfig.autoCommit).isEqualTo(false)
+        assertThat(config.gitConfig.autoPush).isEqualTo(true)
+        assertThat(config.gitConfig.createPr).isEqualTo(true)
+        assertThat(config.gitConfig.prBase).isEqualTo("develop")
+    }
+
+    @Test
+    fun `git config partial fields get defaults`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("git" to mapOf("enabled" to true)),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.gitConfig.enabled).isEqualTo(true)
+        assertThat(config.gitConfig.branchPrefix).isEqualTo("feature/")
+        assertThat(config.gitConfig.autoCommit).isEqualTo(true)
+        assertThat(config.gitConfig.autoPush).isEqualTo(false)
+        assertThat(config.gitConfig.createPr).isEqualTo(false)
+        assertThat(config.gitConfig.prBase).isEqualTo("main")
+    }
+
+    @Test
+    fun `blockedState defaults to Blocked when tracker has no blocked_state`() {
+        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        assertThat(config.blockedState).isEqualTo("Blocked")
+    }
+
+    @Test
+    fun `blockedState parsed from tracker section`() {
+        System.setProperty("KONCERTO_TEST_KEY", "k")
+        try {
+            val config = ServiceConfig.fromMap(
+                mapOf("tracker" to mapOf("kind" to "linear", "project_slug" to "p",
+                    "api_key" to "\$KONCERTO_TEST_KEY", "blocked_state" to "Waiting")),
+                workflowFileDir = "/tmp"
+            )
+            assertThat(config.blockedState).isEqualTo("Waiting")
+        } finally {
+            System.clearProperty("KONCERTO_TEST_KEY")
+        }
+    }
+
+    @Test
+    fun `projectAdmin defaults to null`() {
+        val config = ServiceConfig.fromMap(emptyMap(), workflowFileDir = "/tmp")
+        assertThat(config.projectAdmin).isNull()
+    }
+
+    @Test
+    fun `projectAdmin parsed from tracker section`() {
+        System.setProperty("KONCERTO_TEST_KEY", "k")
+        try {
+            val config = ServiceConfig.fromMap(
+                mapOf("tracker" to mapOf("kind" to "linear", "project_slug" to "p",
+                    "api_key" to "\$KONCERTO_TEST_KEY", "project_admin" to "user-1")),
+                workflowFileDir = "/tmp"
+            )
+            assertThat(config.projectAdmin).isEqualTo("user-1")
+        } finally {
+            System.clearProperty("KONCERTO_TEST_KEY")
+        }
     }
 }

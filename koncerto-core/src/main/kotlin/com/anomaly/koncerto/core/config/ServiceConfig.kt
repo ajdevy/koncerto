@@ -14,6 +14,8 @@ data class ServiceConfig(
     val requiredLabels: List<String>,
     val activeStates: List<String>,
     val terminalStates: List<String>,
+    val blockedState: String = "Blocked",
+    val projectAdmin: String? = null,
     val pollIntervalMs: Long,
     val workspaceRoot: Path,
     val hooks: HooksConfig,
@@ -30,7 +32,8 @@ data class ServiceConfig(
     val turnTimeoutMs: Long,
     val readTimeoutMs: Long,
     val stallTimeoutMs: Long,
-    val stages: Map<String, StageAgentConfig>
+    val stages: Map<String, StageAgentConfig>,
+    val gitConfig: GitConfig
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
 
@@ -55,6 +58,7 @@ data class ServiceConfig(
             val codexSection = parseCodexSection(map["codex"] as? Map<*, *>, map["opencode"] as? Map<*, *>, agentSection.kind)
 
             val stages = parseStages(map["agent"] as? Map<*, *>)
+            val gitConfig = parseGitConfig(map["git"] as? Map<*, *>)
 
             ServiceConfig(
                 trackerKind = trackerSection.kind,
@@ -64,6 +68,8 @@ data class ServiceConfig(
                 requiredLabels = trackerSection.requiredLabels,
                 activeStates = trackerSection.activeStates,
                 terminalStates = trackerSection.terminalStates,
+                blockedState = trackerSection.blockedState,
+                projectAdmin = trackerSection.projectAdmin,
                 pollIntervalMs = pollingInterval,
                 workspaceRoot = workspaceRoot,
                 hooks = hooksConfig,
@@ -80,7 +86,8 @@ data class ServiceConfig(
                 turnTimeoutMs = codexSection.turnTimeoutMs,
                 readTimeoutMs = codexSection.readTimeoutMs,
                 stallTimeoutMs = codexSection.stallTimeoutMs,
-                stages = stages
+                stages = stages,
+                gitConfig = gitConfig
             )
         }
 
@@ -91,7 +98,9 @@ data class ServiceConfig(
             val projectSlug: String?,
             val requiredLabels: List<String>,
             val activeStates: List<String>,
-            val terminalStates: List<String>
+            val terminalStates: List<String>,
+            val blockedState: String,
+            val projectAdmin: String?
         )
 
         private data class AgentSection(
@@ -148,7 +157,9 @@ data class ServiceConfig(
             val terminalStates = (map?.get("terminal_states") as? List<*>)
                 ?.filterIsInstance<String>()
                 ?: listOf("Closed", "Cancelled", "Canceled", "Duplicate", "Done")
-            return TrackerSection(kind, endpoint, apiKey, projectSlug, requiredLabels, activeStates, terminalStates)
+            val blockedState = (map?.get("blocked_state") as? String) ?: "Blocked"
+            val projectAdmin = map?.get("project_admin") as? String
+            return TrackerSection(kind, endpoint, apiKey, projectSlug, requiredLabels, activeStates, terminalStates, blockedState, projectAdmin)
         }
 
         private fun parsePollingInterval(map: Map<*, *>?): Long =
@@ -231,6 +242,18 @@ data class ServiceConfig(
             return if (path.isAbsolute) path else Paths.get(workflowFileDir).resolve(path).normalize()
         }
 
+        private fun parseGitConfig(map: Map<*, *>?): GitConfig {
+            if (map == null) return GitConfig()
+            return GitConfig(
+                enabled = (map["enabled"] as? Boolean) ?: false,
+                branchPrefix = (map["branch_prefix"] as? String) ?: "feature/",
+                autoCommit = (map["auto_commit"] as? Boolean) ?: true,
+                autoPush = (map["auto_push"] as? Boolean) ?: false,
+                createPr = (map["create_pr"] as? Boolean) ?: false,
+                prBase = (map["pr_base"] as? String) ?: "main"
+            )
+        }
+
         private fun expandTilde(path: String): String {
             if (path.startsWith("~/")) {
                 return "${System.getProperty("user.home")}/" + path.removePrefix("~/")
@@ -255,4 +278,13 @@ data class StageAgentConfig(
     val agentKind: String?,
     val command: String?,
     val onCompleteState: String?
+)
+
+data class GitConfig(
+    val enabled: Boolean = false,
+    val branchPrefix: String = "feature/",
+    val autoCommit: Boolean = true,
+    val autoPush: Boolean = false,
+    val createPr: Boolean = false,
+    val prBase: String = "main"
 )
