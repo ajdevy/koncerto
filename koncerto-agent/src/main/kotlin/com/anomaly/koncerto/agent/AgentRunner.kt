@@ -9,9 +9,12 @@ import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.Workspace
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.PromptRenderer
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.file.Files
@@ -41,7 +44,8 @@ class DefaultAgentRunner(
     private val workspaces: WorkspaceManager,
     private val logger: StructuredLogger,
     private val runtimeFactory: AgentRuntimeFactory? = null,
-    private val gitWorkflow: GitWorkflow? = null
+    private val gitWorkflow: GitWorkflow? = null,
+    private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null
 ) : AgentRunner {
 
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
@@ -69,26 +73,37 @@ class DefaultAgentRunner(
         val runtime = factory.create(effectiveKind, command, workspace.path)
         if (!runtime.start()) throw IllegalStateException("startup_failed")
 
-        val rendered = PromptRenderer.render(
-            prompt, mapOf(
-                "issue" to issue.toTemplateMap(),
-                "attempt" to attempt
+        coroutineScope {
+            val outputJob: Job? = if (onAgentOutput != null) {
+                launch {
+                    runtime.output.collect { line ->
+                        onAgentOutput(issue.id, line)
+                    }
+                }
+            } else null
+
+            val rendered = PromptRenderer.render(
+                prompt, mapOf(
+                    "issue" to issue.toTemplateMap(),
+                    "attempt" to attempt
+                )
             )
-        )
 
-        runtime.send("initialize", null)
-        runtime.send(
-            "thread/start", buildJsonObject {
-                put("working_directory", workspace.path.toString())
-            }
-        )
-        runtime.send(
-            "turn/start", buildJsonObject {
-                put("input", rendered)
-            }
-        )
+            runtime.send("initialize", null)
+            runtime.send(
+                "thread/start", buildJsonObject {
+                    put("working_directory", workspace.path.toString())
+                }
+            )
+            runtime.send(
+                "turn/start", buildJsonObject {
+                    put("input", rendered)
+                }
+            )
 
-        runtime.stop()
+            runtime.stop()
+            outputJob?.cancel()
+        }
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
 
         val clarificationPath = workspace.path.resolve(".koncerto").resolve("clarification.md")

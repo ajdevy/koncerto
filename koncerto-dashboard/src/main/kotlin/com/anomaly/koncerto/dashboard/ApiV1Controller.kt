@@ -2,12 +2,16 @@ package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.orchestrator.RuntimeState
+import kotlinx.coroutines.reactive.asPublisher
 import kotlinx.serialization.Serializable
+import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
+import org.springframework.http.codec.ServerSentEvent
+import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 
 @RestController
@@ -54,6 +58,15 @@ class ApiV1Controller(
         val totalTokens: Long,
         val secondsRunning: Long
     )
+
+    @GetMapping("/running/{identifier}/output/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    fun streamOutput(@PathVariable identifier: String): Flux<ServerSentEvent<String>> {
+        val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
+            ?: return Flux.empty()
+        val flow = state.outputFlow(entry.issue.id) ?: return Flux.empty()
+        return Flux.from(flow.asPublisher())
+            .map { line: String -> ServerSentEvent.builder(line).event("output").build() }
+    }
 
     @GetMapping("/state", produces = ["application/json"])
     fun state(): Mono<StateSnapshot> = Mono.just(

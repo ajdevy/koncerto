@@ -75,6 +75,7 @@ class Orchestrator(
                     )
                     state.running.remove(id)
                     state.claimed.remove(id)
+                    state.removeOutput(id)
                     try {
                         workspaces.removeWorkspace(entry.issue.identifier)
                     } catch (_: Exception) {
@@ -88,6 +89,7 @@ class Orchestrator(
                     )
                     state.running.remove(id)
                     state.claimed.remove(id)
+                    state.removeOutput(id)
                 }
             }
         } catch (e: Exception) {

@@ -12,6 +12,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -30,6 +33,8 @@ abstract class StdioAgentRuntime(
     private var writer: BufferedWriter? = null
     private var readerJob: Job? = null
     private val events = Channel<AgentEvent>(Channel.BUFFERED)
+    private val _output = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    override val output: SharedFlow<String> = _output.asSharedFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile
     private var pid: Long? = null
@@ -60,6 +65,7 @@ abstract class StdioAgentRuntime(
         try {
             reader.lineSequence().forEach { line ->
                 if (line.isBlank()) return@forEach
+                _output.tryEmit("[stdout] $line")
                 try {
                     val msgs = JsonRpcFraming.decodeAll(line)
                     msgs.forEach { dispatchMessage(it) }
@@ -75,7 +81,10 @@ abstract class StdioAgentRuntime(
     private suspend fun readStderr(reader: java.io.BufferedReader) {
         try {
             reader.lineSequence().forEach { line ->
-                if (line.isNotBlank()) logger.debug("${logTag}_stderr", emptyMap(), "line" to line.take(500))
+                if (line.isNotBlank()) {
+                    _output.tryEmit("[stderr] $line")
+                    logger.debug("${logTag}_stderr", emptyMap(), "line" to line.take(500))
+                }
             }
         } catch (_: Exception) {
         }

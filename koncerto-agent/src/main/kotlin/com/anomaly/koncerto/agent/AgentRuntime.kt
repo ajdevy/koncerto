@@ -3,12 +3,14 @@ package com.anomaly.koncerto.agent
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Path
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.json.JsonElement
 
 interface AgentRuntime {
     suspend fun start(): Boolean
     fun send(method: String, params: JsonElement? = null): String
     fun events(): Flow<AgentEvent>
+    val output: SharedFlow<String>
     fun stop()
 }
 

@@ -87,8 +87,12 @@ class Beans {
         workspaces: WorkspaceManager,
         logger: StructuredLogger,
         agentRuntimeFactory: AgentRuntimeFactory,
-        gitWorkflow: GitWorkflow
-    ): AgentRunner = DefaultAgentRunner(config, workspaces, logger, agentRuntimeFactory, gitWorkflow)
+        gitWorkflow: GitWorkflow,
+        runtimeState: RuntimeState
+    ): AgentRunner = DefaultAgentRunner(
+        config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
+        onAgentOutput = { issueId, line -> runtimeState.appendOutput(issueId, line) }
+    )
 
     @Bean
     fun runtimeState(config: ServiceConfig): RuntimeState = RuntimeState().also {
