@@ -8,6 +8,7 @@ import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.io.TempDir
@@ -59,6 +60,15 @@ class ShellHookExecutorTest {
     fun `empty script succeeds with exit 0`() = runTest {
         val executor = ShellHookExecutor(timeoutMs = 5000, logger = logger)
         executor.run(tmpDir, "true")
+    }
+
+    @Test
+    fun `timeout throws HookExecutionException`() = runTest {
+        val executor = ShellHookExecutor(timeoutMs = 10, logger = logger)
+        val ex = assertThrows<HookExecutionException> {
+            executor.run(tmpDir, "sleep 30")
+        }
+        assertThat(ex).messageContains("hook_timeout")
     }
 
     @Test

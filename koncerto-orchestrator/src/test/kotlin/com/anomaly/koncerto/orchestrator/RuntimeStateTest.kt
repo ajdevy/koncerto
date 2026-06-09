@@ -3,6 +3,7 @@ package com.anomaly.koncerto.orchestrator
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
@@ -126,6 +127,47 @@ class RuntimeStateTest {
         assertThat(s.retryAttempts["a"]?.identifier).isEqualTo("A-1")
         assertThat(s.retryAttempts["b"]?.identifier).isEqualTo("B-1")
         assertThat(s.retryAttempts["c"]?.identifier).isEqualTo("C-1")
+    }
+
+    @Test
+    fun `RunningEntry stores all default fields`() {
+        val entry = runningEntry("1", "A-1")
+        assertThat(entry.threadId).isEqualTo("thread-1")
+        assertThat(entry.turnId).isEqualTo("turn-1")
+        assertThat(entry.inputTokens).isEqualTo(0)
+        assertThat(entry.outputTokens).isEqualTo(0)
+        assertThat(entry.totalTokens).isEqualTo(0)
+        assertThat(entry.lastReportedInput).isEqualTo(0)
+        assertThat(entry.lastReportedOutput).isEqualTo(0)
+        assertThat(entry.lastReportedTotal).isEqualTo(0)
+        assertThat(entry.turnCount).isEqualTo(1)
+        assertThat(entry.lastCodexTimestamp).isNull()
+    }
+
+    @Test
+    fun `RunningEntry with non-default token values`() {
+        val entry = RunningEntry(
+            issue = Issue("1", "A-1", "t", null, 5, "Todo", null, null, emptyList(), emptyList(), null, null, null),
+            threadId = "t1", turnId = "u1", startedAt = Instant.now(), lastCodexTimestamp = null,
+            inputTokens = 100, outputTokens = 50, totalTokens = 150,
+            lastReportedInput = 50, lastReportedOutput = 25, lastReportedTotal = 75,
+            turnCount = 3
+        )
+        assertThat(entry.inputTokens).isEqualTo(100)
+        assertThat(entry.outputTokens).isEqualTo(50)
+        assertThat(entry.totalTokens).isEqualTo(150)
+        assertThat(entry.lastReportedInput).isEqualTo(50)
+        assertThat(entry.lastReportedOutput).isEqualTo(25)
+        assertThat(entry.lastReportedTotal).isEqualTo(75)
+        assertThat(entry.turnCount).isEqualTo(3)
+    }
+
+    @Test
+    fun `RunningEntry copy preserves fields`() {
+        val entry = runningEntry("1", "A-1")
+        val copied = entry.copy(turnCount = 5)
+        assertThat(copied.turnCount).isEqualTo(5)
+        assertThat(copied.issue.id).isEqualTo("1")
     }
 
     private fun runningEntry(id: String, identifier: String) = RunningEntry(

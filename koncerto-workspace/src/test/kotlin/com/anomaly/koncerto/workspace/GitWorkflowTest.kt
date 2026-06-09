@@ -157,4 +157,62 @@ class GitWorkflowTest {
         val workflow = GitWorkflow(config, noopLogger())
         assertThat(workflow.branchName("ABC-1")).isEqualTo("ABC-1")
     }
+
+    @Test
+    fun `commitPrefix returns fix when labels contain fix label`() {
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        repoDir.resolve("fix.txt").writeText("fix")
+        workflow.commitAndPush(repoDir, "ABC-1", "Fix bug", labels = listOf("fix"))
+        val log = runGit("log", "--oneline")
+        assertThat(log).contains("fix: ABC-1: Fix bug")
+    }
+
+    @Test
+    fun `commitPrefix returns feat when labels do not contain fix`() {
+        val config = GitConfig(enabled = true, autoCommit = true, autoPush = false)
+        val workflow = GitWorkflow(config, noopLogger())
+        repoDir.resolve("feat.txt").writeText("feat")
+        workflow.commitAndPush(repoDir, "ABC-1", "Add feature", labels = listOf("enhancement"))
+        val log = runGit("log", "--oneline")
+        assertThat(log).contains("feat: ABC-1: Add feature")
+    }
+
+    @Test
+    fun `commitAndPush with autoPush creates commit and attempts push`() {
+        val config = GitConfig(enabled = true, autoCommit = true, autoPush = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(repoDir, "ABC-1")
+        repoDir.resolve("push-test.txt").writeText("push")
+        workflow.commitAndPush(repoDir, "ABC-1", "Test push", labels = emptyList())
+        val log = runGit("log", "--oneline")
+        assertThat(log).contains("feat: ABC-1: Test push")
+    }
+
+    @Test
+    fun `createPullRequest when enabled returns null when gh not available`() {
+        val config = GitConfig(enabled = true, createPr = true, prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        val url = workflow.createPullRequest(repoDir, "ABC-1", "title", "description")
+        // gh not installed in test env, so it should return null
+        assertThat(url).isNull()
+    }
+
+    @Test
+    fun `createPullRequest with null description`() {
+        val config = GitConfig(enabled = true, createPr = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        val url = workflow.createPullRequest(repoDir, "ABC-1", "title", null)
+        assertThat(url).isNull()
+    }
+
+    @Test
+    fun `not a git repo logs warning and skips in createBranch`() {
+        val nonRepoDir = Files.createTempDirectory("not-a-repo-")
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(nonRepoDir, "ABC-1")
+        val hasWarning = logs.any { it.contains("git_not_a_repository") }
+        assertThat(hasWarning).isEqualTo(true)
+    }
 }
