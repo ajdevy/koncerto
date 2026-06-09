@@ -15,6 +15,12 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
+data class ResolvedAgent(
+    val kind: String,
+    val command: String?,
+    val model: String?
+)
+
 class DispatchService(
     val projectConfig: ProjectConfig,
     val state: RuntimeState,
@@ -81,6 +87,42 @@ class DispatchService(
         }
     }
 
+    internal fun resolveAgent(issue: Issue, stageConfig: StageAgentConfig?): ResolvedAgent {
+        val stageProvider = stageConfig?.agent?.let { projectConfig.agent.agents[it] }
+
+        val baseKind = stageProvider?.kind
+            ?: stageConfig?.agentKind
+            ?: projectConfig.agent.kind
+        val baseCommand = stageProvider?.command
+            ?: stageConfig?.command
+            ?: projectConfig.agent.command
+        val baseModel = stageProvider?.model
+            ?: stageConfig?.model
+
+        val labelProvider = issue.labels.firstNotNullOfOrNull { label ->
+            val prefix = "agent:"
+            if (label.startsWith(prefix)) projectConfig.agent.agents[label.removePrefix(prefix)] else null
+        }
+
+        val finalKind = labelProvider?.kind ?: baseKind
+        val finalCommand = labelProvider?.command ?: baseCommand
+
+        val labelModel = issue.labels.firstNotNullOfOrNull { label ->
+            val prefix = "model:"
+            if (label.startsWith(prefix)) label.removePrefix(prefix) else null
+        }
+        val finalModel = labelModel ?: labelProvider?.model ?: baseModel
+
+        if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
+            logger.warn("agent_provider_not_found", mapOf(
+                "agent_name" to stageConfig.agent,
+                "project_slug" to projectSlug
+            ))
+        }
+
+        return ResolvedAgent(finalKind, finalCommand, finalModel)
+    }
+
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
         if (issue.id in state.claimed) return
         state.claimed.add(issue.id)
@@ -92,17 +134,15 @@ class DispatchService(
 
         val stageConfig = projectConfig.agent.stages[issue.normalizedState]
         val prompt = stageConfig?.prompt ?: workflowCache.current().promptTemplate
-        val agentKind = stageConfig?.agentKind ?: projectConfig.agent.kind
-        val command = stageConfig?.command ?: projectConfig.agent.command
-        val model = resolveModel(issue, stageConfig)
+        val resolved = resolveAgent(issue, stageConfig)
 
         val extra = mutableMapOf("prompt_source" to if (stageConfig?.prompt != null) "stage" else "global")
-        if (model != null) extra["model"] = model
+        if (resolved.model != null) extra["model"] = resolved.model
         if (attempt != null) extra["attempt"] = attempt.toString()
         logger.info("dispatch_config", extra)
 
         scope.launch {
-            val result = agentRunner.run(issue, attempt, prompt, agentKind, command)
+            val result = agentRunner.run(issue, attempt, prompt, resolved.kind, resolved.command)
             result.onSuccess {
                 state.claimed.remove(issue.id)
                 val entry = state.running[issue.id]
@@ -233,11 +273,4 @@ class DispatchService(
         state.blocked.add(issueId)
     }
 
-    private fun resolveModel(issue: Issue, stageConfig: StageAgentConfig?): String? {
-        val labelModel = issue.labels.firstNotNullOfOrNull { label ->
-            val prefix = "model:"
-            if (label.startsWith(prefix)) label.removePrefix(prefix) else null
-        }
-        return labelModel ?: stageConfig?.model
-    }
 }
