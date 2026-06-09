@@ -26,8 +26,9 @@ import kotlinx.coroutines.SupervisorJob
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Primary
 
-@Configuration
+@Configuration(proxyBeanMethods = false)
 class Beans {
 
     @Bean
@@ -48,6 +49,7 @@ class Beans {
     fun appScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Bean
+    @Primary
     fun serviceConfig(
         @Value("\${koncerto.workflow-path}") workflowPath: String,
         workflowCache: WorkflowCache,
@@ -67,12 +69,23 @@ class Beans {
     }
 
     @Bean
-    fun workspaceManagerFactory(
+    fun shellHookExecutor(config: ServiceConfig, logger: StructuredLogger) =
+        com.anomaly.koncerto.workspace.ShellHookExecutor(config.hooks.timeoutMs, logger)
+
+    @Bean
+    fun workspaceManager(
         config: ServiceConfig,
-        logger: StructuredLogger
+        shellHookExecutor: com.anomaly.koncerto.workspace.ShellHookExecutor
+    ): WorkspaceManager {
+        val firstProject = config.projects.values.first()
+        return WorkspaceManager(Paths.get(firstProject.workspace.root), shellHookExecutor)
+    }
+
+    @Bean
+    fun workspaceManagerFactory(
+        shellHookExecutor: com.anomaly.koncerto.workspace.ShellHookExecutor
     ): (ProjectConfig) -> WorkspaceManager = { pc ->
-        val executor = com.anomaly.koncerto.workspace.ShellHookExecutor(config.hooks.timeoutMs, logger)
-        WorkspaceManager(Paths.get(pc.workspace.root), executor)
+        WorkspaceManager(Paths.get(pc.workspace.root), shellHookExecutor)
     }
 
     @Bean

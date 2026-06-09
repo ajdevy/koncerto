@@ -18,10 +18,11 @@ import org.springframework.web.bind.annotation.RestController
 import org.springframework.http.codec.ServerSentEvent
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import org.springframework.beans.factory.annotation.Autowired
 
 @RestController
 @RequestMapping("/api/v1")
-class ApiV1Controller(
+class ApiV1Controller @Autowired constructor(
     private val config: ServiceConfig,
     private val orchestrator: Orchestrator,
     private val metricsRepository: MetricsRepository? = null

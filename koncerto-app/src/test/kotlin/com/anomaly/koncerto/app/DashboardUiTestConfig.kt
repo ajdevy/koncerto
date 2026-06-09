@@ -15,7 +15,7 @@ import java.nio.file.Paths
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 
-@TestConfiguration
+@TestConfiguration(proxyBeanMethods = false)
 class DashboardUiTestConfig {
 
     @Bean
