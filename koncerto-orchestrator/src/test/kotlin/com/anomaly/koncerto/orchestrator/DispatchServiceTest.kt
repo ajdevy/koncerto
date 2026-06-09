@@ -8,6 +8,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.AgentProjectConfig
+import com.anomaly.koncerto.core.config.AgentProviderConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.TrackerConfig
@@ -536,6 +537,149 @@ class DispatchServiceTest {
         return Pair(svc, state)
     }
 
+    @Test
+    fun `resolveAgent returns provider kind and model from named agent on stage`() {
+        val (svc, _) = createServiceWithState(config(
+            agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = "fast"
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress")
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("claude-sonnet-4")
+    }
+
+    @Test
+    fun `resolveAgent falls back to agentKind when no agents map`() {
+        val (svc, _) = createServiceWithState(config(
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = "codex", command = null, onCompleteState = null,
+                agent = null
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress")
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `resolveAgent uses project default when no stage config`() {
+        val (svc, _) = createServiceWithState(config())
+        val issue = issue("1", "T-1", "In Progress")
+        val resolved = svc.resolveAgent(issue, null)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `resolveAgent label agent colon fast overrides provider`() {
+        val (svc, _) = createServiceWithState(config(
+            agents = mapOf(
+                "fast" to AgentProviderConfig("codex", model = "claude-sonnet-4"),
+                "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
+            ),
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = "slow"
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:fast"))
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("claude-sonnet-4")
+    }
+
+    @Test
+    fun `resolveAgent label model colon gpt4o overrides stage model`() {
+        val (svc, _) = createServiceWithState(config(
+            agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = "fast"
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress", labels = listOf("model:gpt-4o"))
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("gpt-4o")
+    }
+
+    @Test
+    fun `resolveAgent combines agent and model labels`() {
+        val (svc, _) = createServiceWithState(config(
+            agents = mapOf(
+                "fast" to AgentProviderConfig("codex"),
+                "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
+            ),
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = "slow"
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:fast", "model:gpt-4o"))
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("gpt-4o")
+    }
+
+    @Test
+    fun `resolveAgent handles non-existent provider label gracefully`() {
+        val (svc, _) = createServiceWithState(config(
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = null
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:nonexistent"))
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `resolveAgent backward compat with agentKind and model labels`() {
+        val (svc, _) = createServiceWithState(config(
+            stages = mapOf("in progress" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = "codex", command = null, onCompleteState = null,
+                agent = null
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress", labels = listOf("model:claude-3"))
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("claude-3")
+    }
+
+    @Test
+    fun `resolveAgent uses project default kind when no stage config uses no agent`() {
+        val (svc, _) = createServiceWithState(config(
+            stages = mapOf("unknown" to StageAgentConfig(
+                prompt = "test", model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null,
+                agent = null
+            ))
+        ))
+        val issue = issue("1", "T-1", "In Progress")
+        val stage = svc.projectConfig.agent.stages["unknown"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
     companion object {
         fun issue(
             id: String, identifier: String, state: String,
@@ -548,7 +692,10 @@ class DispatchServiceTest {
             createdAt = null, updatedAt = null
         )
 
-        fun config(stages: Map<String, StageAgentConfig> = emptyMap()) = ProjectConfig(
+        fun config(
+            stages: Map<String, StageAgentConfig> = emptyMap(),
+            agents: Map<String, AgentProviderConfig> = emptyMap()
+        ) = ProjectConfig(
             tracker = TrackerConfig(
                 kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
                 requiredLabels = emptyList(),
@@ -561,7 +708,8 @@ class DispatchServiceTest {
                 maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
                 maxConcurrentAgentsByState = emptyMap(),
                 turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-                stages = stages
+                stages = stages,
+                agents = agents
             )
         )
 
