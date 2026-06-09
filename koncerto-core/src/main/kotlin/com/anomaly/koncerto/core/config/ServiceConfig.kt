@@ -73,6 +73,9 @@ data class ServiceConfig(
             }
             val endpoint = (map?.get("endpoint") as? String) ?: "https://api.linear.app/graphql"
             val apiKey = resolveEnvRef(map?.get("api_key") as? String) ?: ""
+            if (apiKey.isBlank()) {
+                throw IllegalStateException("tracker.api_key is required")
+            }
             val projectSlug = map?.get("project_slug") as? String ?: ""
             val requiredLabels = (map?.get("required_labels") as? List<*>)
                 ?.filterIsInstance<String>()

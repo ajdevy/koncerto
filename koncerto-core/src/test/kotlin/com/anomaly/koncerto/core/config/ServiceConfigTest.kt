@@ -123,6 +123,40 @@ class ServiceConfigTest {
     }
 
     @Test
+    fun `tracker api_key is required`() {
+        val result = ServiceConfig.fromMapOrError(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val ex = result.exceptionOrNull()
+        assertThat(ex).isNotNull()
+        assertThat(ex!!.message ?: "").contains("api_key")
+    }
+
+    @Test
+    fun `tracker api_key rejects empty string`() {
+        val result = ServiceConfig.fromMapOrError(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val ex = result.exceptionOrNull()
+        assertThat(ex).isNotNull()
+        assertThat(ex!!.message ?: "").contains("api_key")
+    }
+
+    @Test
     fun `linear api_key resolved from env var`() {
         try {
             System.setProperty("LINEAR_API_KEY_FOR_TEST", "secret")
