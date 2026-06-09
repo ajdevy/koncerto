@@ -9,7 +9,8 @@ data class ServiceConfig(
     val pollIntervalMs: Long = 30000,
     val projects: Map<String, ProjectConfig> = emptyMap(),
     val hooks: HooksConfig = HooksConfig(null, null, null, null, 60000),
-    val gitConfig: GitConfig = GitConfig()
+    val gitConfig: GitConfig = GitConfig(),
+    val deprecationWarnings: List<String> = emptyList()
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
 
@@ -26,7 +27,7 @@ data class ServiceConfig(
             map: Map<String, Any?>,
             workflowFileDir: String
         ): Result<ServiceConfig, IllegalStateException> = runCatchingResult {
-            val pollIntervalMs = parsePollIntervalMs(map)
+            val (pollIntervalMs, deprecations) = parsePollIntervalMs(map)
             val hooks = parseHooksConfig(map["hooks"] as? Map<*, *>)
             val git = parseGitConfig(map["git"] as? Map<*, *>)
             val projects = parseProjects(map["projects"] as? Map<*, *>, workflowFileDir)
@@ -35,13 +36,22 @@ data class ServiceConfig(
                 pollIntervalMs = pollIntervalMs,
                 projects = projects,
                 hooks = hooks,
-                gitConfig = git
+                gitConfig = git,
+                deprecationWarnings = deprecations
             )
         }
 
-        private fun parsePollIntervalMs(map: Map<String, Any?>): Long {
-            val raw = map["poll_interval_ms"] ?: (map["polling"] as? Map<*, *>)?.get("interval_ms")
-            return (raw as? Number)?.toLong() ?: 30_000L
+        private fun parsePollIntervalMs(map: Map<String, Any?>): Pair<Long, List<String>> {
+            val legacy = (map["polling"] as? Map<*, *>)?.get("interval_ms")
+            val modern = map["poll_interval_ms"]
+            return if (legacy != null && modern == null) {
+                val ms = (legacy as? Number)?.toLong() ?: 30_000L
+                ms to listOf("polling.interval_ms is deprecated; use poll_interval_ms at the top level")
+            } else {
+                val raw = modern ?: legacy
+                val ms = (raw as? Number)?.toLong() ?: 30_000L
+                ms to emptyList()
+            }
         }
 
         private fun parseProjects(

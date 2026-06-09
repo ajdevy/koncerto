@@ -1,9 +1,9 @@
 # Product Requirements Document: Koncerto
 
-**Version:** 1.0  
-**Date:** 2026-06-08  
+**Version:** 1.1  
+**Date:** 2026-06-09  
 **PM:** Sarah the PM  
-**Status:** Approved  
+**Status:** Updated (v1.1: advanced orchestration features)  
 
 ---
 
@@ -88,14 +88,24 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | FR-18 | Track token usage | P1 | Count input/output tokens per attempt |
 | FR-19 | Per-state concurrency limits | P1 | Different limits for different states |
 
-### 5.5 Dashboard & API
+### 5.5 Dependency & Blocking
 
 | ID | Requirement | Priority | Acceptance Criteria |
 |----|-------------|----------|---------------------|
-| FR-20 | JSON API for state | P1 | GET /api/v1/state returns snapshot |
-| FR-21 | HTML dashboard | P2 | Live-refreshing table at / |
-| FR-22 | Manual refresh | P1 | POST /api/v1/refresh triggers poll |
-| FR-23 | Query issue status | P1 | GET /api/v1/{identifier} returns details |
+| FR-23 | Build dependency graph from blockers | P1 | Graph built from candidate issues' blockedBy |
+| FR-24 | Compute dispatch frontier | P1 | Frontier contains only unblocked issues |
+| FR-25 | Respect external blockers | P1 | Blockers absent from candidates treated as resolved |
+| FR-26 | Configure routing rules for agent selection | P1 | Rules match by label/state/priority |
+| FR-27 | Create follow-up issues on completion | P2 | Issue created via Linear API with rendered template |
+
+### 5.6 Dashboard & API
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-28 | JSON API for state | P1 | GET /api/v1/state returns snapshot |
+| FR-29 | HTML dashboard | P2 | Live-refreshing table at / |
+| FR-30 | Manual refresh | P1 | POST /api/v1/refresh triggers poll |
+| FR-31 | Query issue status | P1 | GET /api/v1/{identifier} returns details |
 
 ## 6. Non-Functional Requirements
 
@@ -434,12 +444,130 @@ Software teams using Linear for issue tracking and AI agents for code generation
   - bootJar task works
   - Executable JAR produced
 
+### Epic 10: Blocker State Tracking & Parallel Execution Groups (13 points)
+
+#### Story 10.1: Blocker State Tracking
+- **As a** developer
+- **I want** the orchestrator to track which issues are blocked and auto-unblock when blockers resolve
+- **So that** the dispatch system always has an accurate picture of available work
+- **Acceptance Criteria:**
+  - reconcile() checks blocker states after state cleanup
+  - Issues whose blockers all reached terminal states are marked unblocked
+  - RuntimeState.blocked set is correctly maintained
+  - Unit tests cover all scenarios
+
+#### Story 10.2: Dependency Graph & Frontier
+- **As a** developer
+- **I want** a dependency graph with frontier computation
+- **So that** only unblocked issues are dispatched
+- **Acceptance Criteria:**
+  - DependencyGraph data class with nodes, edges, frontier
+  - Frontier contains issues with no unresolved blockers
+  - Blocker absent from candidates → treated as resolved
+  - Unlinked blocker → treated as resolved
+  - Unit tests for chain, diamond, all-blocked graphs
+
+#### Story 10.3: Block-Aware Dispatch
+- **As a** developer
+- **I want** fetchAndDispatch() to use the dependency frontier
+- **So that** the system dispatches all available unblocked issues
+- **Acceptance Criteria:**
+  - fetchAndDispatch() builds DependencyGraph from candidates
+  - Dispatches from frontier instead of filtered list
+  - Respects concurrency limits
+  - Blocked issues tracked in state.blocked for dashboard
+
+#### Story 10.4: Dashboard Blocker Visibility
+- **As an** operator
+- **I want** to see blocked issues and their blockers in the dashboard
+- **So that** I can understand why work is not progressing
+- **Acceptance Criteria:**
+  - API exposes blocked state and blocker identifiers
+  - Dashboard shows blocked status per issue
+
+### Epic 11: Agent Specialization Routing (8 points)
+
+#### Story 11.1: Routing Rule Config
+- **As an** operator
+- **I want** to configure routing rules mapping issues to agents
+- **So that** different issue types use appropriate agent configs
+- **Acceptance Criteria:**
+  - RoutingRule data class with label, state, priority conditions
+  - routingRules field in AgentProjectConfig
+  - YAML parsing with priority sort
+  - Unit tests
+
+#### Story 11.2: Routing Rule Evaluation
+- **As a** developer
+- **I want** resolveAgent() to evaluate routing rules
+- **So that** rules take effect before default resolution
+- **Acceptance Criteria:**
+  - evaluateRoutingRules() method in DispatchService
+  - First matching rule wins
+  - Fall through to existing logic if no match
+  - Unit tests for all conditions
+
+#### Story 11.3: Routing Integration
+- **As a** developer
+- **I want** routing rules integrated with stage configs and label overrides
+- **So that** the resolution chain is predictable
+- **Acceptance Criteria:**
+  - Resolution order: stage > label > routing > default
+  - Missing useAgent key → warn log, fallback
+  - Unit tests for priority chain
+
+### Epic 12: Workflow Chaining (10 points)
+
+#### Story 12.1: FollowUp Config
+- **As an** operator
+- **I want** to configure follow-up issue creation when issues complete
+- **So that** downstream work is created automatically
+- **Acceptance Criteria:**
+  - FollowUpConfig data class with titleTemplate, state, labels, linkType
+  - followUp field on StageAgentConfig
+  - YAML parsing with validation
+  - Unit tests
+
+#### Story 12.2: Create Issue & Link API
+- **As a** developer
+- **I want** LinearClient to support creating issues and linking them
+- **So that** workflow chaining can create follow-up issues
+- **Acceptance Criteria:**
+  - linear.createIssue() returns Issue?
+  - linear.createLink() returns Boolean
+  - GraphQL mutations for issueCreate and issueRelationCreate
+  - Handle API errors gracefully
+
+#### Story 12.3: Template Rendering
+- **As a** developer
+- **I want** follow-up templates rendered with issue data
+- **So that** follow-ups are contextual
+- **Acceptance Criteria:**
+  - FollowUpRenderer supports {{ issue.title }}, {{ issue.identifier }}, {{ now }}, etc.
+  - Unknown variables left as-is
+  - Unit tests for all variables
+
+#### Story 12.4: Chain Execution
+- **As a** developer
+- **I want** transitionOnComplete() to create follow-ups when configured
+- **So that** the chain is automated end-to-end
+- **Acceptance Criteria:**
+  - Creates follow-up issue on onCompleteState transition
+  - Renders templates with issue data
+  - Creates link between source and follow-up
+  - Handles API failures gracefully
+  - Logs chain creation event
+
 ## 8. Out of Scope
 
 - Web UI for configuration editing
 - Multi-project support in single instance
 - Agent-to-agent communication
 - Persistent audit logging
+- Visual dependency graph in dashboard
+- Event-driven blocker tracking (poll-time only)
+- Cross-project dependency resolution
+- Automated PR creation via workflow chaining
 
 ## 9. Open Questions
 
@@ -449,6 +577,8 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | Should we support custom agent commands? | Yes, via codex.command / opencode.command | 2026-06-08 |
 | What are the differences in JSON-RPC protocol between Codex and opencode? | Research needed | TBD |
 | How should users configure which agent to use per workflow? | agent.kind field in workflow | TBD |
+| Should we support explicit batch labels? | Post-v1 (auto-frontier covers this) | 2026-06-09 |
+| Should workflow chaining support sub-task templates? | Post-v1 (simple follow-up first) | 2026-06-09 |
 
 ## 10. Appendix
 

@@ -50,7 +50,8 @@ class Beans {
     @Bean
     fun serviceConfig(
         @Value("\${koncerto.workflow-path}") workflowPath: String,
-        workflowCache: WorkflowCache
+        workflowCache: WorkflowCache,
+        logger: StructuredLogger
     ): ServiceConfig {
         val path = Paths.get(workflowPath)
         val def = WorkflowLoader.loadFromPath(path)
@@ -58,7 +59,11 @@ class Beans {
         val workflowFileDir = path.parent?.toString() ?: "."
         @Suppress("UNCHECKED_CAST")
         val configMap = def.config
-        return ServiceConfig.fromMap(configMap, workflowFileDir)
+        val config = ServiceConfig.fromMap(configMap, workflowFileDir)
+        config.deprecationWarnings.forEach { msg ->
+            logger.warn("config_deprecation", mapOf("message" to msg))
+        }
+        return config
     }
 
     @Bean

@@ -1,9 +1,9 @@
 # Architecture Document: Koncerto
 
-**Version:** 1.0  
-**Date:** 2026-06-08  
+**Version:** 1.1  
+**Date:** 2026-06-09  
 **Architect:** Fred the Architect  
-**Status:** Approved  
+**Status:** Updated (v1.1: dependency tracking, routing, chaining)  
 
 ---
 
@@ -406,7 +406,83 @@ ENTRYPOINT ["java", "-jar", "/app/koncerto.jar"]
 | Agent Runtime | Single (Codex) vs Multiple | Multiple (Codex, opencode) | Flexibility, user choice, future-proofing |
 | Agent Abstraction | Direct implementation vs Interface | AgentRuntime interface | Extensibility, testability, clean architecture |
 
-## 13. Future Considerations
+## 13. Enhanced Dispatch Architecture (v1.1)
+
+### 13.1 Dependency Graph & Parallel Dispatch
+
+The orchestrator builds a dependency DAG from `blockedBy` relations and dispatches from the "frontier" — issues whose blockers are all resolved.
+
+```
+DependencyGraph
+├── nodes: Map<String, Issue>       // candidate issues by ID
+├── edges: Map<String, Set<String>> // issueId → blocker IDs (in candidate set, not terminal)
+└── frontier: List<Issue>           // sorted by priority, then identifier
+
+Frontier Rules:
+- Blocker absent from candidate set → resolved (external/completed)
+- Blocker id = null → resolved (unlinked reference)
+- Blocker in terminal state → resolved
+- All other blockers → unresolved
+```
+
+New file: `DependencyGraph.kt` in `koncerto-orchestrator`.
+
+### 13.2 Blocker State Tracking
+
+`reconcile()` monitors blocker states at each poll cycle:
+
+```
+1. Fetch states for all running issues (existing)
+2. Clean up completed/non-active issues (existing)
+3. Scan remaining running issues' blockedBy entries
+4. If all blockers in terminal state → log "unblocked"
+5. Next poll → frontier recomputed → unblocked issue becomes available
+```
+
+No new API calls needed — reuses existing `fetchIssueStatesByIds()` batch query.
+
+### 13.3 Agent Specialization Routing
+
+Configurable routing rules evaluated before agent resolution:
+
+```
+resolveAgent() priority chain:
+  1. Stage config agent provider (highest)
+  2. Label agent: prefix override
+  3. → Routing rules (new, step 0) ←
+  4. Default kind/command/model (lowest)
+```
+
+Rules sorted by `priority` descending. First match wins. Supported conditions: `ifLabel`, `ifLabelPrefix`, `ifState`, `ifPriority`, `ifPriorityMax`.
+
+New data class: `RoutingRule` in `koncerto-core/config/ProjectConfig.kt`.
+
+### 13.4 Workflow Chaining
+
+When an issue transitions to its `onCompleteState`, the orchestrator can create a follow-up issue:
+
+```
+transitionOnComplete()
+  ├── Update issue state to onCompleteState
+  ├── If stageConfig.followUp != null:
+  │   ├── Render titleTemplate (FollowUpRenderer)
+  │   ├── linear.createIssue(...)
+  │   ├── linear.createLink(sourceId, newId, linkType)
+  │   └── Log "follow_up_created"
+  └── Done
+```
+
+New files:
+- `FollowUpConfig` in `koncerto-core/config/ProjectConfig.kt`
+- `FollowUpRenderer` in `koncerto-orchestrator`
+
+New LinearClient methods:
+- `createIssue(projectSlug, title, state, description, labels): Issue?`
+- `createLink(sourceId, targetId, type): Boolean`
+
+---
+
+## 14. Future Considerations
 
 | Area | Options | Trade-offs |
 |------|---------|------------|

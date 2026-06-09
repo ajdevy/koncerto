@@ -616,12 +616,25 @@ class ServiceConfigTest {
     }
 
     @Test
-    fun `polling interval_ms legacy format`() {
+    fun `polling interval_ms legacy format emits deprecation warning`() {
         val config = ServiceConfig.fromMap(
             mapOf("polling" to mapOf("interval_ms" to 20000)),
             workflowFileDir = "/tmp"
         )
         assertThat(config.pollIntervalMs).isEqualTo(20000L)
+        assertThat(config.deprecationWarnings).contains(
+            "polling.interval_ms is deprecated; use poll_interval_ms at the top level"
+        )
+    }
+
+    @Test
+    fun `poll_interval_ms modern format has no deprecation warnings`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("poll_interval_ms" to 15000),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.pollIntervalMs).isEqualTo(15000L)
+        assertThat(config.deprecationWarnings).isEqualTo(emptyList())
     }
 
     @Test
