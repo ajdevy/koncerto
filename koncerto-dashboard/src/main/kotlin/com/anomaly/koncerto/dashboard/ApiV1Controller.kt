@@ -1,10 +1,9 @@
 package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
-import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.metrics.IssueMetrics
 import com.anomaly.koncerto.metrics.MetricsRepository
-import com.anomaly.koncerto.orchestrator.RuntimeState
+import com.anomaly.koncerto.orchestrator.Orchestrator
 import kotlinx.coroutines.reactive.asPublisher
 import kotlinx.serialization.Serializable
 import org.springframework.http.MediaType
@@ -24,15 +23,11 @@ import reactor.core.publisher.Mono
 @RequestMapping("/api/v1")
 class ApiV1Controller(
     private val config: ServiceConfig,
-    private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
+    private val orchestrator: Orchestrator,
     private val metricsRepository: MetricsRepository? = null
 ) {
-    private val primaryProjectConfig: com.anomaly.koncerto.core.config.ProjectConfig?
-        get() = config.projects.values.firstOrNull()
-    private val primaryProjectStages: Map<String, StageAgentConfig>
-        get() = primaryProjectConfig?.agent?.stages ?: emptyMap()
-    private val state: RuntimeState?
-        get() = runtimeStates.values.firstOrNull()
+    private val projects: Map<String, Orchestrator.ProjectRuntime>
+        get() = orchestrator.projects
 
     @Serializable
     data class StateSnapshot(
@@ -73,40 +68,45 @@ class ApiV1Controller(
     )
 
     @GetMapping("/running/{identifier}/output/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun streamOutput(@PathVariable identifier: String): Flux<ServerSentEvent<String>> {
-        val s = state ?: return Flux.empty()
-        val entry = s.running.values.firstOrNull { it.issue.identifier == identifier }
+    fun streamOutput(
+        @PathVariable identifier: String,
+        @RequestParam(defaultValue = "") project: String
+    ): Flux<ServerSentEvent<String>> {
+        val pr = if (project.isNotBlank()) projects[project] else null
+        val state = pr?.state ?: projects.values.firstOrNull()?.state ?: return Flux.empty()
+        val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
             ?: return Flux.empty()
-        val flow = s.outputFlow(entry.issue.id) ?: return Flux.empty()
+        val flow = state.outputFlow(entry.issue.id) ?: return Flux.empty()
         return Flux.from(flow.asPublisher())
             .map { line: String -> ServerSentEvent.builder(line).event("output").build() }
     }
 
     @GetMapping("/state", produces = ["application/json"])
     fun state(): Mono<StateSnapshot> {
-        val s = state ?: return Mono.just(StateSnapshot(emptyList(), emptyList(), Totals(0, 0, 0, 0), emptyMap()))
-        val allRunning = runtimeStates.values.flatMap { rs ->
-            rs.running.values.map {
+        val allRunning = projects.values.flatMap { pr ->
+            pr.state.running.values.map {
                 RunningRow(
                     it.issue.id, it.issue.identifier, it.threadId, it.turnId, it.turnCount,
                     it.inputTokens, it.outputTokens, it.totalTokens, it.issue.url
                 )
             }
         }
-        val allRetrying = runtimeStates.values.flatMap { rs ->
-            rs.retryAttempts.values.map {
+        val allRetrying = projects.values.flatMap { pr ->
+            pr.state.retryAttempts.values.map {
                 RetryingRow(it.issueId, it.identifier, it.attempt, it.dueAtMs, it.error)
             }
         }
-        val tokens = runtimeStates.values.fold(Totals(0, 0, 0, 0)) { acc, rs ->
+        val tokens = projects.values.fold(Totals(0, 0, 0, 0)) { acc, pr ->
+            val t = pr.state.tokenTotals
             Totals(
-                acc.inputTokens + rs.tokenTotals.inputTokens,
-                acc.outputTokens + rs.tokenTotals.outputTokens,
-                acc.totalTokens + rs.tokenTotals.totalTokens,
-                acc.secondsRunning + rs.tokenTotals.secondsRunning
+                acc.inputTokens + t.inputTokens,
+                acc.outputTokens + t.outputTokens,
+                acc.totalTokens + t.totalTokens,
+                acc.secondsRunning + t.secondsRunning
             )
         }
-        val limits = s.codexRateLimits.mapValues { it.value.toString() }
+        val firstState = projects.values.firstOrNull()?.state
+        val limits = firstState?.codexRateLimits?.mapValues { it.value.toString() } ?: emptyMap()
         return Mono.just(StateSnapshot(allRunning, allRetrying, tokens, limits))
     }
 
@@ -125,18 +125,17 @@ class ApiV1Controller(
 
     @GetMapping("/{identifier}", produces = ["application/json"])
     fun byIdentifier(@PathVariable identifier: String): Mono<IssueDetail> {
-        val s = state ?: return Mono.just(IssueDetail(error = "not_found"))
-        val entry = s.running.values.firstOrNull { it.issue.identifier == identifier }
+        val entry = projects.values.asSequence().flatMap { pr ->
+            pr.state.running.values.asSequence()
+        }.firstOrNull { it.issue.identifier == identifier }
         return if (entry != null) {
-            Mono.just(
-                IssueDetail(
-                    issueId = entry.issue.id,
-                    issueIdentifier = entry.issue.identifier,
-                    threadId = entry.threadId,
-                    turnId = entry.turnId,
-                    turnCount = entry.turnCount
-                )
-            )
+            Mono.just(IssueDetail(
+                issueId = entry.issue.id,
+                issueIdentifier = entry.issue.identifier,
+                threadId = entry.threadId,
+                turnId = entry.turnId,
+                turnCount = entry.turnCount
+            ))
         } else Mono.just(IssueDetail(error = "not_found"))
     }
 
@@ -159,20 +158,18 @@ class ApiV1Controller(
     )
 
     @GetMapping("/models", produces = ["application/json"])
-    fun models(): Mono<ModelsResponse> = Mono.just(
-        ModelsResponse(
-            agentKind = primaryProjectConfig?.agent?.kind ?: "opencode",
-            configuredStages = primaryProjectStages.map { (state, stage) ->
-                StageModel(
-                    stage = state,
-                    model = stage.model,
-                    agentKind = stage.agentKind,
-                    prompt = stage.prompt
-                )
+    fun models(@RequestParam(defaultValue = "") project: String): Mono<ModelsResponse> {
+        val pr = if (project.isNotBlank()) projects[project]
+                 else projects.values.firstOrNull()
+        val pc = pr?.config ?: return Mono.just(ModelsResponse("opencode", emptyList(), 0))
+        return Mono.just(ModelsResponse(
+            agentKind = pc.agent.kind,
+            configuredStages = pc.agent.stages.map { (stageState, stage) ->
+                StageModel(stage = stageState, model = stage.model, agentKind = stage.agentKind, prompt = stage.prompt)
             },
-            totalStages = primaryProjectStages.size
-        )
-    )
+            totalStages = pc.agent.stages.size
+        ))
+    }
 
     @GetMapping("/history", produces = ["application/json"])
     suspend fun history(
@@ -204,27 +201,27 @@ class ApiV1Controller(
 
     @PutMapping("/running/{identifier}/pause")
     fun pauseAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
-        val found = runtimeStates.values.any { state ->
-            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
-            id != null && state.pauseAgent(id)
+        val found = projects.values.any { pr ->
+            val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && pr.state.pauseAgent(id)
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
     }
 
     @PutMapping("/running/{identifier}/resume")
     fun resumeAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
-        val found = runtimeStates.values.any { state ->
-            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
-            id != null && state.resumeAgent(id)
+        val found = projects.values.any { pr ->
+            val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && pr.state.resumeAgent(id)
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
     }
 
     @PutMapping("/running/{identifier}/cancel")
     fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
-        val found = runtimeStates.values.any { state ->
-            val id = state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
-            id != null && state.cancelAgent(id)
+        val found = projects.values.any { pr ->
+            val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
+            id != null && pr.state.cancelAgent(id)
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
     }

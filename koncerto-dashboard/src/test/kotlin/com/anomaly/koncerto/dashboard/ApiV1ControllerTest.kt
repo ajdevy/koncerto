@@ -6,10 +6,9 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
+import com.anomaly.koncerto.agent.AgentEvent
+import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.AgentProjectConfig
-import com.anomaly.koncerto.metrics.IssueMetrics
-import com.anomaly.koncerto.metrics.MetricsRepository
-import com.anomaly.koncerto.metrics.TokenDaySummary
 import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
@@ -18,13 +17,66 @@ import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.TrackerConfig
 import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.result.EmptyResult
+import com.anomaly.koncerto.core.result.Result
+import com.anomaly.koncerto.linear.LinearClient
+import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.metrics.IssueMetrics
+import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.metrics.TokenDaySummary
+import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RetryEntry
 import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.orchestrator.TokenTotals
+import com.anomaly.koncerto.workspace.HookExecutor
+import com.anomaly.koncerto.workspace.WorkspaceManager
+import com.anomaly.koncerto.workflow.WorkflowCache
+import java.nio.file.Paths
 import java.time.Instant
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+
+private fun createOrchestrator(
+    config: ServiceConfig,
+    state: RuntimeState,
+    slug: String = "default"
+): Orchestrator {
+    val fakeClient = object : LinearClient {
+        override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+        override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+        override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+        override suspend fun fetchIssueById(issueId: String) = null
+        override suspend fun resolveStateId(projectSlug: String, stateName: String) = null
+        override suspend fun updateIssueState(issueId: String, stateId: String) {}
+        override suspend fun createComment(issueId: String, body: String) {}
+        override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+        override suspend fun fetchIssueCreator(issueId: String) = null
+    }
+    return Orchestrator(
+        config = config,
+        linearClientFactory = { fakeClient },
+        workspaceManagerFactory = { WorkspaceManager(Paths.get("/tmp"), HookExecutor { _, _ -> }) },
+        agentRunner = object : AgentRunner {
+            override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?
+            ): EmptyResult<IllegalStateException> = Result.Success(Unit)
+        },
+        workflowCache = WorkflowCache(),
+        logger = StructuredLogger(emptyList()),
+        scope = CoroutineScope(Job() + Dispatchers.Unconfined),
+        runtimeStates = mapOf(slug to state),
+        metricsRepository = null
+    )
+}
 
 class ApiV1ControllerTest {
 
@@ -67,7 +119,7 @@ class ApiV1ControllerTest {
         )
         state.retryAttempts["2"] = RetryEntry("2", "ABC-2", 1, System.currentTimeMillis() + 60000, "timeout")
 
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val snapshot = controller.state().block()
 
         assertThat(snapshot!!.running.size).isEqualTo(1)
@@ -93,7 +145,7 @@ class ApiV1ControllerTest {
             turnCount = 3
         )
 
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val result = controller.byIdentifier("ABC-1").block()
 
         assertThat(result!!.issueId).isEqualTo("1")
@@ -105,7 +157,7 @@ class ApiV1ControllerTest {
     @Test
     fun `byIdentifier returns not_found when missing`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val result = controller.byIdentifier("MISSING").block()
 
         assertThat(result!!.error).isEqualTo("not_found")
@@ -114,7 +166,7 @@ class ApiV1ControllerTest {
     @Test
     fun `refresh returns ok`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val result = controller.refresh().block()
 
         assertThat(result!!.status).isEqualTo("ok")
@@ -135,8 +187,8 @@ class ApiV1ControllerTest {
                 agent = pc.agent.copy(kind = "opencode", stages = stages)
             ))
         )
-        val controller = ApiV1Controller(config, mapOf("default" to state))
-        val result = controller.models().block()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state))
+        val result = controller.models("").block()
 
         assertThat(result!!.agentKind).isEqualTo("opencode")
         assertThat(result.totalStages).isEqualTo(1)
@@ -148,8 +200,8 @@ class ApiV1ControllerTest {
     @Test
     fun `models returns empty list when no stages configured`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
-        val result = controller.models().block()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val result = controller.models("").block()
 
         assertThat(result!!.totalStages).isEqualTo(0)
         assertThat(result.configuredStages).isEqualTo(emptyList())
@@ -159,7 +211,7 @@ class ApiV1ControllerTest {
     fun `history returns all metrics`() {
         val repo = FakeMetricsRepository()
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state), repo)
         val result = runBlocking { controller.history(null, 50) }
         assertThat(result.size).isEqualTo(2)
         assertThat(result[0].issueIdentifier).isEqualTo("ABC-1")
@@ -170,7 +222,7 @@ class ApiV1ControllerTest {
     fun `history filters by project`() {
         val repo = FakeMetricsRepository()
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state), repo)
         val result = runBlocking { controller.history("project-x", 50) }
         assertThat(result.size).isEqualTo(1)
         assertThat(result[0].projectSlug).isEqualTo("project-x")
@@ -180,7 +232,7 @@ class ApiV1ControllerTest {
     fun `history returns empty when no metrics`() {
         val repo = FakeMetricsRepository(emptyList())
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state), repo)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state), repo)
         val result = runBlocking { controller.history(null, 50) }
         assertThat(result).isEmpty()
     }
@@ -200,7 +252,7 @@ class ApiV1ControllerTest {
                 agent = pc.agent.copy(kind = "opencode", maxConcurrentAgents = 5, stages = stages)
             ))
         )
-        val controller = ApiV1Controller(config, mapOf("default" to state))
+        val controller = ApiV1Controller(config, createOrchestrator(config, state))
         val result = controller.stages()
         assertThat(result.size).isEqualTo(1)
         @Suppress("UNCHECKED_CAST")
@@ -223,7 +275,7 @@ class ApiV1ControllerTest {
             issue = issue, threadId = "t-1", turnId = "u-1",
             startedAt = Instant.now(), lastCodexTimestamp = null
         )
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.pauseAgent("ABC-1")
         assertThat(response.statusCodeValue).isEqualTo(200)
         assertThat(state.running["1"]?.paused).isEqualTo(true)
@@ -237,7 +289,7 @@ class ApiV1ControllerTest {
             issue = issue, threadId = "t-1", turnId = "u-1",
             startedAt = Instant.now(), lastCodexTimestamp = null, paused = true
         )
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.resumeAgent("ABC-1")
         assertThat(response.statusCodeValue).isEqualTo(200)
         assertThat(state.running["1"]?.paused).isEqualTo(false)
@@ -252,7 +304,7 @@ class ApiV1ControllerTest {
             startedAt = Instant.now(), lastCodexTimestamp = null
         )
         state.claimed.add("1")
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.cancelAgent("ABC-1")
         assertThat(response.statusCodeValue).isEqualTo(200)
         assertThat(state.running.containsKey("1")).isFalse()
@@ -262,7 +314,7 @@ class ApiV1ControllerTest {
     @Test
     fun `pauseAgent returns 404 for unknown identifier`() {
         val state = RuntimeState()
-        val controller = ApiV1Controller(minimalConfig(), mapOf("default" to state))
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.pauseAgent("UNKNOWN")
         assertThat(response.statusCodeValue).isEqualTo(404)
     }

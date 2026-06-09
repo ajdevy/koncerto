@@ -14,5 +14,10 @@ dependencies {
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)
     testImplementation(libs.spring.boot.starter.test)
+    testImplementation(project(":koncerto-agent"))
+    testImplementation(project(":koncerto-linear"))
+    testImplementation(project(":koncerto-logging"))
+    testImplementation(project(":koncerto-workspace"))
+    testImplementation(project(":koncerto-workflow"))
 }
 
