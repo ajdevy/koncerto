@@ -13,6 +13,7 @@ data class Issue(
     val url: String?,
     val labels: List<String>,
     val blockedBy: List<BlockerRef>,
+    val creator: UserRef? = null,
     val createdAt: Instant?,
     val updatedAt: Instant?
 ) {
@@ -23,4 +24,10 @@ data class BlockerRef(
     val id: String?,
     val identifier: String?,
     val state: String?
+)
+
+data class UserRef(
+    val id: String,
+    val displayName: String,
+    val isBot: Boolean
 )

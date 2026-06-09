@@ -60,6 +60,14 @@ class IssueTest {
         assertThat(issue.description).isNull()
     }
 
+    @Test
+    fun `UserRef has expected fields`() {
+        val ref = UserRef(id = "user-1", displayName = "Alice", isBot = false)
+        assertThat(ref.id).isEqualTo("user-1")
+        assertThat(ref.displayName).isEqualTo("Alice")
+        assertThat(ref.isBot).isEqualTo(false)
+    }
+
     private fun sampleIssue() = Issue(
         id = "1", identifier = "A-1", title = "t", description = "d",
         priority = 1, state = "Todo", branchName = null, url = null,
