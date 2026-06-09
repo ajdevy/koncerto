@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":koncerto-workspace"))
     implementation(project(":koncerto-agent"))
     implementation(project(":koncerto-linear"))
+    implementation(project(":koncerto-metrics"))
     implementation(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.junit5.jupiter)

@@ -5,6 +5,7 @@ import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
+import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -22,7 +23,8 @@ class Orchestrator(
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
-    private val runtimeStates: Map<String, RuntimeState> = emptyMap()
+    private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
+    private val metricsRepository: MetricsRepository? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -44,7 +46,8 @@ class Orchestrator(
         slug: String
     ): DispatchService = DispatchService(
         projectConfig, state, linear, agentRunner, workflowCache, logger, slug, workspaces,
-        issueProjectMap = issueProjectMap
+        issueProjectMap = issueProjectMap,
+        metricsRepository = metricsRepository
     )
 
     fun start(scope: CoroutineScope) {

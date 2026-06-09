@@ -6,6 +6,7 @@ import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
@@ -24,7 +25,8 @@ class DispatchService(
     private val projectSlug: String,
     private val workspaces: WorkspaceManager? = null,
     private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs),
-    private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap()
+    private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
+    private val metricsRepository: MetricsRepository? = null
 ) {
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         val candidates = try {
@@ -103,6 +105,16 @@ class DispatchService(
             val result = agentRunner.run(issue, attempt, prompt, agentKind, command)
             result.onSuccess {
                 state.claimed.remove(issue.id)
+                val entry = state.running[issue.id]
+                metricsRepository?.updateAfterRun(
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    projectSlug = projectSlug,
+                    result = "success",
+                    inputTokens = entry?.inputTokens ?: 0,
+                    outputTokens = entry?.outputTokens ?: 0,
+                    totalTokens = entry?.totalTokens ?: 0
+                )
                 val clarificationContent = readClarification(issue.identifier)
                 if (clarificationContent != null) {
                     handleClarification(issue.id, clarificationContent)
@@ -115,6 +127,15 @@ class DispatchService(
                     transitionOnComplete(issue, stageConfig)
                 }
             }.onFailure { err ->
+                metricsRepository?.updateAfterRun(
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    projectSlug = projectSlug,
+                    result = "failure",
+                    inputTokens = 0,
+                    outputTokens = 0,
+                    totalTokens = 0
+                )
                 scheduleRetry(issue, err.message ?: "unknown")
             }
         }

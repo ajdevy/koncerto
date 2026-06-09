@@ -9,6 +9,7 @@ include(
     "koncerto-agent",
     "koncerto-orchestrator",
     "koncerto-dashboard",
+    "koncerto-metrics",
     "koncerto-app",
     "koncerto-e2e"
 )

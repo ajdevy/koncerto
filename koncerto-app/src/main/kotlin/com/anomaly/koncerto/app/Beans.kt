@@ -12,6 +12,8 @@ import com.anomaly.koncerto.logging.FileSink
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StderrSink
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.metrics.SqliteMetricsRepository
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.workspace.GitWorkflow
@@ -112,6 +114,13 @@ class Beans {
     )
 
     @Bean
+    fun metricsRepository(@Value("\${koncerto.db.path:${'$'}{user.home}/.koncerto/metrics.db}") dbPath: String): MetricsRepository {
+        val dir = java.nio.file.Paths.get(dbPath).parent
+        if (dir != null) java.nio.file.Files.createDirectories(dir)
+        return SqliteMetricsRepository(dbPath)
+    }
+
+    @Bean
     fun runtimeStates(
         config: ServiceConfig
     ): Map<String, RuntimeState> = config.projects.mapValues { (_, projectConfig) ->
@@ -130,8 +139,9 @@ class Beans {
         cache: WorkflowCache,
         logger: StructuredLogger,
         scope: CoroutineScope,
-        runtimeStates: Map<String, RuntimeState>
+        runtimeStates: Map<String, RuntimeState>,
+        metricsRepository: MetricsRepository
     ): Orchestrator = Orchestrator(
-        config, linear, workspaces, runner, cache, logger, runtimeStates
+        config, linear, workspaces, runner, cache, logger, runtimeStates, metricsRepository
     )
 }

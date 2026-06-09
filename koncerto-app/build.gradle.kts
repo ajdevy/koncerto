@@ -13,6 +13,7 @@ dependencies {
     implementation(project(":koncerto-agent"))
     implementation(project(":koncerto-linear"))
     implementation(project(":koncerto-orchestrator"))
+    implementation(project(":koncerto-metrics"))
     implementation(project(":koncerto-dashboard"))
 
     implementation(libs.spring.boot.starter.webflux)
