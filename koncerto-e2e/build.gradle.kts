@@ -29,6 +29,11 @@ tasks.register<Test>("e2eTest") {
         systemProperty("koncerto.e2e.opencode", e2eOpencode.get())
     }
     inputs.property("koncerto.e2e.opencode", e2eOpencode.orElse("false"))
+    val e2eCodex = providers.systemProperty("koncerto.e2e.codex")
+    if (e2eCodex.isPresent) {
+        systemProperty("koncerto.e2e.codex", e2eCodex.get())
+    }
+    inputs.property("koncerto.e2e.codex", e2eCodex.orElse("false"))
     group = "verification"
-    description = "Runs end-to-end tests (requires opencode CLI)"
+    description = "Runs end-to-end tests (requires opencode and/or codex CLI)"
 }
