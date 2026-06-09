@@ -18,40 +18,54 @@ import kotlinx.coroutines.launch
 
 class Orchestrator(
     private val config: ServiceConfig,
-    private val linear: LinearClient,
-    private val workspaces: WorkspaceManager,
+    private val linearClientFactory: (ProjectConfig) -> LinearClient,
+    private val workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager,
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
+    private val scope: CoroutineScope,
     private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
     private val metricsRepository: MetricsRepository? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
-    internal val dispatchServices: Map<String, DispatchService> =
-        config.projects.mapValues { (slug, projectConfig) ->
-            val state = runtimeStates[slug] ?: RuntimeState().also {
-                it.pollIntervalMs = config.pollIntervalMs
-                it.maxConcurrentAgents = projectConfig.agent.maxConcurrentAgents
-            }
-            createDispatchService(projectConfig, state, slug)
-        }
-
-    private var loopJob: Job? = null
-    internal var scope: CoroutineScope? = null
-
-    internal fun createDispatchService(
-        projectConfig: ProjectConfig,
-        state: RuntimeState,
-        slug: String
-    ): DispatchService = DispatchService(
-        projectConfig, state, linear, agentRunner, workflowCache, logger, slug, workspaces,
-        issueProjectMap = issueProjectMap,
-        metricsRepository = metricsRepository
+    data class ProjectRuntime(
+        val config: ProjectConfig,
+        val linear: LinearClient,
+        val workspaces: WorkspaceManager,
+        val state: RuntimeState,
+        val dispatch: DispatchService
     )
 
-    fun start(scope: CoroutineScope) {
-        this.scope = scope
+    val projects: Map<String, ProjectRuntime>
+
+    init {
+        projects = config.projects.mapValues { (slug, pc) ->
+            val state = runtimeStates[slug] ?: RuntimeState().also {
+                it.pollIntervalMs = config.pollIntervalMs
+                it.maxConcurrentAgents = pc.agent.maxConcurrentAgents
+            }
+            val linear = linearClientFactory(pc)
+            val ws = workspaceManagerFactory(pc)
+            val dispatch = DispatchService(
+                projectConfig = pc,
+                state = state,
+                linear = linear,
+                agentRunner = agentRunner,
+                workflowCache = workflowCache,
+                logger = logger,
+                projectSlug = slug,
+                workspaces = ws,
+                issueProjectMap = issueProjectMap,
+                metricsRepository = metricsRepository
+            )
+            ProjectRuntime(pc, linear, ws, state, dispatch)
+        }
+    }
+
+    private var loopJob: Job? = null
+
+    fun start() {
         loopJob = scope.launch {
             launch {
                 agentRunner.events().collect { ev ->
@@ -71,32 +85,27 @@ class Orchestrator(
     }
 
     private suspend fun tick() {
-        for ((slug, projectConfig) in config.projects) {
-            val ds = dispatchServices[slug]
-            if (ds == null) {
-                logger.warn("tick_no_dispatch_service", mapOf("project_slug" to slug))
-                continue
-            }
-            val state = ds.state
+        for ((slug, pr) in projects) {
             try {
-                reconcile(state, projectConfig)
-                runPreflight(projectConfig)
-                ds.dispatchDueRetries(scope!!)
-                ds.fetchAndDispatch(scope!!)
+                reconcile(pr)
+                runPreflight(pr)
+                pr.dispatch.dispatchDueRetries(scope)
+                pr.dispatch.fetchAndDispatch(scope)
             } catch (e: Exception) {
                 logger.failure("tick_failed", mapOf("project" to slug), e)
             }
         }
     }
 
-    internal suspend fun reconcile(state: RuntimeState, projectConfig: ProjectConfig) {
+    internal suspend fun reconcile(pr: ProjectRuntime) {
+        val state = pr.state
         if (state.running.isEmpty()) return
         val ids = state.running.keys.toList()
         try {
-            val states = linear.fetchIssueStatesByIds(ids)
+            val states = pr.linear.fetchIssueStatesByIds(ids)
             for ((id, trackerState) in states) {
                 val entry = state.running[id] ?: continue
-                if (projectConfig.tracker.terminalStates.any { it.equals(trackerState, ignoreCase = true) }) {
+                if (pr.config.tracker.terminalStates.any { it.equals(trackerState, ignoreCase = true) }) {
                     logger.info(
                         "stop_terminal",
                         mapOf("issue_id" to id, "issue_identifier" to entry.issue.identifier),
@@ -105,11 +114,8 @@ class Orchestrator(
                     state.running.remove(id)
                     state.claimed.remove(id)
                     state.removeOutput(id)
-                    try {
-                        workspaces.removeWorkspace(entry.issue.identifier)
-                    } catch (_: Exception) {
-                    }
-                } else if (projectConfig.tracker.activeStates.any { it.equals(trackerState, ignoreCase = true) }) {
+                    try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
+                } else if (pr.config.tracker.activeStates.any { it.equals(trackerState, ignoreCase = true) }) {
                 } else {
                     logger.info(
                         "stop_non_active",
@@ -126,10 +132,10 @@ class Orchestrator(
         }
     }
 
-    private fun runPreflight(projectConfig: ProjectConfig) {
-        val cmd = projectConfig.agent.command ?: projectConfig.agent.kind
-        if (projectConfig.tracker.kind.isNullOrBlank() || projectConfig.tracker.apiKey.isNullOrBlank()
-            || projectConfig.tracker.projectSlug.isNullOrBlank() || cmd.isBlank()
+    private fun runPreflight(pr: ProjectRuntime) {
+        val cmd = pr.config.agent.command ?: pr.config.agent.kind
+        if (pr.config.tracker.kind.isNullOrBlank() || pr.config.tracker.apiKey.isNullOrBlank()
+            || pr.config.tracker.projectSlug.isNullOrBlank() || cmd.isBlank()
         ) {
             logger.warn("preflight_invalid", emptyMap())
         }
@@ -139,8 +145,8 @@ class Orchestrator(
         when (event) {
             is AgentEvent.TurnCompleted -> {
                 event.usage?.let { u ->
-                    val state = dispatchServices.values.firstOrNull { ds ->
-                        ds.state.running.values.any { it.threadId == event.threadId }
+                    val state = projects.values.firstOrNull { pr ->
+                        pr.state.running.values.any { it.threadId == event.threadId }
                     }?.state
                     if (state == null) {
                         logger.warn(
