@@ -52,7 +52,8 @@ data class AgentProjectConfig(
     val heartbeatTimeoutMs: Long = 90_000L,
     val stages: Map<String, StageAgentConfig> = emptyMap(),
     val agents: Map<String, AgentProviderConfig> = emptyMap(),
-    val routingRules: List<RoutingRule> = emptyList()
+    val routingRules: List<RoutingRule> = emptyList(),
+    val workplan: WorkplanConfig? = null
 )
 
 @kotlinx.serialization.Serializable

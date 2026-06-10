@@ -53,4 +53,32 @@ class SubtaskManifestTest {
         val jsonStr = json.encodeToString(manifest)
         assertThat(jsonStr).isNotNull()
     }
+
+    @Test
+    fun `workplan config defaults`() {
+        val config = WorkplanConfig()
+        assertThat(config.executionMode).isEqualTo(WorkplanConfig.ExecutionMode.SEQUENTIAL)
+        assertThat(config.maxParallelSubagents).isEqualTo(3)
+    }
+
+    @Test
+    fun `workplan config deserialization`() {
+        val parsed = WorkplanConfig(
+            executionMode = WorkplanConfig.ExecutionMode.PARALLEL,
+            maxParallelSubagents = 5
+        )
+        assertThat(parsed.executionMode).isEqualTo(WorkplanConfig.ExecutionMode.PARALLEL)
+        assertThat(parsed.maxParallelSubagents).isEqualTo(5)
+    }
+
+    @Test
+    fun `workplan config defaults in AgentProjectConfig`() {
+        val agentConfig = AgentProjectConfig(
+            kind = "opencode",
+            stages = emptyMap(),
+            agents = emptyMap(),
+            routingRules = emptyList()
+        )
+        assertThat(agentConfig.workplan).isEqualTo(null)
+    }
 }
