@@ -653,6 +653,9 @@ class OrchestratorTest {
         val cache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val linear = FakeLinearClient(
             listOf(
+                sampleIssue("b1", "B-1", "Todo").copy(
+                    blockedBy = listOf(BlockerRef(id = "b1", identifier = "B-1", state = "Todo"))
+                ),
                 sampleIssue("1", "A-1", "Todo").copy(
                     blockedBy = listOf(BlockerRef(id = "b1", identifier = "B-1", state = "In Progress"))
                 ),
@@ -714,6 +717,9 @@ class OrchestratorTest {
         val cache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val linear = FakeLinearClient(
             listOf(
+                sampleIssue("b1", "B-1", "Todo").copy(
+                    blockedBy = listOf(BlockerRef(id = "b1", identifier = "B-1", state = "Todo"))
+                ),
                 sampleIssue("1", "A-1", "Todo").copy(
                     blockedBy = listOf(BlockerRef(id = "b1", identifier = "B-1", state = null))
                 )

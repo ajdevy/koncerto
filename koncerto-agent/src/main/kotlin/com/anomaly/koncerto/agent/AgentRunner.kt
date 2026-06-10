@@ -9,8 +9,8 @@ import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.Workspace
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.PromptRenderer
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -102,7 +102,7 @@ class DefaultAgentRunner(
                             delay(1000)
                             val elapsed = System.currentTimeMillis() - lastOutputMs.get()
                             if (elapsed > effectiveStallTimeout) {
-                                throw CancellationException(
+                                throw IllegalStateException(
                                     "Agent stalled (no output for ${elapsed}ms)"
                                 )
                             }
@@ -128,12 +128,27 @@ class DefaultAgentRunner(
                         }
                     )
 
+                    val turnDone = CompletableDeferred<Unit>()
+                    val eventWatcher = launch {
+                        runtime.events().collect { event ->
+                            when (event) {
+                                is AgentEvent.TurnCompleted, is AgentEvent.TurnFailed -> {
+                                    turnDone.complete(Unit)
+                                }
+                                else -> {}
+                            }
+                        }
+                    }
+
+                    turnDone.await()
+                    eventWatcher.cancel()
+
                     runtime.stop()
                     outputJob.cancel()
                     stallJob.cancel()
                 }
             }
-        } catch (e: CancellationException) {
+        } catch (e: Exception) {
             runtime.stop()
             val reason = e.message ?: "agent_timeout"
             gitWorkflow?.let { gw ->
