@@ -27,6 +27,9 @@ data class DependencyGraph(
             }
             val frontier = candidates
                 .filter { issue ->
+                    terminalStates.none { it.equals(issue.state, ignoreCase = true) }
+                }
+                .filter { issue ->
                     val issueBlockers = edges[issue.id] ?: emptySet()
                     issueBlockers.isEmpty()
                 }
