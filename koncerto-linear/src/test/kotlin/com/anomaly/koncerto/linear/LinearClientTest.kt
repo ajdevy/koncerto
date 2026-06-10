@@ -3,6 +3,7 @@ package com.anomaly.koncerto.linear
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
@@ -1698,6 +1699,135 @@ class LinearClientTest {
             val creator = sut.fetchIssueCreator("issue-unknown")
 
             assertThat(creator).isNull()
+        }
+    }
+
+    // ── DefaultLinearClient createIssue ──────────────────────────
+
+    @Nested
+    inner class DefaultLinearClientCreateIssueTests {
+
+        private fun createClient(
+            responses: MutableList<JsonObject> = mutableListOf(),
+            error: LinearError? = null
+        ) = DefaultLinearClient(
+            graphql = FakeGraphqlClient(responses, error),
+            projectSlug = "test-project"
+        )
+
+        @Test
+        fun `createIssue returns issue on success`() = runTest {
+            val responses = mutableListOf(
+                buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("id", JsonPrimitive("team-1"))
+                            })
+                        })
+                    })
+                },
+                buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                },
+                buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issueCreate", buildJsonObject {
+                            put("success", JsonPrimitive(true))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("new-1"))
+                                put("identifier", JsonPrimitive("ENG-100"))
+                                put("title", JsonPrimitive("Test Issue"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                            })
+                        })
+                    })
+                }
+            )
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNotNull()
+            assertThat(result!!.title).isEqualTo("Test Issue")
+            assertThat(result.identifier).isEqualTo("ENG-100")
+        }
+
+        @Test
+        fun `createIssue returns null on API error`() = runTest {
+            val client = createClient(error = LinearError.UnknownPayload())
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `createIssue fails when team not resolved`() = runTest {
+            val responses = mutableListOf(buildJsonObject {
+                put("data", buildJsonObject {})
+            })
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNull()
+        }
+    }
+
+    // ── DefaultLinearClient createLink ───────────────────────────
+
+    @Nested
+    inner class DefaultLinearClientCreateLinkTests {
+
+        @Test
+        fun `createLink returns true on success`() = runTest {
+            val responses = mutableListOf(buildJsonObject {
+                put("data", buildJsonObject {
+                    put("issueRelationCreate", buildJsonObject {
+                        put("success", JsonPrimitive(true))
+                    })
+                })
+            })
+            val fake = FakeGraphqlClient(responses = responses)
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.createLink("src-1", "tgt-1", "blocks")
+            assertThat(result).isTrue()
+        }
+
+        @Test
+        fun `createLink returns false on API error`() = runTest {
+            val fake = FakeGraphqlClient(error = LinearError.UnknownPayload())
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.createLink("src-1", "tgt-1", "blocks")
+            assertThat(result).isFalse()
+        }
+
+        @Test
+        fun `createLink sends correct mutation`() = runTest {
+            val responses = mutableListOf(buildJsonObject {
+                put("data", buildJsonObject {
+                    put("issueRelationCreate", buildJsonObject {
+                        put("success", JsonPrimitive(true))
+                    })
+                })
+            })
+            val fake = FakeGraphqlClient(responses = responses)
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.createLink("src-1", "tgt-1", "blocks")
+            assertThat(fake.calls.size).isEqualTo(1)
+            val (query, vars) = fake.calls[0]
+            assertThat(query).contains("RelationCreate")
+            assertThat(vars["issueId"]).isEqualTo(JsonPrimitive("src-1"))
+            assertThat(vars["relatedIssueId"]).isEqualTo(JsonPrimitive("tgt-1"))
+            assertThat(vars["type"]).isEqualTo(JsonPrimitive("blocks"))
         }
     }
 }

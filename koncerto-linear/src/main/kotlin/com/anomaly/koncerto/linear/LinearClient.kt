@@ -20,6 +20,18 @@ interface LinearClient {
     suspend fun createComment(issueId: String, body: String)
     suspend fun updateIssueAssignee(issueId: String, assigneeId: String)
     suspend fun fetchIssueCreator(issueId: String): UserRef?
+    suspend fun createIssue(
+        projectSlug: String,
+        title: String,
+        state: String,
+        description: String? = null,
+        labels: List<String> = emptyList()
+    ): Issue?
+    suspend fun createLink(
+        sourceIssueId: String,
+        targetIssueId: String,
+        type: String
+    ): Boolean
 }
 
 class DefaultLinearClient(
@@ -107,6 +119,29 @@ class DefaultLinearClient(
     internal val updateIssueAssigneeMutation = """
         mutation IssueAssigneeUpdate(${'$'}id: String!, ${'$'}assigneeId: String!) {
           issueUpdate(id: ${'$'}id, input: { assigneeId: ${'$'}assigneeId }) { success }
+        }
+    """.trimIndent()
+
+    internal val teamIdQuery = """
+        query TeamId(${'$'}projectSlug: String!) {
+          project(slugId: ${'$'}projectSlug) {
+            team { id }
+          }
+        }
+    """.trimIndent()
+
+    internal val createIssueMutation = """
+        mutation IssueCreate(${'$'}teamId: String!, ${'$'}title: String!, ${'$'}stateId: String, ${'$'}description: String) {
+          issueCreate(input: { teamId: ${'$'}teamId, title: ${'$'}title, stateId: ${'$'}stateId, description: ${'$'}description }) {
+            success
+            issue { id identifier title state { name } }
+          }
+        }
+    """.trimIndent()
+
+    internal val createLinkMutation = """
+        mutation RelationCreate(${'$'}issueId: String!, ${'$'}relatedIssueId: String!, ${'$'}type: String!) {
+          issueRelationCreate(issue: {id: ${'$'}issueId}, relatedIssueId: ${'$'}relatedIssueId, type: ${'$'}type) { success }
         }
     """.trimIndent()
 
@@ -217,5 +252,62 @@ class DefaultLinearClient(
     override suspend fun fetchIssueCreator(issueId: String): UserRef? {
         val issue = fetchIssueById(issueId)
         return issue?.creator
+    }
+
+    internal suspend fun resolveTeamId(projectSlug: String): String? {
+        val vars = buildJsonObject { put("projectSlug", projectSlug) }
+        val resp = graphql.execute(teamIdQuery, vars)
+        val project = (resp["data"] as? JsonObject)?.get("project") as? JsonObject ?: return null
+        val team = project["team"] as? JsonObject ?: return null
+        return (team["id"] as? JsonPrimitive)?.content
+    }
+
+    override suspend fun createIssue(
+        projectSlug: String,
+        title: String,
+        state: String,
+        description: String?,
+        labels: List<String>
+    ): Issue? {
+        return try {
+            val teamId = resolveTeamId(projectSlug) ?: return null
+            val stateId = resolveStateId(projectSlug, state)
+            val vars = buildJsonObject {
+                put("teamId", teamId)
+                put("title", title)
+                if (description != null) put("description", description)
+                if (stateId != null) put("stateId", stateId)
+            }
+            val resp = graphql.execute(createIssueMutation, vars)
+            parseCreatedIssue(resp)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    override suspend fun createLink(
+        sourceIssueId: String,
+        targetIssueId: String,
+        type: String
+    ): Boolean {
+        return try {
+            val vars = buildJsonObject {
+                put("issueId", sourceIssueId)
+                put("relatedIssueId", targetIssueId)
+                put("type", type)
+            }
+            val resp = graphql.execute(createLinkMutation, vars)
+            (resp["data"] as? JsonObject)?.get("issueRelationCreate") != null
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun parseCreatedIssue(response: JsonObject): Issue? {
+        val node = (response["data"] as? JsonObject)?.get("issueCreate") as? JsonObject ?: return null
+        val issue = node["issue"] as? JsonObject ?: return null
+        val success = (node["success"] as? JsonPrimitive)?.content?.toBoolean() ?: false
+        if (!success) return null
+        return IssueMapper.fromLinear(issue)
     }
 }
