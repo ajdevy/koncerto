@@ -3,6 +3,7 @@
 <head>
     <title>Koncerto Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
     <style>
         body { font-family: monospace; padding: 1rem; background: #111; color: #eee; }
         h1 { color: #6cf; }
@@ -23,6 +24,10 @@
         .concurrency-bar { margin: 0.5rem 0; }
         .concurrency-bar .label { display: inline-block; width: 150px; }
         .concurrency-bar .bar { display: inline-block; height: 1rem; background: #6cf; vertical-align: middle; border-radius: 2px; }
+        #dependency-network { width: 100%; height: 600px; border: 1px solid #444; background: #000; }
+        .legend { display: flex; gap: 1rem; margin: 0.5rem 0; flex-wrap: wrap; }
+        .legend-item { display: flex; align-items: center; gap: 0.3rem; }
+        .legend-color { width: 1rem; height: 1rem; border-radius: 50%; }
     </style>
 </head>
 <body>
@@ -33,6 +38,7 @@
         <a href="#history">History</a>
         <a href="#concurrency">Concurrency</a>
         <a href="#tokens">Token Usage</a>
+        <a href="#dependencies">Dependencies</a>
     </nav>
     <div class="totals">
         <strong>Tokens:</strong> <span id="totals">loading...</span>
@@ -67,6 +73,18 @@
     <section id="tokens">
         <h2>Token Usage</h2>
         <canvas id="token-chart" width="800" height="300"></canvas>
+    </section>
+
+    <section id="dependencies">
+        <h2>Dependency Graph</h2>
+        <div class="legend">
+            <div class="legend-item"><span class="legend-color" style="background:#888;"></span>Todo</div>
+            <div class="legend-item"><span class="legend-color" style="background:#6cf;"></span>In Progress</div>
+            <div class="legend-item"><span class="legend-color" style="background:#6fc;"></span>Done</div>
+            <div class="legend-item"><span class="legend-color" style="background:#f66;"></span>Blocked</div>
+            <div class="legend-item"><span class="legend-color" style="background:#fc6;"></span>Other</div>
+        </div>
+        <div id="dependency-network"></div>
     </section>
 
     <script>
@@ -209,11 +227,97 @@
             loadHistory(this.value);
         });
 
+        let dependencyNetwork = null;
+
+        function getNodeColor(state) {
+            const s = (state || '').toLowerCase();
+            if (s === 'todo' || s === 'backlog') return '#888';
+            if (s === 'in progress' || s === 'inprogress' || s === 'started') return '#6cf';
+            if (s === 'done' || s === 'closed' || s === 'completed') return '#6fc';
+            if (s === 'blocked') return '#f66';
+            return '#fc6';
+        }
+
+        async function loadDependencies() {
+            const data = await (await fetch('/api/v1/dependencies')).json();
+            const nodes = new vis.DataSet();
+            const edges = new vis.DataSet();
+
+            data.nodes.forEach(node => {
+                nodes.add({
+                    id: node.id,
+                    label: node.label,
+                    title: `${node.label}\nState: ${node.state}\nPriority: ${node.priority ?? 'N/A'}\nBlocked by: ${node.blockedBy.join(', ') || 'none'}`,
+                    color: {
+                        background: getNodeColor(node.state),
+                        border: '#fff',
+                        highlight: { background: '#fff', border: getNodeColor(node.state) }
+                    },
+                    font: { color: '#eee', size: 12 },
+                    shape: 'dot',
+                    size: 16
+                });
+            });
+
+            data.edges.forEach(edge => {
+                edges.add({
+                    from: edge.from,
+                    to: edge.to,
+                    arrows: { to: { enabled: true, scaleFactor: 0.8 } },
+                    color: { color: '#666', highlight: '#fff' },
+                    smooth: { type: 'curvedCW', roundness: 0.2 }
+                });
+            });
+
+            const container = document.getElementById('dependency-network');
+            const networkData = { nodes, edges };
+            const options = {
+                layout: {
+                    hierarchical: {
+                        direction: 'LR',
+                        sortMethod: 'directed',
+                        nodeSpacing: 150,
+                        treeSpacing: 200,
+                        levelSeparation: 100
+                    }
+                },
+                physics: {
+                    enabled: true,
+                    hierarchicalRepulsion: { nodeDistance: 120 },
+                    stabilization: { iterations: 200 }
+                },
+                interaction: {
+                    hover: true,
+                    tooltipDelay: 200,
+                    navigationButtons: true,
+                    keyboard: true
+                },
+                manipulation: { enabled: false }
+            };
+
+            if (dependencyNetwork) {
+                dependencyNetwork.destroy();
+            }
+            dependencyNetwork = new vis.Network(container, networkData, options);
+
+            dependencyNetwork.on('click', function(params) {
+                if (params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    const node = nodes.get(nodeId);
+                    if (node) {
+                        alert(`Issue: ${node.label}\nID: ${nodeId}\nState: ${data.nodes.find(n => n.id === nodeId)?.state}\nBlocked by: ${data.nodes.find(n => n.id === nodeId)?.blockedBy.join(', ') || 'none'}`);
+                    }
+                }
+            });
+        }
+
         refresh();
         loadHistory();
         loadStages();
         loadTokenChart();
+        loadDependencies();
         setInterval(refresh, 5000);
+        setInterval(loadDependencies, 30000);
     </script>
 </body>
 </html>

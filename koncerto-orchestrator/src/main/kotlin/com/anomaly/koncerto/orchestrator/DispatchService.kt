@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.orchestrator
 
+import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.TokenUsage
 import com.anomaly.koncerto.core.config.NotificationsConfig
@@ -20,6 +21,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
 
 data class ResolvedAgent(
     val kind: String,
@@ -30,7 +32,7 @@ data class ResolvedAgent(
 class DispatchService(
     val projectConfig: ProjectConfig,
     val state: RuntimeState,
-    private val linear: LinearClient,
+    val linear: LinearClient,
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
@@ -42,6 +44,9 @@ class DispatchService(
     val notifier: CompositeNotifier? = null,
     private val notificationsConfig: NotificationsConfig? = null
 ) {
+    val messageStore = AgentMessageStore(logger)
+
+    private val agentIdToIssueId = ConcurrentHashMap<String, String>()
     @Volatile
     var shutdownRequested = false
 
@@ -73,6 +78,10 @@ class DispatchService(
         }
         for (frontierId in graph.frontier.map { it.id }) {
             state.blocked.remove(frontierId)
+        }
+        val candidateIds = candidates.map { it.id }.toSet()
+        for (id in state.blocked.toTypedArray()) {
+            if (id !in candidateIds) state.blocked.remove(id)
         }
 
         for (issue in sorted) {
@@ -110,9 +119,6 @@ class DispatchService(
 
     private fun evaluateRoutingRules(issue: Issue): ResolvedAgent? {
         for (rule in projectConfig.agent.routingRules) {
-            val label = rule.ifLabel
-            val labelPrefix = rule.ifLabelPrefix
-            val state = rule.ifState
             val matchLabel = rule.ifLabel
             val matchLabelPrefix = rule.ifLabelPrefix
             val matchState = rule.ifState
@@ -411,4 +417,40 @@ class DispatchService(
         }
     }
 
+    fun registerAgent(agentId: String, issueId: String) {
+        agentIdToIssueId[agentId] = issueId
+        logger.debug("agent_registered", mapOf("agent_id" to agentId, "issue_id" to issueId))
+    }
+
+    fun unregisterAgent(agentId: String) {
+        agentIdToIssueId.remove(agentId)
+        messageStore.clearAgentMessages(agentId)
+        logger.debug("agent_unregistered", mapOf("agent_id" to agentId))
+    }
+
+    fun sendAgentMessage(fromAgentId: String, toAgentId: String, payload: String): String {
+        val messageId = messageStore.sendMessage(fromAgentId, toAgentId, payload)
+        logger.info("agent_message_routed", mapOf(
+            "message_id" to messageId,
+            "from" to fromAgentId,
+            "to" to toAgentId
+        ))
+        return messageId
+    }
+
+    fun getAgentMessages(agentId: String): List<AgentMessage> {
+        return messageStore.getUnacknowledgedMessages(agentId)
+    }
+
+    fun ackAgentMessage(messageId: String): Boolean {
+        return messageStore.ackMessage(messageId)
+    }
+
+    fun agentMessageFlow(agentId: String): Flow<AgentMessage> {
+        return messageStore.waitForMessages(agentId)
+    }
+
+    fun resolveAgentIdToIssueId(agentId: String): String? {
+        return agentIdToIssueId[agentId]
+    }
 }

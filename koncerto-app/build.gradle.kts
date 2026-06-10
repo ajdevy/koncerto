@@ -25,8 +25,8 @@ dependencies {
     implementation(libs.snakeyaml)
     implementation("com.sun.mail:jakarta.mail:2.0.1")
 
-    implementation("io.micrometer:micrometer-registry-prometheus")
-    implementation("io.micrometer:micrometer-core")
+    implementation(libs.micrometer.registry.prometheus)
+    implementation(libs.micrometer.core)
 
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.junit5.jupiter)

@@ -130,7 +130,10 @@ class Orchestrator(
     internal suspend fun reconcile(slug: String, pr: ProjectRuntime) {
         val state = pr.state
         if (state.running.isEmpty()) return
-        val ids = state.running.keys.toList()
+        val runningIds = state.running.keys.toList()
+        val blockerIds = state.running.values
+            .flatMap { it.issue.blockedBy.mapNotNull { it.id } }
+        val ids = (runningIds + blockerIds).distinct()
         try {
             val states = pr.linear.fetchIssueStatesByIds(ids)
             for ((id, trackerState) in states) {
@@ -173,7 +176,7 @@ class Orchestrator(
                     val blockerId = blocker.id
                     if (blockerId == null) return@all true
                     val blockerState = states[blockerId]
-                    if (blockerState == null) return@all true
+                    if (blockerState == null) return@all false
                     pr.config.tracker.terminalStates.any { it.equals(blockerState, ignoreCase = true) }
                 }
                 if (allBlockersResolved) {

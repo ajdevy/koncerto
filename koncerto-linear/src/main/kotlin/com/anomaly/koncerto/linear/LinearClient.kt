@@ -2,6 +2,7 @@ package com.anomaly.koncerto.linear
 
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.core.model.UserRef
+import com.anomaly.koncerto.core.tracker.TrackerClient
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -10,29 +11,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
-interface LinearClient {
-    suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue>
-    suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue>
-    suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String>
-    suspend fun fetchIssueById(issueId: String): Issue?
-    suspend fun resolveStateId(projectSlug: String, stateName: String): String?
-    suspend fun updateIssueState(issueId: String, stateId: String)
-    suspend fun createComment(issueId: String, body: String)
-    suspend fun updateIssueAssignee(issueId: String, assigneeId: String)
-    suspend fun fetchIssueCreator(issueId: String): UserRef?
-    suspend fun createIssue(
-        projectSlug: String,
-        title: String,
-        state: String,
-        description: String? = null,
-        labels: List<String> = emptyList()
-    ): Issue?
-    suspend fun createLink(
-        sourceIssueId: String,
-        targetIssueId: String,
-        type: String
-    ): Boolean
-}
+typealias LinearClient = TrackerClient
 
 class DefaultLinearClient(
     private val graphql: LinearGraphQLClient,

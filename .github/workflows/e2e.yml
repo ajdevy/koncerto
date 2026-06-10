@@ -1,0 +1,213 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E Tests (opencode)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install opencode CLI
+        run: |
+          npm install -g @opencode-ai/cli@latest
+          opencode --version
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Run E2E tests (opencode)
+        run: ./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.opencode=true --no-daemon --info
+        env:
+          OPENCODE_COMMAND: opencode
+          OPENCODE_MODEL: opencode/deepseek-v4-flash-free
+
+      - name: Upload E2E test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-reports-opencode
+          path: |
+            koncerto-e2e/build/reports/tests/e2eTest/
+            koncerto-e2e/build/test-results/e2eTest/
+          retention-days: 7
+
+      - name: Publish E2E test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: koncerto-e2e/build/test-results/e2eTest/*.xml
+          check_name: E2E Tests (opencode)
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  e2e-codex:
+    name: E2E Tests (codex)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install codex CLI
+        run: |
+          npm install -g @openai/codex@latest
+          codex --version
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Run E2E tests (codex)
+        run: ./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.codex=true --no-daemon --info
+        env:
+          CODEX_COMMAND: codex
+          CODEX_MODEL: opencode/deepseek-v4-flash-free
+
+      - name: Upload E2E test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-reports-codex
+          path: |
+            koncerto-e2e/build/reports/tests/e2eTest/
+            koncerto-e2e/build/test-results/e2eTest/
+          retention-days: 7
+
+      - name: Publish E2E test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: koncerto-e2e/build/test-results/e2eTest/*.xml
+          check_name: E2E Tests (codex)
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  e2e-combined:
+    name: E2E Tests (combined)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: 21
+          distribution: temurin
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install opencode CLI
+        run: |
+          npm install -g @opencode-ai/cli@latest
+          opencode --version
+
+      - name: Install codex CLI
+        run: |
+          npm install -g @openai/codex@latest
+          codex --version
+
+      - name: Cache Gradle dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Run E2E tests (opencode)
+        run: ./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.opencode=true --no-daemon --info
+        env:
+          OPENCODE_COMMAND: opencode
+          OPENCODE_MODEL: opencode/deepseek-v4-flash-free
+
+      - name: Run E2E tests (codex)
+        run: ./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.codex=true --no-daemon --info
+        env:
+          CODEX_COMMAND: codex
+          CODEX_MODEL: opencode/deepseek-v4-flash-free
+
+      - name: Upload E2E test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-reports-combined
+          path: |
+            koncerto-e2e/build/reports/tests/e2eTest/
+            koncerto-e2e/build/test-results/e2eTest/
+          retention-days: 7
+
+      - name: Publish E2E test results
+        if: always()
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        with:
+          files: koncerto-e2e/build/test-results/e2eTest/*.xml
+          check_name: E2E Tests (combined)
+          github_token: ${{ secrets.GITHUB_TOKEN }}

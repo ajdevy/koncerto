@@ -87,6 +87,15 @@ sealed class AgentEvent {
         override val pid: Long?,
         override val timestamp: Instant = Instant.now()
     ) : AgentEvent()
+
+    data class AgentMessage(
+        val messageId: String,
+        val fromAgentId: String,
+        val toAgentId: String,
+        val payload: String,
+        override val pid: Long?,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
 }
 
 data class TokenUsage(

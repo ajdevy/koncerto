@@ -118,6 +118,13 @@ abstract class StdioAgentRuntime(
                     "unsupported_tool_call" -> events.trySend(
                         AgentEvent.UnsupportedToolCall("?", pid)
                     )
+                    "agent/message" -> {
+                        val p = n.params as? JsonObject
+                        val fromAgentId = p?.get("from_agent_id")?.toString()?.trim('"') ?: "unknown"
+                        val payload = p?.get("payload")?.toString()?.trim('"') ?: ""
+                        val messageId = p?.get("message_id")?.toString()?.trim('"') ?: UUID.randomUUID().toString()
+                        events.trySend(AgentEvent.AgentMessage(messageId, fromAgentId, "this-agent", payload, pid))
+                    }
                     else -> events.trySend(AgentEvent.Notification(n.method, n.params, pid))
                 }
             }
@@ -184,6 +191,22 @@ abstract class StdioAgentRuntime(
     override fun send(method: String, params: JsonElement?): String {
         val id = requestId.getAndIncrement().toString()
         val req = JsonRpcRequest(id = id, method = method, params = params)
+        synchronized(this) {
+            writer?.let {
+                it.write(JsonRpcFraming.encodeRequest(req))
+                it.flush()
+            }
+        }
+        return id
+    }
+
+    override fun sendMessage(toAgentId: String, payload: String): String {
+        val id = requestId.getAndIncrement().toString()
+        val params = kotlinx.serialization.json.buildJsonObject {
+            put("to_agent_id", kotlinx.serialization.json.JsonPrimitive(toAgentId))
+            put("payload", kotlinx.serialization.json.JsonPrimitive(payload))
+        }
+        val req = JsonRpcRequest(id = id, method = "agent/message", params = params)
         synchronized(this) {
             writer?.let {
                 it.write(JsonRpcFraming.encodeRequest(req))

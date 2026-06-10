@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonElement
 interface AgentRuntime {
     suspend fun start(): Boolean
     fun send(method: String, params: JsonElement? = null): String
+    fun sendMessage(toAgentId: String, payload: String): String
     fun events(): Flow<AgentEvent>
     val output: SharedFlow<String>
     fun isAlive(): Boolean = true

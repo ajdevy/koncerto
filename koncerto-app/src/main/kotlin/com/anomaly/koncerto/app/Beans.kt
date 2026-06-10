@@ -23,7 +23,9 @@ import com.anomaly.koncerto.notifications.channel.TelegramNotifier
 import com.anomaly.koncerto.notifications.channel.WebhookNotifier
 
 import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.metrics.PrometheusMetricsBinder
 import com.anomaly.koncerto.metrics.SqliteMetricsRepository
+import io.micrometer.core.instrument.binder.MeterBinder
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.workspace.GitWorkflow
@@ -56,6 +58,11 @@ class Beans {
 
     @Bean
     fun workflowCache(): WorkflowCache = WorkflowCache()
+
+    @Bean
+    fun configService(
+        @Value("\${koncerto.workflow-path}") workflowPath: String
+    ): ConfigService = ConfigService(workflowPath)
 
     @Bean
     fun appScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -187,6 +194,10 @@ class Beans {
         if (dir != null) java.nio.file.Files.createDirectories(dir)
         return SqliteMetricsRepository(dbPath)
     }
+
+    @Bean
+    fun prometheusMetricsBinder(metricsRepository: MetricsRepository): MeterBinder =
+        PrometheusMetricsBinder(metricsRepository as SqliteMetricsRepository)
 
     @Bean
     fun runtimeStates(

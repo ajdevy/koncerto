@@ -1,10 +1,13 @@
 package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.metrics.IssueMetrics
 import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.orchestrator.DependencyGraph
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import kotlinx.coroutines.reactive.asPublisher
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -12,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.PutMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
@@ -19,6 +23,7 @@ import org.springframework.http.codec.ServerSentEvent
 import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import org.springframework.beans.factory.annotation.Autowired
+import java.util.LinkedHashMap
 
 @RestController
 @RequestMapping("/api/v1")
@@ -198,6 +203,69 @@ class ApiV1Controller @Autowired constructor(
             },
             totalStages = pc.agent.stages.size
         ))
+    }
+
+    @Serializable
+    data class DependencyNode(
+        val id: String,
+        val label: String,
+        val state: String,
+        val priority: Int?,
+        val url: String?,
+        val blockedBy: List<String>
+    )
+
+    @Serializable
+    data class DependencyEdge(
+        val from: String,
+        val to: String
+    )
+
+    @Serializable
+    data class DependencyGraphResponse(
+        val nodes: List<DependencyNode>,
+        val edges: List<DependencyEdge>
+    )
+
+    @GetMapping("/dependencies", produces = ["application/json"])
+    fun dependencies(@RequestParam(defaultValue = "") project: String): Mono<DependencyGraphResponse> {
+        val pr = if (project.isNotBlank()) projects[project]
+                 else projects.values.firstOrNull()
+        val dispatch = pr?.dispatch ?: return Mono.just(DependencyGraphResponse(emptyList(), emptyList()))
+        val candidates = try {
+            runBlocking {
+                dispatch.linear.fetchCandidateIssues(
+                    pr.config.tracker.projectSlug,
+                    pr.config.tracker.activeStates
+                )
+            }
+        } catch (e: Exception) {
+            return Mono.just(DependencyGraphResponse(emptyList(), emptyList()))
+        }
+        val graph = DependencyGraph.build(candidates, pr.config.tracker.terminalStates)
+        
+        val nodes = graph.nodes.values.map { issue ->
+            val blockers = graph.edges[issue.id] ?: emptySet()
+            val blockedByIds = blockers.mapNotNull { graph.nodes[it]?.identifier }
+            DependencyNode(
+                id = issue.id,
+                label = issue.identifier,
+                state = issue.state,
+                priority = issue.priority,
+                url = issue.url,
+                blockedBy = blockedByIds
+            )
+        }.toList()
+        
+        val edges = graph.edges.flatMap { (fromId, toIds) ->
+            val fromNode = graph.nodes[fromId] ?: return@flatMap emptyList()
+            toIds.mapNotNull { toId ->
+                val toNode = graph.nodes[toId] ?: return@mapNotNull null
+                DependencyEdge(from = fromNode.identifier, to = toNode.identifier)
+            }
+        }.toList()
+
+        return Mono.just(DependencyGraphResponse(nodes, edges))
     }
 
     @GetMapping("/history", produces = ["application/json"])

@@ -9,6 +9,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation("org.xerial:sqlite-jdbc:3.46.1.3")
 
+    implementation(libs.micrometer.core)
+
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)

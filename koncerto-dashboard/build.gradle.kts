@@ -7,6 +7,7 @@ dependencies {
     implementation(project(":koncerto-core"))
     implementation(project(":koncerto-metrics"))
     implementation(project(":koncerto-orchestrator"))
+    implementation(project(":koncerto-workflow"))
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.kotlinx.coroutines.reactive)
     implementation(libs.kotlinx.serialization.json)
@@ -18,7 +19,6 @@ dependencies {
     testImplementation(project(":koncerto-linear"))
     testImplementation(project(":koncerto-logging"))
     testImplementation(project(":koncerto-workspace"))
-    testImplementation(project(":koncerto-workflow"))
     testImplementation(project(":koncerto-notifications"))
 }
 

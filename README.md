@@ -219,6 +219,74 @@ koncerto/
 # Report at: <module>/build/reports/jacoco/test/html/index.html
 ```
 
+## End-to-End Tests
+
+The `koncerto-e2e` module contains integration tests that verify the full orchestration flow using real AI agent CLIs (opencode and/or codex).
+
+### Prerequisites
+
+- **opencode CLI** (optional): `npm install -g @opencode-ai/cli`
+- **codex CLI** (optional): `npm install -g @openai/codex`
+
+At least one CLI must be installed and on your `PATH` for E2E tests to run.
+
+### Running E2E Tests Locally
+
+```bash
+# Run opencode E2E tests
+./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.opencode=true
+
+# Run codex E2E tests
+./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.codex=true
+
+# Run both (sequential)
+./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.opencode=true -Dkoncerto.e2e.codex=true
+```
+
+### Configuration via Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENCODE_COMMAND` | Path or command name for opencode CLI | `opencode` |
+| `OPENCODE_MODEL` | Model to use for opencode tests | `opencode/deepseek-v4-flash-free` |
+| `CODEX_COMMAND` | Path or command name for codex CLI | `codex` |
+| `CODEX_MODEL` | Model to use for codex tests | `opencode/deepseek-v4-flash-free` |
+
+Example with custom CLI paths:
+
+```bash
+OPENCODE_COMMAND=/usr/local/bin/opencode \
+CODEX_COMMAND=/usr/local/bin/codex \
+./gradlew :koncerto-e2e:e2eTest -Dkoncerto.e2e.opencode=true -Dkoncerto.e2e.codex=true
+```
+
+### Test Reports
+
+HTML reports are generated at:
+```
+koncerto-e2e/build/reports/tests/e2eTest/index.html
+```
+
+JUnit XML results are at:
+```
+koncerto-e2e/build/test-results/e2eTest/
+```
+
+### CI Pipeline
+
+E2E tests run automatically in GitHub Actions on:
+- Pull requests to `main`
+- Pushes to `main`
+- Nightly schedule (2 AM UTC)
+- Manual workflow dispatch
+
+Three workflow jobs execute:
+1. **e2e** — opencode tests (runs on PRs and pushes)
+2. **e2e-codex** — codex tests (runs on PRs and pushes)
+3. **e2e-combined** — both CLIs sequentially (runs nightly and on manual dispatch)
+
+Test results are published as GitHub Actions annotations and artifacts.
+
 ## Configuration Reference
 
 ### Notification Config
