@@ -24,6 +24,17 @@ data class TrackerConfig(
 data class WorkspaceConfig(val root: String)
 
 @kotlinx.serialization.Serializable
+data class RoutingRule(
+    val ifLabel: String? = null,
+    val ifLabelPrefix: String? = null,
+    val ifState: String? = null,
+    val ifPriority: Int? = null,
+    val ifPriorityMax: Int? = null,
+    val useAgent: String,
+    val priority: Int = 0
+)
+
+@kotlinx.serialization.Serializable
 data class AgentProjectConfig(
     val kind: String = "opencode",
     val command: String? = null,
@@ -35,5 +46,6 @@ data class AgentProjectConfig(
     val readTimeoutMs: Long = 5000,
     val stallTimeoutMs: Long = 300000,
     val stages: Map<String, StageAgentConfig> = emptyMap(),
-    val agents: Map<String, AgentProviderConfig> = emptyMap()
+    val agents: Map<String, AgentProviderConfig> = emptyMap(),
+    val routingRules: List<RoutingRule> = emptyList()
 )

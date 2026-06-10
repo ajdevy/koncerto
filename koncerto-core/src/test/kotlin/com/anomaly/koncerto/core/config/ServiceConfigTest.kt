@@ -760,4 +760,82 @@ class ServiceConfigTest {
         assertThat(config.project().agent.agents.size).isEqualTo(1)
         assertThat(config.project().agent.agents["valid"]?.kind).isEqualTo("opencode")
     }
+
+    @Test
+    fun `parseAgentConfig with routing rules`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "routing_rules" to listOf(
+                            mapOf(
+                                "if_label" to "frontend",
+                                "use_agent" to "frontend-agent",
+                                "priority" to 10
+                            ),
+                            mapOf(
+                                "if_label_prefix" to "backend:",
+                                "use_agent" to "backend-agent",
+                                "priority" to 5
+                            ),
+                            mapOf(
+                                "if_state" to "bug",
+                                "if_priority_max" to 2,
+                                "use_agent" to "frontend-agent",
+                                "priority" to 8
+                            )
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val rules = config.project().agent.routingRules
+        assertThat(rules.size).isEqualTo(3)
+        assertThat(rules[0].ifLabel).isEqualTo("frontend")
+        assertThat(rules[1].ifState).isEqualTo("bug")
+        assertThat(rules[1].ifPriorityMax).isEqualTo(2)
+        assertThat(rules[1].useAgent).isEqualTo("frontend-agent")
+        assertThat(rules[2].ifLabelPrefix).isEqualTo("backend:")
+    }
+
+    @Test
+    fun `parseAgentConfig routing rules sorted by priority descending`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "kind" to "opencode",
+                        "routing_rules" to listOf(
+                            mapOf("use_agent" to "a", "priority" to 1),
+                            mapOf("use_agent" to "b", "priority" to 10),
+                            mapOf("use_agent" to "c", "priority" to 5)
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.routingRules.map { it.useAgent }).isEqualTo(listOf("b", "c", "a"))
+    }
+
+    @Test
+    fun `parseAgentConfig empty routing rules defaults to empty list`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf("kind" to "opencode")
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.routingRules).isEqualTo(emptyList())
+    }
 }

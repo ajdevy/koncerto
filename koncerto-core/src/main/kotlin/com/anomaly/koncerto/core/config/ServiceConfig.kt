@@ -141,6 +141,7 @@ data class ServiceConfig(
             val stallTimeoutMs = (map?.get("stall_timeout_ms") as? Number)?.toLong() ?: 300_000L
             val stages = parseStages(map)
             val agents = parseAgents(map)
+            val routingRules = parseRoutingRules(map)
 
             return AgentProjectConfig(
                 kind = kind,
@@ -153,7 +154,8 @@ data class ServiceConfig(
                 readTimeoutMs = readTimeoutMs,
                 stallTimeoutMs = stallTimeoutMs,
                 stages = stages,
-                agents = agents
+                agents = agents,
+                routingRules = routingRules
             )
         }
 
@@ -172,6 +174,23 @@ data class ServiceConfig(
                     agent = stageMap["agent"] as? String
                 )
             }.toMap()
+        }
+
+        internal fun parseRoutingRules(agentMap: Map<*, *>?): List<RoutingRule> {
+            val raw = agentMap?.get("routing_rules") as? List<*> ?: return emptyList()
+            return raw.mapNotNull { item ->
+                val map = item as? Map<*, *> ?: return@mapNotNull null
+                val useAgent = (map["use_agent"] as? String) ?: return@mapNotNull null
+                RoutingRule(
+                    ifLabel = map["if_label"] as? String,
+                    ifLabelPrefix = map["if_label_prefix"] as? String,
+                    ifState = map["if_state"] as? String,
+                    ifPriority = (map["if_priority"] as? Number)?.toInt(),
+                    ifPriorityMax = (map["if_priority_max"] as? Number)?.toInt(),
+                    useAgent = useAgent,
+                    priority = (map["priority"] as? Number)?.toInt() ?: 0
+                )
+            }.sortedByDescending { it.priority }
         }
 
         internal fun parseAgents(agentMap: Map<*, *>?): Map<String, AgentProviderConfig> {
