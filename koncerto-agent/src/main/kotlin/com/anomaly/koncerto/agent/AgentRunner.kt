@@ -10,14 +10,18 @@ import com.anomaly.koncerto.workspace.Workspace
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.PromptRenderer
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicLong
 
 data class AttemptResult(
     val issue: Issue,
@@ -76,37 +80,76 @@ class DefaultAgentRunner(
         val runtime = factory.create(effectiveKind, command, workspace.path)
         if (!runtime.start()) throw IllegalStateException("startup_failed")
 
-        coroutineScope {
-            val outputJob: Job? = if (onAgentOutput != null) {
-                launch {
-                    runtime.output.collect { line ->
-                        onAgentOutput(issue.id, line)
+        val effectiveTurnTimeout = turnTimeoutMs ?: 3_600_000L
+        val effectiveStallTimeout = stallTimeoutMs ?: 300_000L
+
+        try {
+            withTimeout(effectiveTurnTimeout) {
+                coroutineScope {
+                    val lastOutputMs = AtomicLong(System.currentTimeMillis())
+
+                    val outputJob = launch {
+                        runtime.output.collect { line ->
+                            lastOutputMs.set(System.currentTimeMillis())
+                            if (onAgentOutput != null) {
+                                onAgentOutput(issue.id, line)
+                            }
+                        }
                     }
-                }
-            } else null
 
-            val rendered = PromptRenderer.render(
-                prompt, mapOf(
-                    "issue" to issue.toTemplateMap(),
-                    "attempt" to attempt
-                )
-            )
+                    val stallJob = launch {
+                        while (true) {
+                            delay(1000)
+                            val elapsed = System.currentTimeMillis() - lastOutputMs.get()
+                            if (elapsed > effectiveStallTimeout) {
+                                throw CancellationException(
+                                    "Agent stalled (no output for ${elapsed}ms)"
+                                )
+                            }
+                        }
+                    }
 
-            runtime.send("initialize", null)
-            runtime.send(
-                "thread/start", buildJsonObject {
-                    put("working_directory", workspace.path.toString())
-                }
-            )
-            runtime.send(
-                "turn/start", buildJsonObject {
-                    put("input", rendered)
-                }
-            )
+                    val rendered = PromptRenderer.render(
+                        prompt, mapOf(
+                            "issue" to issue.toTemplateMap(),
+                            "attempt" to attempt
+                        )
+                    )
 
+                    runtime.send("initialize", null)
+                    runtime.send(
+                        "thread/start", buildJsonObject {
+                            put("working_directory", workspace.path.toString())
+                        }
+                    )
+                    runtime.send(
+                        "turn/start", buildJsonObject {
+                            put("input", rendered)
+                        }
+                    )
+
+                    runtime.stop()
+                    outputJob.cancel()
+                    stallJob.cancel()
+                }
+            }
+        } catch (e: CancellationException) {
             runtime.stop()
-            outputJob?.cancel()
+            val reason = e.message ?: "agent_timeout"
+            gitWorkflow?.let { gw ->
+                try {
+                    gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
+                    logger.info("partial_work_committed", mapOf(
+                        "issue" to issue.identifier,
+                        "reason" to reason
+                    ))
+                } catch (_: Exception) {
+                    logger.warn("partial_commit_failed", mapOf("issue" to issue.identifier))
+                }
+            }
+            throw IllegalStateException(reason)
         }
+
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
 
         val clarificationPath = workspace.path.resolve(".koncerto").resolve("clarification.md")
