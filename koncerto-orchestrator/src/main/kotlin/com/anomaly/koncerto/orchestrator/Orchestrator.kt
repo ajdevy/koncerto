@@ -223,7 +223,9 @@ class Orchestrator(
                     )
                 }
             }
-            else -> {}
+            else -> {
+                logger.warn("unhandled_agent_event", mapOf("event" to event::class.simpleName))
+            }
         }
     }
 }

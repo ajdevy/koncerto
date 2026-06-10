@@ -87,14 +87,6 @@ sealed class AgentEvent {
         override val pid: Long?,
         override val timestamp: Instant = Instant.now()
     ) : AgentEvent()
-
-    data class ClarificationRequested(
-        val issueId: String,
-        val filePath: String,
-        val content: String,
-        override val pid: Long?,
-        override val timestamp: Instant = Instant.now()
-    ) : AgentEvent()
 }
 
 data class TokenUsage(

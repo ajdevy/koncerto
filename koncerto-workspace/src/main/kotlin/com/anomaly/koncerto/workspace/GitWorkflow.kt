@@ -67,8 +67,23 @@ class GitWorkflow(
     private fun runGhSafe(workspacePath: Path, vararg args: String): String? =
         runCmdSafe("gh", workspacePath, *args)
 
-    private fun commitPrefix(labels: List<String>): String =
-        if (labels.any { it.trim().lowercase() == "fix" }) "fix" else "feat"
+    private fun commitPrefix(labels: List<String>): String {
+        val label = labels.firstOrNull()?.trim()?.lowercase()
+        if (label == null) return "feat"
+        return when (label) {
+            "fix", "bug" -> "fix"
+            "docs", "documentation" -> "docs"
+            "refactor" -> "refactor"
+            "test", "testing" -> "test"
+            "chore" -> "chore"
+            "perf", "performance" -> "perf"
+            "style" -> "style"
+            "build" -> "build"
+            "ci" -> "ci"
+            "revert" -> "revert"
+            else -> "feat"
+        }
+    }
 
     private fun runCmdSafe(cmd: String, workspacePath: Path, vararg args: String): String? {
         return try {

@@ -19,10 +19,10 @@
 - **So that** I can monitor agent activity in real-time
 
 ### Acceptance Criteria
-- [ ] Serve HTML at root path "/"
-- [ ] Load dashboard.html from classpath
-- [ ] Return Mono<String> for reactive handling
-- [ ] Unit tests cover endpoint
+- [x] Serve HTML at root path "/"
+- [x] Load dashboard.html from classpath
+- [x] Return Mono<String> for reactive handling
+- [x] Unit tests cover endpoint
 
 ### Technical Notes
 - Use Spring WebFlux
@@ -48,13 +48,13 @@
 - **So that** I can build monitoring tools and integrations
 
 ### Acceptance Criteria
-- [ ] GET /api/v1/state returns state snapshot
-- [ ] StateSnapshot includes running, retrying, totals, rateLimits
-- [ ] RunningRow includes issue and token info
-- [ ] RetryingRow includes attempt and error info
-- [ ] Totals aggregates all token usage
-- [ ] Return JSON response
-- [ ] Unit tests cover endpoint
+- [x] GET /api/v1/state returns state snapshot
+- [x] StateSnapshot includes running, retrying, totals, rateLimits
+- [x] RunningRow includes issue and token info
+- [x] RetryingRow includes attempt and error info
+- [x] Totals aggregates all token usage
+- [x] Return JSON response
+- [x] Unit tests cover endpoint
 
 ### Technical Notes
 - Use Spring WebFlux
@@ -81,10 +81,10 @@
 - **So that** I can quickly check a specific issue's status
 
 ### Acceptance Criteria
-- [ ] GET /api/v1/{identifier} returns issue state
-- [ ] Return issueId, threadId, turnId, turnCount
-- [ ] Return error map if not found
-- [ ] Unit tests cover both cases
+- [x] GET /api/v1/{identifier} returns issue state
+- [x] Return issueId, threadId, turnId, turnCount
+- [x] Return error map if not found
+- [x] Unit tests cover both cases
 
 ### Technical Notes
 - Use PathVariable for identifier
@@ -111,8 +111,8 @@
 - **So that** I can force immediate reconciliation
 
 ### Acceptance Criteria
-- [ ] POST /api/v1/refresh returns ok status
-- [ ] Unit tests cover endpoint
+- [x] POST /api/v1/refresh returns ok status
+- [x] Unit tests cover endpoint
 
 ### Technical Notes
 - Use PostMapping
