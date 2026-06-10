@@ -8,7 +8,9 @@ import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
+import com.anomaly.koncerto.core.config.WorkplanConfig
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.metrics.MetricsRepository
@@ -42,7 +44,9 @@ class DispatchService(
     private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
     private val metricsRepository: MetricsRepository? = null,
     val notifier: CompositeNotifier? = null,
-    private val notificationsConfig: NotificationsConfig? = null
+    private val notificationsConfig: NotificationsConfig? = null,
+    private val subtaskOrchestrator: SubtaskOrchestrator? = null,
+    private val workplanParser: WorkplanParser? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -202,6 +206,35 @@ class DispatchService(
         return if (labelModel != null) result.copy(model = labelModel) else result
     }
 
+    private suspend fun handleNormalCompletion(
+        issue: Issue,
+        stageConfig: StageAgentConfig?,
+        entry: RunningEntry?
+    ) {
+        val clarificationContent = readClarification(issue.identifier)
+        if (clarificationContent != null) {
+            handleClarification(issue.id, clarificationContent)
+        } else {
+            state.completed.add(issue.id)
+            logger.info(
+                "dispatch_completed",
+                mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
+            )
+            transitionOnComplete(issue, stageConfig)
+            if (notificationsConfig?.onCompleted == true && notifier != null) {
+                notifier.send(NotificationEvent.AgentCompleted(
+                    projectSlug = projectSlug,
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    title = issue.title,
+                    tokenUsage = entry?.let {
+                        TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+                    }
+                ))
+            }
+        }
+    }
+
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
         if (issue.id in state.claimed) return
         state.claimed.add(issue.id)
@@ -238,28 +271,42 @@ class DispatchService(
                     outputTokens = entry?.outputTokens ?: 0,
                     totalTokens = entry?.totalTokens ?: 0
                 )
-                val clarificationContent = readClarification(issue.identifier)
-                if (clarificationContent != null) {
-                    handleClarification(issue.id, clarificationContent)
-                } else {
-                    state.completed.add(issue.id)
-                    logger.info(
-                        "dispatch_completed",
-                        mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
-                    )
-                    transitionOnComplete(issue, stageConfig)
-                    if (notificationsConfig?.onCompleted == true && notifier != null) {
-                        notifier.send(NotificationEvent.AgentCompleted(
-                            projectSlug = projectSlug,
-                            issueId = issue.id,
-                            issueIdentifier = issue.identifier,
-                            title = issue.title,
-                            tokenUsage = state.running[issue.id]?.let {
-                                TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+                val wpConfig = projectConfig.agent.workplan
+                if (wpConfig != null && subtaskOrchestrator != null && workplanParser != null) {
+                    val workspace = workspaces?.ensureWorkspace(issue.identifier)
+                    if (workspace != null) {
+                        when (val wpResult = workplanParser.parse(workspace.path)) {
+                            is Result.Success -> {
+                                logger.info(
+                                    "workplan_detected",
+                                    mapOf(
+                                        "issue_id" to issue.id,
+                                        "issue_identifier" to issue.identifier,
+                                        "subtask_count" to wpResult.value.subtasks.size.toString()
+                                    )
+                                )
+                                scope.launch {
+                                    subtaskOrchestrator!!.execute(
+                                        workspacePath = workspace.path,
+                                        manifest = wpResult.value,
+                                        config = wpConfig
+                                    ).collect { event ->
+                                        logger.info("subtask_event", mapOf(
+                                            "issue_id" to issue.id,
+                                            "event" to event::class.simpleName
+                                        ))
+                                    }
+                                }
+                                handleNormalCompletion(issue, stageConfig, entry)
+                                return@onSuccess
                             }
-                        ))
+                            is Result.Failure -> {
+                                // No workplan or invalid - continue with normal flow
+                            }
+                        }
                     }
                 }
+                handleNormalCompletion(issue, stageConfig, entry)
             }.onFailure { err ->
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
