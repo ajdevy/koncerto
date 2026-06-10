@@ -22,8 +22,15 @@ import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.flow.Flow
+
+private const val AGENT_LABEL_PREFIX = "agent:"
+private const val MODEL_LABEL_PREFIX = "model:"
+private const val DEFAULT_PRIORITY = Int.MAX_VALUE
+private val DEFAULT_CREATED_AT = Instant.MAX
 
 data class ResolvedAgent(
     val kind: String,
@@ -57,6 +64,7 @@ class DispatchService(
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         if (shutdownRequested) return
         val candidates = try {
+            scope.coroutineContext.ensureActive()
             linear.fetchCandidateIssues(projectSlug, projectConfig.tracker.activeStates)
         } catch (e: Exception) {
             logger.failure("fetch_candidates_failed", emptyMap(), e)
@@ -68,12 +76,13 @@ class DispatchService(
             .filter { matchesRequiredLabels(it) }
             .filter { !isBlockedForTodo(it) }
             .sortedWith(
-                compareBy<Issue>({ it.priority ?: Int.MAX_VALUE })
-                    .thenBy { it.createdAt ?: Instant.MAX }
+                compareBy<Issue>({ it.priority ?: DEFAULT_PRIORITY })
+                    .thenBy { it.createdAt ?: DEFAULT_CREATED_AT }
                     .thenBy { it.identifier }
             )
 
         for (candidate in candidates) {
+            scope.coroutineContext.ensureActive()
             if (candidate.id !in graph.frontier.map { it.id }
                 && !state.running.containsKey(candidate.id)
                 && candidate.id !in state.claimed) {
@@ -81,14 +90,17 @@ class DispatchService(
             }
         }
         for (frontierId in graph.frontier.map { it.id }) {
+            scope.coroutineContext.ensureActive()
             state.blocked.remove(frontierId)
         }
         val candidateIds = candidates.map { it.id }.toSet()
         for (id in state.blocked.toTypedArray()) {
+            scope.coroutineContext.ensureActive()
             if (id !in candidateIds) state.blocked.remove(id)
         }
 
         for (issue in sorted) {
+            scope.coroutineContext.ensureActive()
             if (state.availableSlots() <= 0) break
             val perStateLimit = projectConfig.agent.maxConcurrentAgentsByState[issue.normalizedState]
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
@@ -163,8 +175,7 @@ class DispatchService(
         val stageProvider = stageConfig?.agent?.let { projectConfig.agent.agents[it] }
 
         val labelProvider = issue.labels.firstNotNullOfOrNull { label ->
-            val prefix = "agent:"
-            if (label.startsWith(prefix)) projectConfig.agent.agents[label.removePrefix(prefix)] else null
+            if (label.startsWith(AGENT_LABEL_PREFIX)) projectConfig.agent.agents[label.removePrefix(AGENT_LABEL_PREFIX)] else null
         }
 
         val result = if (stageProvider != null || labelProvider != null) {
@@ -200,8 +211,7 @@ class DispatchService(
         }
 
         val labelModel = issue.labels.firstNotNullOfOrNull { label ->
-            val prefix = "model:"
-            if (label.startsWith(prefix)) label.removePrefix(prefix) else null
+            if (label.startsWith(MODEL_LABEL_PREFIX)) label.removePrefix(MODEL_LABEL_PREFIX) else null
         }
         return if (labelModel != null) result.copy(model = labelModel) else result
     }
@@ -236,9 +246,6 @@ class DispatchService(
     }
 
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
-        if (issue.id in state.claimed) return
-        state.claimed.add(issue.id)
-        issueProjectMap[issue.id] = projectSlug
         logger.info(
             "dispatch_start",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
@@ -254,6 +261,11 @@ class DispatchService(
         logger.info("dispatch_config", extra)
 
         scope.launch {
+            if (!state.claimed.add(issue.id)) return@launch
+            issueProjectMap[issue.id] = projectSlug
+
+            val entry = state.running[issue.id]
+
             val result = agentRunner.run(
                 issue, attempt, prompt, resolved.kind, resolved.command,
                 turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
@@ -261,7 +273,6 @@ class DispatchService(
             )
             result.onSuccess {
                 state.claimed.remove(issue.id)
-                val entry = state.running[issue.id]
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
@@ -271,41 +282,7 @@ class DispatchService(
                     outputTokens = entry?.outputTokens ?: 0,
                     totalTokens = entry?.totalTokens ?: 0
                 )
-                val wpConfig = projectConfig.agent.workplan
-                if (wpConfig != null && subtaskOrchestrator != null && workplanParser != null) {
-                    val workspace = workspaces?.ensureWorkspace(issue.identifier)
-                    if (workspace != null) {
-                        when (val wpResult = workplanParser.parse(workspace.path)) {
-                            is Result.Success -> {
-                                logger.info(
-                                    "workplan_detected",
-                                    mapOf(
-                                        "issue_id" to issue.id,
-                                        "issue_identifier" to issue.identifier,
-                                        "subtask_count" to wpResult.value.subtasks.size.toString()
-                                    )
-                                )
-                                scope.launch {
-                                    subtaskOrchestrator!!.execute(
-                                        workspacePath = workspace.path,
-                                        manifest = wpResult.value,
-                                        config = wpConfig
-                                    ).collect { event ->
-                                        logger.info("subtask_event", mapOf(
-                                            "issue_id" to issue.id,
-                                            "event" to event::class.simpleName
-                                        ))
-                                    }
-                                }
-                                handleNormalCompletion(issue, stageConfig, entry)
-                                return@onSuccess
-                            }
-                            is Result.Failure -> {
-                                // No workplan or invalid - continue with normal flow
-                            }
-                        }
-                    }
-                }
+                handleWorkplanIfPresent(issue, stageConfig, entry)
                 handleNormalCompletion(issue, stageConfig, entry)
             }.onFailure { err ->
                 metricsRepository?.updateAfterRun(
@@ -331,13 +308,64 @@ class DispatchService(
         }
     }
 
+    private suspend fun handleWorkplanIfPresent(
+        issue: Issue,
+        stageConfig: StageAgentConfig?,
+        entry: RunningEntry?
+    ) {
+        val wpConfig = projectConfig.agent.workplan
+        if (wpConfig == null || subtaskOrchestrator == null || workplanParser == null) return
+
+        val workspace = workspaces?.ensureWorkspace(issue.identifier) ?: return
+        when (val wpResult = workplanParser.parse(workspace.path)) {
+            is Result.Success -> {
+                logger.info(
+                    "workplan_detected",
+                    mapOf(
+                        "issue_id" to issue.id,
+                        "issue_identifier" to issue.identifier,
+                        "subtask_count" to wpResult.value.subtasks.size.toString()
+                    )
+                )
+                val orchestrator = subtaskOrchestrator ?: return
+                supervisorScope {
+                    orchestrator.execute(
+                        workspacePath = workspace.path,
+                        manifest = wpResult.value,
+                        config = wpConfig
+                    ).collect { event ->
+                        logger.info("subtask_event", mapOf(
+                            "issue_id" to issue.id,
+                            "event" to event::class.simpleName
+                        ))
+                    }
+                }
+            }
+            is Result.Failure -> {
+                logger.debug("workplan_parse_failed", mapOf(
+                    "issue_id" to issue.id as Any?,
+                    "error" to (wpResult.exceptionOrNull()?.message ?: "unknown") as Any?
+                ))
+            }
+        }
+    }
+
     suspend fun dispatchDueRetries(scope: CoroutineScope) {
         val now = System.currentTimeMillis()
-        val due = state.retryAttempts.filter { it.value.dueAtMs <= now }
-        for ((issueId, entry) in due) {
+        val due = mutableListOf<MutableMap.MutableEntry<String, RetryEntry>>()
+        for (entry in state.retryAttempts.entries) {
+            if (entry.value.dueAtMs <= now) {
+                due.add(entry)
+            }
+        }
+        for (entry in due) {
+            scope.coroutineContext.ensureActive()
+            val issueId = entry.key
+            val retryEntry = entry.value
             if (state.availableSlots() <= 0) break
             if (state.running.containsKey(issueId) || issueId in state.claimed) continue
             val issue = try {
+                scope.coroutineContext.ensureActive()
                 linear.fetchIssueById(issueId)
             } catch (_: Exception) {
                 null
@@ -349,7 +377,7 @@ class DispatchService(
             }
             state.retryAttempts.remove(issueId)
             state.running.remove(issueId)
-            dispatch(issue, scope, entry.attempt)
+            dispatch(issue, scope, retryEntry.attempt)
         }
     }
 
