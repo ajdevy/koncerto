@@ -171,7 +171,18 @@ data class ServiceConfig(
                     agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
                     command = stageMap["command"] as? String,
                     onCompleteState = stageMap["on_complete_state"] as? String,
-                    agent = stageMap["agent"] as? String
+                    agent = stageMap["agent"] as? String,
+                    followUp = (stageMap["follow_up"] as? Map<*, *>)?.let { f ->
+                        FollowUpConfig(
+                            titleTemplate = (f["title_template"] as? String) ?: return@let null,
+                            state = (f["state"] as? String) ?: return@let null,
+                            descriptionTemplate = f["description_template"] as? String,
+                            labels = (f["labels"] as? List<*>)?.filterIsInstance<String>() ?: emptyList(),
+                            linkType = (f["link_type"] as? String) ?: "blocks",
+                            assignee = f["assignee"] as? String,
+                            agent = f["agent"] as? String
+                        )
+                    }
                 )
             }.toMap()
         }
@@ -266,6 +277,17 @@ data class HooksConfig(
 )
 
 @kotlinx.serialization.Serializable
+data class FollowUpConfig(
+    val titleTemplate: String,
+    val state: String,
+    val descriptionTemplate: String? = null,
+    val labels: List<String> = emptyList(),
+    val linkType: String = "blocks",
+    val assignee: String? = null,
+    val agent: String? = null
+)
+
+@kotlinx.serialization.Serializable
 data class AgentProviderConfig(
     val kind: String,
     val command: String? = null,
@@ -281,7 +303,8 @@ data class StageAgentConfig(
     val agentKind: String?,
     val command: String?,
     val onCompleteState: String?,
-    val agent: String? = null
+    val agent: String? = null,
+    val followUp: FollowUpConfig? = null
 )
 
 data class GitConfig(

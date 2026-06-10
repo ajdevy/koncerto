@@ -838,4 +838,64 @@ class ServiceConfigTest {
         )
         assertThat(config.project().agent.routingRules).isEqualTo(emptyList())
     }
+
+    @Test
+    fun `parse stage with followUp config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "stages" to mapOf(
+                            "In Progress" to mapOf(
+                                "prompt" to "Do work",
+                                "on_complete_state" to "Done",
+                                "follow_up" to mapOf(
+                                    "title_template" to "PR Review: {{ issue.title }}",
+                                    "state" to "Todo",
+                                    "labels" to listOf("pr-review", "auto"),
+                                    "link_type" to "blocks",
+                                    "assignee" to "creator"
+                                )
+                            )
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val stage = config.project().agent.stages["in progress"]
+        assertThat(stage).isNotNull()
+        assertThat(stage!!.followUp).isNotNull()
+        assertThat(stage.followUp!!.titleTemplate).isEqualTo("PR Review: {{ issue.title }}")
+        assertThat(stage.followUp!!.state).isEqualTo("Todo")
+        assertThat(stage.followUp!!.labels).isEqualTo(listOf("pr-review", "auto"))
+        assertThat(stage.followUp!!.linkType).isEqualTo("blocks")
+        assertThat(stage.followUp!!.assignee).isEqualTo("creator")
+    }
+
+    @Test
+    fun `parse stage without followUp`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "stages" to mapOf(
+                            "In Progress" to mapOf(
+                                "prompt" to "Do work",
+                                "on_complete_state" to "Done"
+                            )
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val stage = config.project().agent.stages["in progress"]
+        assertThat(stage).isNotNull()
+        assertThat(stage!!.followUp).isNull()
+    }
 }
