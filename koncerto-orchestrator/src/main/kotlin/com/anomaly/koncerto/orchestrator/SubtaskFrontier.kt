@@ -27,7 +27,7 @@ class SubtaskFrontier {
         for (state in states) {
             for (dep in state.def.dependsOn) {
                 adjacency[dep]?.add(state.def.id)
-                inDegree[state.def.id] = (inDegree[state.def.id] ?: 1) + 1
+                inDegree[state.def.id] = (inDegree[state.def.id] ?: 0) + 1
             }
         }
 
@@ -41,7 +41,7 @@ class SubtaskFrontier {
             val id = queue.removeFirst()
             stateMap[id]?.let { result.add(it) }
             for (neighbor in adjacency[id].orEmpty()) {
-                inDegree[neighbor] = (inDegree[neighbor] ?: 1) - 1
+                inDegree[neighbor] = (inDegree[neighbor] ?: 0) - 1
                 if (inDegree[neighbor] == 0) queue.add(neighbor)
             }
         }

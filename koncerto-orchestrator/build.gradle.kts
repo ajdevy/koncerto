@@ -12,6 +12,7 @@ dependencies {
     implementation(project(":koncerto-metrics"))
     implementation(project(":koncerto-notifications"))
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)
