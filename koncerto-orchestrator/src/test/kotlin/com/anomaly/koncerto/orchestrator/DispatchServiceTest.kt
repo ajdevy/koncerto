@@ -10,6 +10,7 @@ import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.AgentProviderConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
+import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.TrackerConfig
 import com.anomaly.koncerto.core.config.WorkspaceConfig
@@ -187,6 +188,7 @@ class DispatchServiceTest {
         val svc = createService(
             runner = runner,
             candidates = listOf(
+                issue("b1", "B-1", "Todo", blockers = listOf(BlockerRef("b1", "B-1", "Todo"))),
                 issue("1", "A-1", "Todo", blockers = listOf(BlockerRef("b1", "B-1", "In Progress"))),
                 issue("2", "A-2", "Todo", blockers = emptyList())
             )
@@ -214,6 +216,7 @@ class DispatchServiceTest {
         val svc = createService(
             runner = runner,
             candidates = listOf(
+                issue("b1", "B-1", "Todo", blockers = listOf(BlockerRef("b1", "B-1", "Todo"))),
                 issue("1", "A-1", "Todo", blockers = listOf(BlockerRef("b1", "B-1", null)))
             )
         )
@@ -696,6 +699,43 @@ class DispatchServiceTest {
         assertThat(resolved.kind).isEqualTo("codex")
     }
 
+    @Test
+    fun `resolveAgent uses routing rule matching label`() {
+        val agents = mapOf("frontend-agent" to AgentProviderConfig(kind = "codex", model = "gpt-4"))
+        val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "frontend-agent", priority = 10))
+        val (svc, _) = createServiceWithState(config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend", "bug"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("gpt-4")
+    }
+
+    @Test
+    fun `resolveAgent uses routing rule matching label prefix`() {
+        val agents = mapOf("backend-agent" to AgentProviderConfig(kind = "opencode"))
+        val rules = listOf(RoutingRule(ifLabelPrefix = "backend:", useAgent = "backend-agent", priority = 5))
+        val (svc, _) = createServiceWithState(config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = issue("a", "ENG-1", "Todo", labels = listOf("backend:api", "bug"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("opencode")
+    }
+
+    @Test
+    fun `resolveAgent falls through when no routing rule matches`() {
+        val agents = mapOf("special" to AgentProviderConfig(kind = "codex"))
+        val rules = listOf(RoutingRule(ifLabel = "special-label", useAgent = "special", priority = 10))
+        val (svc, _) = createServiceWithState(config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = issue("a", "ENG-1", "Todo", labels = listOf("normal"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
     companion object {
         fun issue(
             id: String, identifier: String, state: String,
@@ -710,7 +750,8 @@ class DispatchServiceTest {
 
         fun config(
             stages: Map<String, StageAgentConfig> = emptyMap(),
-            agents: Map<String, AgentProviderConfig> = emptyMap()
+            agents: Map<String, AgentProviderConfig> = emptyMap(),
+            routingRules: List<RoutingRule> = emptyList()
         ) = ProjectConfig(
             tracker = TrackerConfig(
                 kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
@@ -725,7 +766,8 @@ class DispatchServiceTest {
                 maxConcurrentAgentsByState = emptyMap(),
                 turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
                 stages = stages,
-                agents = agents
+                agents = agents,
+                routingRules = routingRules
             )
         )
 

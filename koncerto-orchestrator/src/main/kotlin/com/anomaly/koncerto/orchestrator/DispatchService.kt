@@ -2,6 +2,7 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.ProjectConfig
+import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
@@ -96,7 +97,51 @@ class DispatchService(
         return issue.id in state.blocked
     }
 
+    private fun evaluateRoutingRules(issue: Issue): ResolvedAgent? {
+        for (rule in projectConfig.agent.routingRules) {
+            val label = rule.ifLabel
+            val labelPrefix = rule.ifLabelPrefix
+            val state = rule.ifState
+            val matchLabel = rule.ifLabel
+            val matchLabelPrefix = rule.ifLabelPrefix
+            val matchState = rule.ifState
+            val matchPriority = rule.ifPriority
+            val matchPriorityMax = rule.ifPriorityMax
+            val issuePriority = issue.priority
+            val matches = (matchLabel == null || issue.labels.any { it.equals(matchLabel, ignoreCase = true) })
+                && (matchLabelPrefix == null || issue.labels.any { it.startsWith(matchLabelPrefix, ignoreCase = true) })
+                && (matchState == null || issue.normalizedState.equals(matchState, ignoreCase = true))
+                && (matchPriority == null || issuePriority == matchPriority)
+                && (matchPriorityMax == null || (issuePriority != null && issuePriority <= matchPriorityMax))
+            if (!matches) continue
+
+            val provider = projectConfig.agent.agents[rule.useAgent]
+            if (provider == null) {
+                logger.warn("routing_rule_agent_not_found", mapOf(
+                    "use_agent" to rule.useAgent,
+                    "issue_id" to issue.id
+                ))
+                continue
+            }
+
+            logger.info("routing_rule_matched", mapOf(
+                "issue_id" to issue.id,
+                "rule" to rule.useAgent,
+                "agent_kind" to provider.kind
+            ))
+            return ResolvedAgent(
+                kind = provider.kind,
+                command = provider.command,
+                model = provider.model
+            )
+        }
+        return null
+    }
+
     internal fun resolveAgent(issue: Issue, stageConfig: StageAgentConfig?): ResolvedAgent {
+        val routed = evaluateRoutingRules(issue)
+        if (routed != null) return routed
+
         val stageProvider = stageConfig?.agent?.let { projectConfig.agent.agents[it] }
 
         val baseKind = stageProvider?.kind
