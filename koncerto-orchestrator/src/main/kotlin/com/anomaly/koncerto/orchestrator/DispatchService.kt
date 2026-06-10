@@ -142,7 +142,11 @@ class DispatchService(
         logger.info("dispatch_config", extra)
 
         scope.launch {
-            val result = agentRunner.run(issue, attempt, prompt, resolved.kind, resolved.command)
+            val result = agentRunner.run(
+                issue, attempt, prompt, resolved.kind, resolved.command,
+                turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
+                stallTimeoutMs = projectConfig.agent.stallTimeoutMs
+            )
             result.onSuccess {
                 state.claimed.remove(issue.id)
                 val entry = state.running[issue.id]
