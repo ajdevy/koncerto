@@ -35,7 +35,9 @@ interface AgentRunner {
         attempt: Int?,
         prompt: String,
         agentKindOverride: String? = null,
-        commandOverride: String? = null
+        commandOverride: String? = null,
+        turnTimeoutMs: Long? = null,
+        stallTimeoutMs: Long? = null
     ): EmptyResult<IllegalStateException>
 }
 
@@ -57,7 +59,9 @@ class DefaultAgentRunner(
         attempt: Int?,
         prompt: String,
         agentKindOverride: String?,
-        commandOverride: String?
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> = runCatchingResult {
         val workspace = workspaces.ensureWorkspace(issue.identifier)
         workspaces.assertInsideRoot(workspace.path)

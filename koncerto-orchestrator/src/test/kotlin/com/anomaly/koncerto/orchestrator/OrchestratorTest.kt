@@ -287,6 +287,45 @@ class OrchestratorTest {
     }
 
     @Test
+    fun `reconcile unblocks issue when blocker reaches terminal state`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig()
+        val state = RuntimeState()
+        val blockerId = "blocker-1"
+        val issueId = "issue-1"
+
+        state.running[blockerId] = runningEntry(blockerId, "ENG-1")
+        state.claimed.add(blockerId)
+        state.running[issueId] = runningEntry(issueId, "ENG-2").copy(
+            issue = runningEntry(issueId, "ENG-2").issue.copy(
+                blockedBy = listOf(BlockerRef(id = blockerId, identifier = "ENG-1", state = "In Progress"))
+            )
+        )
+        state.claimed.add(issueId)
+
+        val linear = FakeLinearClientWithStates(mapOf(blockerId to "Done"))
+        val runner = FakeAgentRunner()
+        val cache = WorkflowCache()
+        val logger = StructuredLogger(emptyList())
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(orch.projects.values.first())
+        assertThat(state.running.containsKey(blockerId)).isEqualTo(false)
+        assertThat(state.claimed.contains(blockerId)).isEqualTo(false)
+        assertThat(state.running.containsKey(issueId)).isEqualTo(false)
+        assertThat(state.claimed.contains(issueId)).isEqualTo(false)
+    }
+
+    @Test
     fun `reconcile handles fetch error gracefully`() = runBlocking {
         val root = Files.createTempDirectory("orch-test-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
@@ -1021,7 +1060,9 @@ class FakeAgentRunner : AgentRunner {
         attempt: Int?,
         prompt: String,
         agentKindOverride: String?,
-        commandOverride: String?
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Success(Unit)
@@ -1037,7 +1078,9 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
         attempt: Int?,
         prompt: String,
         agentKindOverride: String?,
-        commandOverride: String?
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Failure(IllegalStateException(errorMsg))

@@ -127,6 +127,26 @@ class Orchestrator(
                     state.removeOutput(id)
                 }
             }
+            for ((id, entry) in state.running) {
+                if (entry.issue.blockedBy.isEmpty()) continue
+                val allBlockersResolved = entry.issue.blockedBy.all { blocker ->
+                    val blockerId = blocker.id
+                    if (blockerId == null) return@all true
+                    val blockerState = states[blockerId]
+                    if (blockerState == null) return@all true
+                    pr.config.tracker.terminalStates.any { it.equals(blockerState, ignoreCase = true) }
+                }
+                if (allBlockersResolved) {
+                    logger.info(
+                        "unblocked",
+                        mapOf("issue_id" to id, "issue_identifier" to entry.issue.identifier)
+                    )
+                    state.running.remove(id)
+                    state.claimed.remove(id)
+                    state.removeOutput(id)
+                    try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
+                }
+            }
         } catch (e: Exception) {
             logger.warn("reconcile_failed", emptyMap(), "error" to (e.message ?: "unknown"))
         }

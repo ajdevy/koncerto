@@ -822,7 +822,9 @@ private class CollectingAgentRunner : AgentRunner {
         attempt: Int?,
         prompt: String,
         agentKindOverride: String?,
-        commandOverride: String?
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         runArgs += RunArgs(issue, prompt, agentKindOverride, commandOverride)
@@ -845,7 +847,9 @@ private class FailingRunner(private val errorMsg: String) : AgentRunner {
         attempt: Int?,
         prompt: String,
         agentKindOverride: String?,
-        commandOverride: String?
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         return Result.Failure(IllegalStateException(errorMsg))
     }
