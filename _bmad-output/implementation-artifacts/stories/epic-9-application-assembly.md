@@ -2,7 +2,7 @@
 
 **Story Points:** 8  
 **Priority:** P0  
-**Status:** In Progress  
+**Status:** Complete  
 
 ---
 
@@ -19,12 +19,12 @@
 - **So that** the application can be started and configured
 
 ### Acceptance Criteria
-- [ ] @SpringBootApplication annotation
-- [ ] @ComponentScan for all koncerto packages
-- [ ] main() function with args parsing
-- [ ] Detect --port arg for web type selection
-- [ ] Configure spring.main.web-application-type
-- [ ] Unit tests cover startup logic
+- [x] @SpringBootApplication annotation
+- [x] @ComponentScan for all koncerto packages
+- [x] main() function with args parsing
+- [x] Detect --port arg for web type selection
+- [x] Configure spring.main.web-application-type
+- [x] Unit tests cover startup logic
 
 ### Technical Notes
 - Use runApplication<KoncertoApplication>()
@@ -50,16 +50,16 @@
 - **So that** dependency injection is properly wired
 
 ### Acceptance Criteria
-- [ ] Bean: StructuredLogger with file sink
-- [ ] Bean: WorkflowCache
-- [ ] Bean: CoroutineScope with SupervisorJob
-- [ ] Bean: ServiceConfig from workflow definition
-- [ ] Bean: WorkspaceManager with hook executor
-- [ ] Bean: LinearClient with GraphQL client
-- [ ] Bean: AgentRuntimeFactory (for Codex/opencode selection)
-- [ ] Bean: AgentRunner with runtime factory
-- [ ] Bean: RuntimeState from config
-- [ ] Bean: Orchestrator with all dependencies
+- [x] Bean: StructuredLogger with file sink
+- [x] Bean: WorkflowCache
+- [x] Bean: CoroutineScope with SupervisorJob
+- [x] Bean: ServiceConfig from workflow definition
+- [x] Bean: WorkspaceManager with hook executor
+- [x] Bean: LinearClient with GraphQL client
+- [x] Bean: AgentRuntimeFactory (for Codex/opencode selection)
+- [x] Bean: AgentRunner with runtime factory
+- [x] Bean: RuntimeState from config
+- [x] Bean: Orchestrator with all dependencies
 
 ### Technical Notes
 - Use @Configuration class
@@ -87,10 +87,10 @@
 - **So that** agent processing begins on application startup
 
 ### Acceptance Criteria
-- [ ] Implement CommandLineRunner interface
-- [ ] Start orchestrator with coroutine scope
-- [ ] @Component annotation for auto-detection
-- [ ] Unit tests cover startup
+- [x] Implement CommandLineRunner interface
+- [x] Start orchestrator with coroutine scope
+- [x] @Component annotation for auto-detection
+- [x] Unit tests cover startup
 
 ### Technical Notes
 - Use @Component for Spring auto-detection
@@ -116,10 +116,10 @@
 - **So that** I can verify all components wire together
 
 ### Acceptance Criteria
-- [ ] Spring Boot test context loads
-- [ ] All beans are created successfully
-- [ ] No missing dependencies
-- [ ] Test context loads in under 5 seconds
+- [x] Spring Boot test context loads
+- [x] All beans are created successfully
+- [x] No missing dependencies
+- [x] Test context loads in under 5 seconds
 
 ### Technical Notes
 - Use @SpringBootTest
@@ -144,12 +144,12 @@
 - **So that** I can choose between Codex and opencode
 
 ### Acceptance Criteria
-- [ ] agent.kind field in WORKFLOW.md config (codex or opencode)
-- [ ] codex.command configuration for Codex runtime
-- [ ] opencode.command configuration for opencode runtime
-- [ ] Validate agent.kind is one of: codex, opencode
-- [ ] Default to codex if not specified
-- [ ] Unit tests for configuration parsing
+- [x] agent.kind field in WORKFLOW.md config (codex or opencode)
+- [x] codex.command configuration for Codex runtime
+- [x] opencode.command configuration for opencode runtime
+- [x] Validate agent.kind is one of: codex, opencode
+- [x] Default to codex if not specified
+- [x] Unit tests for configuration parsing
 
 ### Technical Notes
 - Add agent.kind to ServiceConfig

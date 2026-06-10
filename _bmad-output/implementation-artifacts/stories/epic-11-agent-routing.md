@@ -2,7 +2,7 @@
 
 **Story Points:** 8  
 **Priority:** P1  
-**Status:** Planned
+**Status:** Complete
 
 ---
 
@@ -19,12 +19,12 @@
 - **So that** different issue types use appropriate agent configs
 
 ### Acceptance Criteria
-- [ ] RoutingRule data class with ifLabel, ifLabelPrefix, ifState, ifPriority, ifPriorityMax, useAgent, priority fields
-- [ ] routingRules field added to AgentProjectConfig
-- [ ] parseRoutingRules() in ServiceConfig reads from YAML
-- [ ] Rules sorted by priority descending at parse time
-- [ ] Validation: useAgent must reference a key in agents map
-- [ ] Unit tests for parsing: empty rules, single rule, multiple rules, missing useAgent
+- [x] RoutingRule data class with ifLabel, ifLabelPrefix, ifState, ifPriority, ifPriorityMax, useAgent, priority fields
+- [x] routingRules field added to AgentProjectConfig
+- [x] parseRoutingRules() in ServiceConfig reads from YAML
+- [x] Rules sorted by priority descending at parse time
+- [x] Validation: useAgent must reference a key in agents map
+- [x] Unit tests for parsing: empty rules, single rule, multiple rules, missing useAgent
 
 ### Technical Notes
 - RoutingRule in core config package
@@ -51,13 +51,13 @@
 - **So that** routing rules take priority over defaults
 
 ### Acceptance Criteria
-- [ ] evaluateRoutingRules() method in DispatchService
-- [ ] First matching rule → usesAgent from agents map
-- [ ] Rules evaluated in priority descending order
-- [ ] If condition null → skip that filter (treat as match)
-- [ ] If useAgent not in agents map → warn log, fall through
-- [ ] No match → existing fallback logic unchanged
-- [ ] Unit tests: ifLabel match, ifLabelPrefix match, ifState match, ifPriority/ifPriorityMax, priority ordering, no match fallback
+- [x] evaluateRoutingRules() method in DispatchService
+- [x] First matching rule → usesAgent from agents map
+- [x] Rules evaluated in priority descending order
+- [x] If condition null → skip that filter (treat as match)
+- [x] If useAgent not in agents map → warn log, fall through
+- [x] No match → existing fallback logic unchanged
+- [x] Unit tests: ifLabel match, ifLabelPrefix match, ifState match, ifPriority/ifPriorityMax, priority ordering, no match fallback
 
 ### Technical Notes
 - Add evaluateRoutingRules() as step 0 in resolveAgent()
@@ -83,13 +83,13 @@
 - **So that** all agent resolution paths are predictable
 
 ### Acceptance Criteria
-- [ ] Routing rule match overrides default kind/command/model
-- [ ] Stage config agent provider still overrides routing (stage > routing)
-- [ ] Label `agent:` prefix overrides routing (label > routing)
-- [ ] Label `model:` prefix applies to routed agent too
-- [ ] Missing useAgent key → warn log, fallback
-- [ ] Routing rules with no matching conditions (all null) → match everything (lowest priority)
-- [ ] Unit tests for resolution priority chain
+- [x] Routing rule match overrides default kind/command/model
+- [x] Stage config agent provider still overrides routing (stage > routing)
+- [x] Label `agent:` prefix overrides routing (label > routing)
+- [x] Label `model:` prefix applies to routed agent too
+- [x] Missing useAgent key → warn log, fallback
+- [x] Routing rules with no matching conditions (all null) → match everything (lowest priority)
+- [x] Unit tests for resolution priority chain
 
 ### Technical Notes
 - Resolution order: stage agent > label agent > routing rule > default

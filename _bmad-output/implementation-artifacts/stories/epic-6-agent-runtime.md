@@ -2,7 +2,7 @@
 
 **Story Points:** 25  
 **Priority:** P0  
-**Status:** In Progress  
+**Status:** Complete  
 
 ---
 
@@ -19,13 +19,13 @@
 - **So that** agent state changes are explicitly modeled
 
 ### Acceptance Criteria
-- [ ] Sealed class hierarchy for all event types
-- [ ] SessionStarted, StartupFailed events
-- [ ] TurnCompleted, TurnFailed, TurnCancelled events
-- [ ] TurnInputRequired, ApprovalAutoApproved events
-- [ ] UnsupportedToolCall, Notification, OtherMessage, Malformed events
-- [ ] Include timestamp and PID on all events
-- [ ] Unit tests cover all event types
+- [x] Sealed class hierarchy for all event types
+- [x] SessionStarted, StartupFailed events
+- [x] TurnCompleted, TurnFailed, TurnCancelled events
+- [x] TurnInputRequired, ApprovalAutoApproved events
+- [x] UnsupportedToolCall, Notification, OtherMessage, Malformed events
+- [x] Include timestamp and PID on all events
+- [x] Unit tests cover all event types
 
 ### Technical Notes
 - Use sealed class for type safety
@@ -51,12 +51,12 @@
 - **So that** agent protocol messages are strongly typed
 
 ### Acceptance Criteria
-- [ ] JsonRpcRequest with id, method, params
-- [ ] JsonRpcResponse with id, result, error
-- [ ] JsonRpcError with code, message, data
-- [ ] JsonRpcNotification with method, params
-- [ ] Sealed class for JsonRpcMessage types
-- [ ] Unit tests cover all types
+- [x] JsonRpcRequest with id, method, params
+- [x] JsonRpcResponse with id, result, error
+- [x] JsonRpcError with code, message, data
+- [x] JsonRpcNotification with method, params
+- [x] Sealed class for JsonRpcMessage types
+- [x] Unit tests cover all types
 
 ### Technical Notes
 - Use kotlinx.serialization
@@ -82,12 +82,12 @@
 - **So that** messages are properly serialized for transport
 
 ### Acceptance Criteria
-- [ ] encodeRequest() serializes request to JSON string
-- [ ] decodeAll() parses multiple JSON-RPC messages
-- [ ] Handle newline-delimited messages
-- [ ] Distinguish responses (has id + result/error) from notifications
-- [ ] Ignore empty lines
-- [ ] Unit tests cover all cases
+- [x] encodeRequest() serializes request to JSON string
+- [x] decodeAll() parses multiple JSON-RPC messages
+- [x] Handle newline-delimited messages
+- [x] Distinguish responses (has id + result/error) from notifications
+- [x] Ignore empty lines
+- [x] Unit tests cover all cases
 
 ### Technical Notes
 - Use Json with ignoreUnknownKeys
@@ -113,11 +113,11 @@
 - **So that** multiple agent runtimes can be supported
 
 ### Acceptance Criteria
-- [ ] AgentRuntime interface with spawn, send, stop, events
-- [ ] AgentRuntimeFactory for creating runtime instances
-- [ ] AgentRuntimeConfig data class for configuration
-- [ ] Support agent.kind = codex | opencode
-- [ ] Unit tests cover factory and interface
+- [x] AgentRuntime interface with spawn, send, stop, events
+- [x] AgentRuntimeFactory for creating runtime instances
+- [x] AgentRuntimeConfig data class for configuration
+- [x] Support agent.kind = codex | opencode
+- [x] Unit tests cover factory and interface
 
 ### Technical Notes
 - Define common operations all runtimes must support
@@ -144,14 +144,14 @@
 - **So that** Codex agents can be spawned and managed
 
 ### Acceptance Criteria
-- [ ] Implements AgentRuntime interface
-- [ ] Spawn codex app-server process
-- [ ] Manage stdin/stdout pipes
-- [ ] Handle Codex-specific JSON-RPC protocol
-- [ ] Emit AgentEvent for each message type
-- [ ] Extract token usage from turn completed events
-- [ ] Thread-safe request ID generation
-- [ ] Unit tests cover all cases
+- [x] Implements AgentRuntime interface
+- [x] Spawn codex app-server process
+- [x] Manage stdin/stdout pipes
+- [x] Handle Codex-specific JSON-RPC protocol
+- [x] Emit AgentEvent for each message type
+- [x] Extract token usage from turn completed events
+- [x] Thread-safe request ID generation
+- [x] Unit tests cover all cases
 
 ### Technical Notes
 - Use ProcessBuilder for process spawning
@@ -178,14 +178,14 @@
 - **So that** opencode agents can be spawned and managed
 
 ### Acceptance Criteria
-- [ ] Implements AgentRuntime interface
-- [ ] Spawn opencode subprocess
-- [ ] Manage stdin/stdout pipes
-- [ ] Handle opencode-specific JSON-RPC protocol
-- [ ] Emit AgentEvent for each message type
-- [ ] Extract token usage from turn completed events
-- [ ] Thread-safe request ID generation
-- [ ] Unit tests cover all cases
+- [x] Implements AgentRuntime interface
+- [x] Spawn opencode subprocess
+- [x] Manage stdin/stdout pipes
+- [x] Handle opencode-specific JSON-RPC protocol
+- [x] Emit AgentEvent for each message type
+- [x] Extract token usage from turn completed events
+- [x] Thread-safe request ID generation
+- [x] Unit tests cover all cases
 
 ### Technical Notes
 - Research opencode CLI interface and protocol
@@ -213,9 +213,9 @@
 - **So that** hangs don't block forever
 
 ### Acceptance Criteria
-- [ ] Configurable timeout per turn
-- [ ] Kill process on timeout
-- [ ] Unit tests
+- [x] Configurable timeout per turn
+- [x] Kill process on timeout
+- [x] Unit tests
 
 ### Technical Notes
 - Use withTimeout for turn execution
@@ -240,9 +240,9 @@
 - **So that** unresponsive agents are killed
 
 ### Acceptance Criteria
-- [ ] Detect no-output conditions
-- [ ] Terminate after timeout
-- [ ] Unit tests
+- [x] Detect no-output conditions
+- [x] Terminate after timeout
+- [x] Unit tests
 
 ### Technical Notes
 - Track last message timestamp

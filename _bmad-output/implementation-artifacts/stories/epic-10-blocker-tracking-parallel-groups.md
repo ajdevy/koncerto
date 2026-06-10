@@ -2,7 +2,7 @@
 
 **Story Points:** 13  
 **Priority:** P1  
-**Status:** Planned
+**Status:** Complete
 
 ---
 
@@ -19,12 +19,12 @@
 - **So that** the dispatch system always has an accurate picture of available work
 
 ### Acceptance Criteria
-- [ ] reconcile() checks blocker states after state cleanup
-- [ ] Issues whose blockers all reached terminal states are marked unblocked
-- [ ] Log `unblocked` event with issue identifier
-- [ ] RuntimeState.blocked set is correctly maintained (add/remove)
-- [ ] Unit tests cover: single blocker resolves, multiple blockers resolve, no blockers, blocker not in candidate set
-- [ ] Dashboard reflects current blocked state
+- [x] reconcile() checks blocker states after state cleanup
+- [x] Issues whose blockers all reached terminal states are marked unblocked
+- [x] Log `unblocked` event with issue identifier
+- [x] RuntimeState.blocked set is correctly maintained (add/remove)
+- [x] Unit tests cover: single blocker resolves, multiple blockers resolve, no blockers, blocker not in candidate set
+- [x] Dashboard reflects current blocked state
 
 ### Technical Notes
 - Extend reconcile() in Orchestrator.kt
@@ -51,13 +51,13 @@
 - **So that** only unblocked issues are dispatched and parallelism is maximized
 
 ### Acceptance Criteria
-- [ ] DependencyGraph data class with nodes, edges, frontier
-- [ ] computeFrontier() builds graph from candidate issues
-- [ ] Frontier contains issues with no unresolved blockers
-- [ ] Blocker absent from candidates → treated as resolved
-- [ ] Unlinked blocker (id=null) → treated as resolved
-- [ ] Frontier sorted by priority, then createdAt, then identifier
-- [ ] Unit tests cover: empty graph, chain, diamond, mixed blockers, all blocked
+- [x] DependencyGraph data class with nodes, edges, frontier
+- [x] computeFrontier() builds graph from candidate issues
+- [x] Frontier contains issues with no unresolved blockers
+- [x] Blocker absent from candidates → treated as resolved
+- [x] Unlinked blocker (id=null) → treated as resolved
+- [x] Frontier sorted by priority, then createdAt, then identifier
+- [x] Unit tests cover: empty graph, chain, diamond, mixed blockers, all blocked
 
 ### Technical Notes
 - New file: DependencyGraph.kt in orchestrator package
@@ -83,12 +83,12 @@
 - **So that** the system dispatches all available unblocked issues in priority order
 
 ### Acceptance Criteria
-- [ ] fetchAndDispatch() builds DependencyGraph from candidates
-- [ ] Dispatches from frontier instead of filtered list
-- [ ] Respects maxConcurrentAgents and per-state limits
-- [ ] Existing isBlockedForTodo() replaced by frontier logic
-- [ ] Blocked issues tracked in state.blocked for dashboard visibility
-- [ ] Unit tests cover: frontier dispatch, concurrency limits with blocking
+- [x] fetchAndDispatch() builds DependencyGraph from candidates
+- [x] Dispatches from frontier instead of filtered list
+- [x] Respects maxConcurrentAgents and per-state limits
+- [x] Existing isBlockedForTodo() replaced by frontier logic
+- [x] Blocked issues tracked in state.blocked for dashboard visibility
+- [x] Unit tests cover: frontier dispatch, concurrency limits with blocking
 
 ### Technical Notes
 - Replace isBlockedForTodo() with DependencyGraph.computeFrontier()
@@ -115,10 +115,10 @@
 - **So that** I can see the dependency chain at a glance
 
 ### Acceptance Criteria
-- [ ] API exposes blocked issues with blocker identifiers
-- [ ] Dashboard shows blocked badge/tag on blocked issues
-- [ ] Dashboard shows blocker identifiers in issue detail
-- [ ] Blocker-chain visualization (optional, future)
+- [x] API exposes blocked issues with blocker identifiers
+- [x] Dashboard shows blocked badge/tag on blocked issues
+- [x] Dashboard shows blocker identifiers in issue detail
+- [x] Blocker-chain visualization (optional, future)
 
 ### Technical Notes
 - Extend APIv1Controller to include blocked state

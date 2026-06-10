@@ -2,7 +2,7 @@
 
 **Story Points:** 10  
 **Priority:** P2  
-**Status:** Planned
+**Status:** Complete
 
 ---
 
@@ -19,11 +19,11 @@
 - **So that** downstream work (PR review, verification, monitoring) is created automatically
 
 ### Acceptance Criteria
-- [ ] FollowUpConfig data class with titleTemplate, descriptionTemplate, state, labels, linkType, assignee, agent fields
-- [ ] followUp field added to StageAgentConfig (nullable, default null)
-- [ ] parseFollowUp() in ServiceConfig reads from YAML
-- [ ] Validation: titleTemplate and state are required
-- [ ] Unit tests: parsing, required fields, optional fields, invalid config
+- [x] FollowUpConfig data class with titleTemplate, descriptionTemplate, state, labels, linkType, assignee, agent fields
+- [x] followUp field added to StageAgentConfig (nullable, default null)
+- [x] parseFollowUp() in ServiceConfig reads from YAML
+- [x] Validation: titleTemplate and state are required
+- [x] Unit tests: parsing, required fields, optional fields, invalid config
 
 ### Technical Notes
 - FollowUpConfig in core config package
@@ -50,11 +50,11 @@
 - **So that** workflow chaining can create follow-up issues
 
 ### Acceptance Criteria
-- [ ] linear.createIssue(projectSlug, title, state, description, labels) returns Issue?
-- [ ] GraphQL mutation for issue creation
-- [ ] linear.createLink(sourceId, targetId, type) returns Boolean
-- [ ] Handle API errors gracefully (warn log, return null/false)
-- [ ] Unit tests with mock API responses
+- [x] linear.createIssue(projectSlug, title, state, description, labels) returns Issue?
+- [x] GraphQL mutation for issue creation
+- [x] linear.createLink(sourceId, targetId, type) returns Boolean
+- [x] Handle API errors gracefully (warn log, return null/false)
+- [x] Unit tests with mock API responses
 
 ### Technical Notes
 - Add GraphQL mutation strings for issueCreate and linkIssue
@@ -82,11 +82,11 @@
 - **So that** follow-ups are contextual
 
 ### Acceptance Criteria
-- [ ] renderFollowUpTemplate(template, issue) function
-- [ ] Supports variables: {{ issue.id }}, {{ issue.identifier }}, {{ issue.title }}, {{ issue.url }}, {{ issue.state }}, {{ issue.labels }}, {{ now }}
-- [ ] Unknown variable → leave as-is (not crash)
-- [ ] Multiple occurrences of same variable → all replaced
-- [ ] Unit tests for all template variables
+- [x] renderFollowUpTemplate(template, issue) function
+- [x] Supports variables: {{ issue.id }}, {{ issue.identifier }}, {{ issue.title }}, {{ issue.url }}, {{ issue.state }}, {{ issue.labels }}, {{ now }}
+- [x] Unknown variable → leave as-is (not crash)
+- [x] Multiple occurrences of same variable → all replaced
+- [x] Unit tests for all template variables
 
 ### Technical Notes
 - Simple string replacement (no Liquid dependency needed)
@@ -113,14 +113,14 @@
 - **So that** the workflow chain is automated end-to-end
 
 ### Acceptance Criteria
-- [ ] transitionOnComplete() checks stageConfig.followUp != null
-- [ ] Renders titleTemplate and descriptionTemplate
-- [ ] Calls linear.createIssue() with rendered values
-- [ ] Calls linear.createLink() if linkType is set
-- [ ] Logs chain creation: "follow_up_created" with source identifier, follow-up identifier
-- [ ] Handles API failure gracefully (log warn, continue transition)
-- [ ] Follow-up issue's agent is resolved using routing rules (if followUp.agent set)
-- [ ] Unit tests for happy path, partial failure, invalid template
+- [x] transitionOnComplete() checks stageConfig.followUp != null
+- [x] Renders titleTemplate and descriptionTemplate
+- [x] Calls linear.createIssue() with rendered values
+- [x] Calls linear.createLink() if linkType is set
+- [x] Logs chain creation: "follow_up_created" with source identifier, follow-up identifier
+- [x] Handles API failure gracefully (log warn, continue transition)
+- [x] Follow-up issue's agent is resolved using routing rules (if followUp.agent set)
+- [x] Unit tests for happy path, partial failure, invalid template
 
 ### Technical Notes
 - Runs after successful state transition
