@@ -1015,6 +1015,11 @@ class FakeLinearClient(private val candidates: List<Issue>) : LinearClient {
     override suspend fun createComment(issueId: String, body: String) {}
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? = null
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = null
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
 }
 
 class FakeLinearClientWithStates(private val stateMap: Map<String, String>) : LinearClient {
@@ -1031,6 +1036,11 @@ class FakeLinearClientWithStates(private val stateMap: Map<String, String>) : Li
     override suspend fun createComment(issueId: String, body: String) {}
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? = null
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = null
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
 }
 
 class FakeLinearClientThrowing : LinearClient {
@@ -1055,6 +1065,12 @@ class FakeLinearClientThrowing : LinearClient {
     override suspend fun createComment(issueId: String, body: String) { throw RuntimeException("API down") }
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) { throw RuntimeException("API down") }
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? =
+        throw RuntimeException("API down")
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = throw RuntimeException("API down")
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean =
         throw RuntimeException("API down")
 }
 

@@ -16,6 +16,7 @@ import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.HookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import java.nio.file.Files
@@ -264,14 +265,83 @@ class AgentRunnerTest {
     fun `run commits partial work on turn timeout`() = runBlocking {
         val root = Files.createTempDirectory("ar-commit-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
-        val commitLog = mutableListOf<String>()
-        val config = sampleConfig(command = "sleep 120", agentKind = "opencode")
-        val runner = DefaultAgentRunner(config, mgr, noopLogger(), gitWorkflow = null)
         val issue = sampleIssue()
+
+        val wsPath = root.resolve("ABC-1")
+        Files.createDirectories(wsPath)
+        ProcessBuilder("git", "init")
+            .directory(wsPath.toFile()).redirectErrorStream(true).start().waitFor()
+        ProcessBuilder("git", "config", "user.email", "test@test.com")
+            .directory(wsPath.toFile()).start().waitFor()
+        ProcessBuilder("git", "config", "user.name", "Test")
+            .directory(wsPath.toFile()).start().waitFor()
+        ProcessBuilder("git", "commit", "--allow-empty", "-m", "initial")
+            .directory(wsPath.toFile()).start().waitFor()
+
+        val gitWorkflow = GitWorkflow(GitConfig(enabled = true, autoCommit = true), noopLogger())
+        val config = sampleConfig(command = "sleep 120", agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger(), gitWorkflow = gitWorkflow)
         val result = runner.run(
             issue, attempt = null, prompt = "do something",
             agentKindOverride = "opencode", commandOverride = "sleep 120",
             turnTimeoutMs = 100, stallTimeoutMs = 50000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+
+        val logProc = ProcessBuilder("git", "log", "--oneline")
+            .directory(wsPath.toFile()).redirectErrorStream(true).start()
+        val logOutput = logProc.inputStream.bufferedReader().readText()
+        assertThat(logOutput.lines().count { it.isNotBlank() }).isEqualTo(2)
+    }
+
+    @Test
+    fun `stall timeout longer than turn timeout — turn timeout fires first`() = runBlocking {
+        val root = Files.createTempDirectory("ar-turn-timeout-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            read line && read line && read line
+            sleep 120
+        """.trimIndent()
+        val config = sampleConfig(command = script, agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger())
+        val issue = sampleIssue()
+        val result = runner.run(
+            issue, attempt = null, prompt = "do something",
+            agentKindOverride = "opencode", commandOverride = script,
+            turnTimeoutMs = 100, stallTimeoutMs = 50000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+        assertThat(result.exceptionOrNull()?.message ?: "").contains("Timed out")
+    }
+
+    @Test
+    fun `zero stall timeout — fires immediately when no output`() = runBlocking {
+        val root = Files.createTempDirectory("ar-zero-stall-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "sleep 120", agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger())
+        val issue = sampleIssue()
+        val result = runner.run(
+            issue, attempt = null, prompt = "do something",
+            agentKindOverride = "opencode", commandOverride = "sleep 120",
+            turnTimeoutMs = 50000, stallTimeoutMs = 0
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+        assertThat(result.exceptionOrNull()?.message ?: "").contains("stalled")
+    }
+
+    @Test
+    fun `subprocess exits before timeout — no crash`() = runBlocking {
+        val root = Files.createTempDirectory("ar-exit-early-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "echo done", agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger())
+        val issue = sampleIssue()
+        val result = runner.run(
+            issue, attempt = null, prompt = "do something",
+            agentKindOverride = "opencode", commandOverride = "echo done",
+            turnTimeoutMs = 50000, stallTimeoutMs = 50000
         )
         assertThat(result.exceptionOrNull()).isNotNull()
     }
