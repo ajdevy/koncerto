@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.orchestrator
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
@@ -9,9 +10,9 @@ import com.anomaly.koncerto.agent.SubtaskRunner
 import com.anomaly.koncerto.core.config.SubtaskManifest
 import com.anomaly.koncerto.core.config.SubtaskDef
 import com.anomaly.koncerto.core.config.WorkplanConfig
-import com.anomaly.koncerto.core.config.ExecutionMode
 import com.anomaly.koncerto.core.result.EmptyResult
 import com.anomaly.koncerto.core.result.Result
+import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.MergeResult
@@ -27,7 +28,10 @@ class SubtaskOrchestratorTest {
     @Test
     fun `sequential mode executes subtasks in dependency order`(@TempDir tempDir: Path) = runTest {
         val executed = mutableListOf<String>()
-        val runner = FakeSubtaskRunner { prompt -> executed.add(prompt) }
+        val runner = FakeSubtaskRunner { prompt ->
+            executed.add(prompt)
+            Result.Success(Unit)
+        }
         val orchestrator = createOrchestrator(runner = runner)
 
         val manifest = SubtaskManifest(
@@ -42,7 +46,7 @@ class SubtaskOrchestratorTest {
         val events = orchestrator.execute(
             workspacePath = tempDir,
             manifest = manifest,
-            config = WorkplanConfig(executionMode = ExecutionMode.SEQUENTIAL)
+            config = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.SEQUENTIAL)
         ).toList()
 
         assertThat(executed).containsExactly("prompt-a", "prompt-b", "prompt-c")
@@ -70,7 +74,7 @@ class SubtaskOrchestratorTest {
         val events = orchestrator.execute(
             workspacePath = tempDir,
             manifest = manifest,
-            config = WorkplanConfig(executionMode = ExecutionMode.SEQUENTIAL)
+            config = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.SEQUENTIAL)
         ).toList()
 
         val completed = events.filterIsInstance<AgentEvent.SubtaskCompleted>()
@@ -84,7 +88,7 @@ class SubtaskOrchestratorTest {
         runner: SubtaskRunner? = null,
         gitWorkflow: GitWorkflow? = null
     ): SubtaskOrchestrator {
-        val logger = StructuredLogger("test")
+        val logger = StructuredLogger(emptyList<LogSink>())
         val actualRunner = runner ?: FakeSubtaskRunner()
         val actualGit = gitWorkflow ?: FakeGitWorkflow()
         return SubtaskOrchestrator(
@@ -103,19 +107,19 @@ class FakeSubtaskRunner(
     override suspend fun runSubtask(
         workspacePath: Path,
         prompt: String,
-        kind: String = "opencode",
-        command: String? = null,
-        turnTimeoutMs: Long = 3_600_000L,
-        stallTimeoutMs: Long = 300_000L
+        kind: String,
+        command: String?,
+        turnTimeoutMs: Long,
+        stallTimeoutMs: Long
     ): EmptyResult<IllegalStateException> {
         return block(prompt)
     }
 }
 
-class FakeGitWorkflow : GitWorkflow(
-    config = com.anomaly.koncerto.core.config.GitConfig(enabled = false, branchPrefix = "feature/"),
-    logger = StructuredLogger("test")
-)
+class FakeGitWorkflow(
+    config: com.anomaly.koncerto.core.config.GitConfig = com.anomaly.koncerto.core.config.GitConfig(enabled = false, branchPrefix = "feature/"),
+    logger: StructuredLogger = StructuredLogger(emptyList<LogSink>())
+) : GitWorkflow(config, logger) {
     override fun subtaskBranchName(issueIdentifier: String, subtaskId: String): String =
         "subtask/$issueIdentifier/$subtaskId"
 

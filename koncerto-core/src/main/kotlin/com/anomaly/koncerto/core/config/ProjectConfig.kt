@@ -7,7 +7,15 @@ data class ProjectConfig(
     val agent: AgentProjectConfig,
     val rateLimiter: RateLimiterConfig? = null,
     val circuitBreaker: CircuitBreakerConfig? = null,
+    val rateLimits: RateLimitsConfig? = null,
     val notifications: NotificationsConfig = NotificationsConfig(onCompleted = false, onFailed = false, onStalled = false, onClarification = false)
+)
+
+@kotlinx.serialization.Serializable
+data class RateLimitsConfig(
+    val linear: RateLimitConfig? = null,
+    val github: RateLimitConfig? = null,
+    val agent: RateLimitConfig? = null
 )
 
 @kotlinx.serialization.Serializable
@@ -66,6 +74,14 @@ data class RateLimiterConfig(
 data class CircuitBreakerConfig(
     val failureThreshold: Int = 5,
     val resetTimeoutMs: Long = 30_000
+)
+
+@kotlinx.serialization.Serializable
+data class RateLimitConfig(
+    val requestsPerMinute: Int = 60,
+    val requestsPerHour: Int = 1000,
+    val burstCapacity: Int = 20,
+    val backoffMs: Int = 1000
 )
 
 @kotlinx.serialization.Serializable

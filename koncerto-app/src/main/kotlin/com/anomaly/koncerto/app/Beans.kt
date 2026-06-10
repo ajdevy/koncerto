@@ -3,10 +3,12 @@ package com.anomaly.koncerto.app
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentRunner
-import com.anomaly.koncerto.core.CircuitBreaker
 import com.anomaly.koncerto.core.TokenBucketRateLimiter
+import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
+import com.anomaly.koncerto.core.CircuitBreaker
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.ratelimit.RateLimitRegistry
 import com.anomaly.koncerto.linear.DefaultLinearClient
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.linear.LinearGraphQLClient
@@ -109,9 +111,13 @@ class Beans {
 
     @Bean
     fun linearClientFactory(
-        logger: StructuredLogger
+        logger: StructuredLogger,
+        scope: CoroutineScope
     ): (ProjectConfig) -> LinearClient = { pc ->
-        val graphql = LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey)
+        val rateLimitProvider = pc.rateLimits?.linear?.let { rlConfig ->
+            RateLimitRegistry.getOrCreate("linear-${pc.tracker.projectSlug ?: "default"}", rlConfig, scope)
+        }
+        val graphql = LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey, rateLimitProvider = rateLimitProvider)
         val slug = pc.tracker.projectSlug
             ?: throw IllegalStateException("missing_tracker_project_slug")
         val base = DefaultLinearClient(graphql, slug)
@@ -167,13 +173,17 @@ class Beans {
     }
 
     @Bean
+    fun agentCircuitBreaker(): AgentCircuitBreaker = AgentCircuitBreaker()
+
+    @Bean
     fun agentRunner(
         config: ServiceConfig,
         workspaces: WorkspaceManager,
         logger: StructuredLogger,
         agentRuntimeFactory: AgentRuntimeFactory,
         gitWorkflow: GitWorkflow,
-        runtimeStates: Map<String, RuntimeState>
+        runtimeStates: Map<String, RuntimeState>,
+        circuitBreaker: AgentCircuitBreaker
     ): AgentRunner {
         val firstProject = config.projects.values.firstOrNull()
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
@@ -184,7 +194,10 @@ class Beans {
                     it.running.containsKey(issueId) || it.claimed.contains(issueId)
                 }?.appendOutput(issueId, line)
             },
-            heartbeatIntervalMs = heartbeatInterval
+            heartbeatIntervalMs = heartbeatInterval,
+            circuitBreaker = circuitBreaker,
+            maxRetries = 3,
+            retryDelayMs = 5_000L
         )
     }
 

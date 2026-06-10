@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.linear
 
+import com.anomaly.koncerto.core.ratelimit.RateLimitProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -14,7 +15,8 @@ import java.time.Duration
 open class LinearGraphQLClient(
     private val endpoint: String,
     private val apiKey: String?,
-    private val timeoutMs: Long = 30_000
+    private val timeoutMs: Long = 30_000,
+    private val rateLimitProvider: RateLimitProvider? = null
 ) {
     private val client: WebClient = WebClient.builder()
         .baseUrl(endpoint)
@@ -28,6 +30,7 @@ open class LinearGraphQLClient(
             put("variables", variables)
         }
         return withContext(Dispatchers.IO) {
+            rateLimitProvider?.waitForAvailability()
             try {
                 val response = client.post()
                     .header(HttpHeaders.AUTHORIZATION, apiKey)

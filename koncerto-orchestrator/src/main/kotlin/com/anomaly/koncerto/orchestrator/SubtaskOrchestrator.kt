@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Semaphore
 import java.nio.file.Path
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 private const val DEFAULT_TURN_TIMEOUT_MS = 3_600_000L
 private const val DEFAULT_STALL_TIMEOUT_MS = 300_000L
@@ -51,19 +53,30 @@ class SubtaskOrchestrator(
             WorkplanConfig.ExecutionMode.PARALLEL -> {
                 val semaphore = Semaphore(config.maxParallelSubagents)
                 val integrationBranch = "main"
-                while (states.any { it.status == SubtaskStatus.PENDING || it.status == SubtaskStatus.RUNNING }) {
-                    val ready = frontier.compute(states.toList())
+                val statesMap = ConcurrentHashMap<String, SubtaskState>()
+                states.forEach { statesMap[it.def.id] = it }
+                val runningCount = AtomicInteger(0)
 
-                    if (ready.isEmpty() && states.none { it.status == SubtaskStatus.RUNNING }) break
+                while (true) {
+                    val currentStates = statesMap.values
+                    val hasPending = currentStates.any { it.status == SubtaskStatus.PENDING }
+                    val hasRunning = runningCount.get() > 0
+
+                    if (!hasPending && !hasRunning) break
+
+                    val ready = frontier.compute(currentStates.toList())
+
+                    if (ready.isEmpty() && !hasRunning) break
 
                     coroutineScope {
                         val deferredList = mutableListOf<kotlinx.coroutines.Deferred<Pair<List<AgentEvent>, Boolean>>>()
                         for (state in ready) {
                             deferredList.add(async {
                                 semaphore.acquire()
+                                runningCount.incrementAndGet()
                                 try {
-                                    val idx = states.indexOfFirst { it.def.id == state.def.id }
-                                    states[idx] = state.copy(status = SubtaskStatus.RUNNING)
+                                    val updatedState = state.copy(status = SubtaskStatus.RUNNING)
+                                    statesMap[updatedState.def.id] = updatedState
                                     logger.info("Subtask started", mapOf("issueId" to issueId, "subtaskId" to state.def.id))
 
                                     val branchName = gitWorkflow.subtaskBranchName(issueId, state.def.id)
@@ -80,10 +93,11 @@ class SubtaskOrchestrator(
                                     gitWorkflow.deleteBranch(workspacePath, branchName)
 
                                     if (mergeResult is MergeResult.CONFLICT) {
-                                        states[idx] = state.copy(
+                                        val failedState = state.copy(
                                             status = SubtaskStatus.FAILED,
                                             branchName = branchName
                                         )
+                                        statesMap[failedState.def.id] = failedState
                                         logger.error("Subtask merge conflict", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "branch" to branchName))
                                         Pair(
                                             listOf(AgentEvent.MergeConflict(
@@ -94,11 +108,12 @@ class SubtaskOrchestrator(
                                             true
                                         )
                                     } else {
-                                        states[idx] = result.state
+                                        statesMap[result.state.def.id] = result.state
                                         logger.info("Subtask completed", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "status" to result.state.status.name))
                                         Pair(result.events, false)
                                     }
                                 } finally {
+                                    runningCount.decrementAndGet()
                                     semaphore.release()
                                 }
                             })

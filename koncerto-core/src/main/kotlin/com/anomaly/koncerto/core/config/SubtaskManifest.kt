@@ -5,7 +5,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class SubtaskManifest(
     val issueId: String,
-    val integrationBranch: String = "main",
     val subtasks: List<SubtaskDef>
 )
 

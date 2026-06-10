@@ -9,7 +9,7 @@ sealed class MergeResult {
     object CONFLICT : MergeResult()
 }
 
-class GitWorkflow(
+open class GitWorkflow(
     private val config: GitConfig,
     private val logger: StructuredLogger
 ) {
