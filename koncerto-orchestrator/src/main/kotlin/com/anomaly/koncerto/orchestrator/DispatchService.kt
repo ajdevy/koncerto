@@ -41,7 +41,8 @@ class DispatchService(
             logger.failure("fetch_candidates_failed", emptyMap(), e)
             return
         }
-        val sorted = candidates
+        val graph = DependencyGraph.build(candidates, projectConfig.tracker.terminalStates)
+        val sorted = graph.frontier
             .filter { !state.running.containsKey(it.id) && it.id !in state.claimed }
             .filter { matchesRequiredLabels(it) }
             .filter { !isBlockedForTodo(it) }
@@ -50,6 +51,17 @@ class DispatchService(
                     .thenBy { it.createdAt ?: Instant.MAX }
                     .thenBy { it.identifier }
             )
+
+        for (candidate in candidates) {
+            if (candidate.id !in graph.frontier.map { it.id }
+                && !state.running.containsKey(candidate.id)
+                && candidate.id !in state.claimed) {
+                state.blocked.add(candidate.id)
+            }
+        }
+        for (frontierId in graph.frontier.map { it.id }) {
+            state.blocked.remove(frontierId)
+        }
 
         for (issue in sorted) {
             if (state.availableSlots() <= 0) break
@@ -81,10 +93,7 @@ class DispatchService(
 
     private fun isBlockedForTodo(issue: Issue): Boolean {
         if (!issue.normalizedState.equals("todo", ignoreCase = true)) return false
-        return issue.blockedBy.any { blocker ->
-            val s = blocker.state?.lowercase() ?: return@any true
-            projectConfig.tracker.terminalStates.none { it.equals(s, ignoreCase = true) }
-        }
+        return issue.id in state.blocked
     }
 
     internal fun resolveAgent(issue: Issue, stageConfig: StageAgentConfig?): ResolvedAgent {
