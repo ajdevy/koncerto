@@ -67,7 +67,8 @@ private fun createOrchestrator(
             override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
             override suspend fun run(
                 issue: Issue, attempt: Int?, prompt: String,
-                agentKindOverride: String?, commandOverride: String?
+                agentKindOverride: String?, commandOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         },
         workflowCache = WorkflowCache(),
