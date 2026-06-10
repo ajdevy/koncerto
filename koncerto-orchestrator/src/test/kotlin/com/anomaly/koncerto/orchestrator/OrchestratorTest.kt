@@ -323,6 +323,7 @@ class OrchestratorTest {
         assertThat(state.claimed.contains(blockerId)).isEqualTo(false)
         assertThat(state.running.containsKey(issueId)).isEqualTo(false)
         assertThat(state.claimed.contains(issueId)).isEqualTo(false)
+        assertThat(state.blocked.contains(issueId)).isEqualTo(false)
     }
 
     @Test

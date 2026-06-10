@@ -143,6 +143,7 @@ class Orchestrator(
                     )
                     state.running.remove(id)
                     state.claimed.remove(id)
+                    state.blocked.remove(id)
                     state.removeOutput(id)
                     try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
                 }
