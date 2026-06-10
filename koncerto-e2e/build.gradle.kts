@@ -16,6 +16,7 @@ dependencies {
     testImplementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit5.jupiter)
     testImplementation(libs.assertk)
+    testImplementation(project(":koncerto-notifications"))
 }
 
 tasks.named<Test>("test") {

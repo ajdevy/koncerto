@@ -5,6 +5,8 @@ import com.anomaly.koncerto.notifications.Notifier
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -15,16 +17,18 @@ class WebhookNotifier(
 ) : Notifier {
     override suspend fun send(event: NotificationEvent) {
         val body = Json.encodeToString(WebhookPayload(event))
-        val conn = URL(url).openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-        try {
-            OutputStreamWriter(conn.outputStream).use { it.write(body) }
-            conn.responseCode
-        } finally {
-            conn.disconnect()
+        withContext(Dispatchers.IO) {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
+            try {
+                OutputStreamWriter(conn.outputStream).use { it.write(body) }
+                conn.responseCode
+            } finally {
+                conn.disconnect()
+            }
         }
     }
 }

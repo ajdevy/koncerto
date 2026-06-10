@@ -219,6 +219,183 @@ koncerto/
 # Report at: <module>/build/reports/jacoco/test/html/index.html
 ```
 
+## Configuration Reference
+
+### Notification Config
+
+Notifications are configured per-project under the `notifications` key. Global event toggles control which events trigger notifications; if any channel is configured, `on_completed`, `on_failed`, and `on_stalled` default to `true`.
+
+```yaml
+notifications:
+  on_completed: true
+  on_failed: true
+  on_stalled: true
+  on_clarification: false
+  telegram:
+    bot_token: $TELEGRAM_BOT_TOKEN
+    chat_id: "123456789"
+  email:
+    smtp_host: smtp.example.com
+    smtp_port: 587
+    username: $SMTP_USERNAME
+    password: $SMTP_PASSWORD
+    from: koncerto@example.com
+    to: team@example.com
+  webhook:
+    url: https://hooks.example.com/koncerto
+    headers:
+      X-API-Key: $WEBHOOK_API_KEY
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `on_completed` | bool | `true` (if any channel defined) | Notify when an agent run completes |
+| `on_failed` | bool | `true` (if any channel defined) | Notify when an agent run fails |
+| `on_stalled` | bool | `true` (if any channel defined) | Notify when an agent stalls |
+| `on_clarification` | bool | `true` (if any channel defined) | Notify when agent requests clarification |
+
+**Telegram:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `bot_token` | string | Telegram bot token (supports `$ENV_VAR` refs) |
+| `chat_id` | string | Target chat or channel ID |
+
+**Email (SMTP):**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `smtp_host` | string | — | SMTP server hostname |
+| `smtp_port` | int | `587` | SMTP server port |
+| `username` | string | — | SMTP auth username (supports `$ENV_VAR` refs) |
+| `password` | string | — | SMTP auth password (supports `$ENV_VAR` refs) |
+| `from` | string | — | Sender email address |
+| `to` | string | — | Recipient email address |
+
+**Webhook:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `url` | string | — | Webhook endpoint URL |
+| `headers` | map | `{}` | Custom headers (values support `$ENV_VAR` refs) |
+
+---
+
+### Rate Limiter Config
+
+Rate limiting is configured per-project under the `rate_limiter` key. When set, it wraps the Linear API client to throttle requests.
+
+```yaml
+rate_limiter:
+  requests_per_second: 10
+  max_burst: 20
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `requests_per_second` | int | `10` | Sustained request rate |
+| `max_burst` | int | `20` | Maximum burst size (token bucket capacity) |
+
+---
+
+### Circuit Breaker Config
+
+Circuit breaking is configured per-project under the `circuit_breaker` key. When set, it wraps the Linear API client to stop requests after repeated failures.
+
+```yaml
+circuit_breaker:
+  failure_threshold: 5
+  reset_timeout_ms: 30000
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `failure_threshold` | int | `5` | Consecutive failures before opening the circuit |
+| `reset_timeout_ms` | long | `30000` | Milliseconds before attempting a half-open retry |
+
+---
+
+### Health Endpoint
+
+When `KONCERTO_WEB_TYPE=reactive` is set, Koncerto exposes a Spring Boot Actuator health endpoint at `/actuator/health`. The health indicator reports orchestrator state:
+
+- **UP** — orchestrator is running
+- **DOWN** — orchestrator has been stopped or failed to start
+
+The endpoint checks the `OrchestratorHealthIndicator` which monitors the orchestrator's running state. No additional configuration is required.
+
+```bash
+curl http://localhost:8080/actuator/health
+# {"status":"UP"}
+```
+
+---
+
+### CLI Commands
+
+Koncerto accepts the following commands when passed as the first argument:
+
+| Command | Description |
+|---------|-------------|
+| _(no args)_ | Start the orchestrator poll loop |
+| `status` | Print orchestrator state (projects, running/blocked/retrying counts, token totals) |
+| `agents` | List running agents per project with turn count and duration |
+| `restart` | Clear all runtime state and restart the poll loop |
+| `help` | Show available CLI commands |
+
+Example usage:
+
+```bash
+java -jar koncerto-app.jar WORKFLOW.md status
+java -jar koncerto-app.jar WORKFLOW.md agents
+java -jar koncerto-app.jar WORKFLOW.md restart
+java -jar koncerto-app.jar WORKFLOW.md help
+```
+
+---
+
+### Agent Heartbeat Configuration
+
+Heartbeat monitoring is configured under `agent` per-project. The orchestrator monitors agent subprocess health by tracking periodic heartbeats.
+
+```yaml
+agent:
+  heartbeat_interval_ms: 30000
+  heartbeat_timeout_ms: 90000
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `heartbeat_interval_ms` | long | `30000` | Expected interval between agent heartbeats |
+| `heartbeat_timeout_ms` | long | `90000` | Max time without heartbeat before agent is considered stalled |
+
+If an agent fails to send a heartbeat within `heartbeat_timeout_ms`, the orchestrator marks it as stalled and triggers the stall notification (if `on_stalled` is enabled).
+
+---
+
+### Graceful Shutdown
+
+Koncerto supports Spring Boot's graceful shutdown. When a shutdown signal is received (SIGTERM, Ctrl+C), the orchestrator:
+
+1. Sets `shutdownRequested = true`
+2. Stops polling for new issues
+3. Waits for in-flight agent runs to complete (up to the configured `spring.lifecycle.timeout-per-shutdown-phase`)
+4. Cancels remaining agent subprocesses
+5. Releases workspace locks
+
+To enable graceful shutdown, add to your `application.yml` or `application.properties`:
+
+```yaml
+server:
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+```
+
+In headless mode, metrics and agent output buffers are flushed before exit.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.

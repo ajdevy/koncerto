@@ -208,7 +208,8 @@ class Beans {
         linearClientFactory: (ProjectConfig) -> LinearClient,
         workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager,
         runtimeStates: Map<String, RuntimeState>,
-        metricsRepository: MetricsRepository?
+        metricsRepository: MetricsRepository?,
+        compositeNotifier: CompositeNotifier?
     ): Orchestrator = Orchestrator(
         config = config,
         linearClientFactory = linearClientFactory,
@@ -218,6 +219,7 @@ class Beans {
         logger = logger,
         scope = scope,
         runtimeStates = runtimeStates,
-        metricsRepository = metricsRepository
+        metricsRepository = metricsRepository,
+        notifier = compositeNotifier
     )
 }

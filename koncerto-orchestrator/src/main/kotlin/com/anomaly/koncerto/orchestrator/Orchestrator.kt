@@ -6,6 +6,7 @@ import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.notifications.CompositeNotifier
 import com.anomaly.koncerto.notifications.NotificationEvent
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.logging.StructuredLogger
@@ -26,7 +27,8 @@ class Orchestrator(
     private val logger: StructuredLogger,
     private val scope: CoroutineScope,
     private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
-    private val metricsRepository: MetricsRepository? = null
+    private val metricsRepository: MetricsRepository? = null,
+    private val notifier: CompositeNotifier? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -62,7 +64,7 @@ class Orchestrator(
                 workspaces = ws,
                 issueProjectMap = issueProjectMap,
                 metricsRepository = metricsRepository,
-                notifier = null,
+                notifier = notifier,
                 notificationsConfig = pc.notifications
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)

@@ -19,5 +19,6 @@ dependencies {
     testImplementation(project(":koncerto-logging"))
     testImplementation(project(":koncerto-workspace"))
     testImplementation(project(":koncerto-workflow"))
+    testImplementation(project(":koncerto-notifications"))
 }
 

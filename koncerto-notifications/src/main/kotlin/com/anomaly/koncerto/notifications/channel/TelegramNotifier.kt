@@ -5,6 +5,8 @@ import com.anomaly.koncerto.notifications.Notifier
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -17,15 +19,17 @@ class TelegramNotifier(
     override suspend fun send(event: NotificationEvent) {
         val text = formatTelegram(event)
         val payload = Json.encodeToString(SendMessage(chatId = chatId, text = text))
-        val conn = URL("https://api.telegram.org/bot$botToken/sendMessage").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        try {
-            OutputStreamWriter(conn.outputStream).use { it.write(payload) }
-            conn.responseCode
-        } finally {
-            conn.disconnect()
+        withContext(Dispatchers.IO) {
+            val conn = URL("https://api.telegram.org/bot$botToken/sendMessage").openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            try {
+                OutputStreamWriter(conn.outputStream).use { it.write(payload) }
+                conn.responseCode
+            } finally {
+                conn.disconnect()
+            }
         }
     }
 
