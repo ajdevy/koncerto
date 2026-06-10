@@ -736,6 +736,43 @@ class DispatchServiceTest {
         assertThat(resolved.kind).isEqualTo("codex")
     }
 
+    @Test
+    fun `stage config agent overrides routing rule`() {
+        val agents = mapOf(
+            "routed" to AgentProviderConfig(kind = "codex"),
+            "staged" to AgentProviderConfig(kind = "opencode", model = "claude")
+        )
+        val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "routed", priority = 10))
+        val stages = mapOf("todo" to StageAgentConfig(
+            prompt = null, model = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = null,
+            agent = "staged"
+        ))
+        val (svc, _) = createServiceWithState(config(
+            agents = agents, routingRules = rules, stages = stages
+        ))
+        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend"))
+        val stage = svc.projectConfig.agent.stages["todo"]
+        val resolved = svc.resolveAgent(issue, stage)
+        assertThat(resolved.kind).isEqualTo("opencode")
+        assertThat(resolved.model).isEqualTo("claude")
+    }
+
+    @Test
+    fun `label agent prefix overrides routing rule`() {
+        val agents = mapOf(
+            "routed" to AgentProviderConfig(kind = "codex"),
+            "label-agent" to AgentProviderConfig(kind = "opencode")
+        )
+        val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "routed", priority = 10))
+        val (svc, _) = createServiceWithState(config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend", "agent:label-agent"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("opencode")
+    }
+
     companion object {
         fun issue(
             id: String, identifier: String, state: String,

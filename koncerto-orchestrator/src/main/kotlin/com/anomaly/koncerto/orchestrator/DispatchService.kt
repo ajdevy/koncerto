@@ -139,42 +139,50 @@ class DispatchService(
     }
 
     internal fun resolveAgent(issue: Issue, stageConfig: StageAgentConfig?): ResolvedAgent {
-        val routed = evaluateRoutingRules(issue)
-        if (routed != null) return routed
-
         val stageProvider = stageConfig?.agent?.let { projectConfig.agent.agents[it] }
-
-        val baseKind = stageProvider?.kind
-            ?: stageConfig?.agentKind
-            ?: projectConfig.agent.kind
-        val baseCommand = stageProvider?.command
-            ?: stageConfig?.command
-            ?: projectConfig.agent.command
-        val baseModel = stageProvider?.model
-            ?: stageConfig?.model
 
         val labelProvider = issue.labels.firstNotNullOfOrNull { label ->
             val prefix = "agent:"
             if (label.startsWith(prefix)) projectConfig.agent.agents[label.removePrefix(prefix)] else null
         }
 
-        val finalKind = labelProvider?.kind ?: baseKind
-        val finalCommand = labelProvider?.command ?: baseCommand
+        val result = if (stageProvider != null || labelProvider != null) {
+            val baseKind = stageProvider?.kind
+                ?: stageConfig?.agentKind
+                ?: projectConfig.agent.kind
+            val baseCommand = stageProvider?.command
+                ?: stageConfig?.command
+                ?: projectConfig.agent.command
+            val baseModel = stageProvider?.model
+                ?: stageConfig?.model
+
+            val finalKind = labelProvider?.kind ?: baseKind
+            val finalCommand = labelProvider?.command ?: baseCommand
+            val finalModel = labelProvider?.model ?: baseModel
+
+            if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
+                logger.warn("agent_provider_not_found", mapOf(
+                    "agent_name" to stageConfig.agent,
+                    "project_slug" to projectSlug
+                ))
+            }
+
+            ResolvedAgent(finalKind, finalCommand, finalModel)
+        } else {
+            val routed = evaluateRoutingRules(issue)
+            if (routed != null) routed
+            else ResolvedAgent(
+                kind = stageConfig?.agentKind ?: projectConfig.agent.kind,
+                command = stageConfig?.command ?: projectConfig.agent.command,
+                model = stageConfig?.model
+            )
+        }
 
         val labelModel = issue.labels.firstNotNullOfOrNull { label ->
             val prefix = "model:"
             if (label.startsWith(prefix)) label.removePrefix(prefix) else null
         }
-        val finalModel = labelModel ?: labelProvider?.model ?: baseModel
-
-        if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
-            logger.warn("agent_provider_not_found", mapOf(
-                "agent_name" to stageConfig.agent,
-                "project_slug" to projectSlug
-            ))
-        }
-
-        return ResolvedAgent(finalKind, finalCommand, finalModel)
+        return if (labelModel != null) result.copy(model = labelModel) else result
     }
 
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
