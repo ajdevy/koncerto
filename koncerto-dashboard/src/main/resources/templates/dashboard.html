@@ -46,6 +46,8 @@
         </table>
         <h2>Retrying</h2>
         <table id="retrying"><thead><tr><th>Identifier</th><th>Attempt</th><th>Error</th></tr></thead><tbody></tbody></table>
+        <h2>Blocked</h2>
+        <table id="blocked"><thead><tr><th>Identifier</th><th>Title</th><th>Blocked By</th><th>URL</th></tr></thead><tbody></tbody></table>
     </section>
 
     <section id="history">
@@ -90,6 +92,10 @@
             }).join('');
             const rt = document.querySelector('#retrying tbody');
             rt.innerHTML = s.retrying.map(x => `<tr><td>${x.identifier}</td><td>${x.attempt}</td><td>${x.error ?? ''}</td></tr>`).join('');
+            const bl = document.querySelector('#blocked tbody');
+            bl.innerHTML = (s.blocked || []).map(x => 
+                `<tr><td>${x.issueIdentifier}</td><td>${x.title}</td><td>${x.blockedBy.join(', ') || '-'}</td><td>${x.url ? '<a href="'+x.url+'" target="_blank">link</a>' : ''}</td></tr>`
+            ).join('');
         }
 
         function toggleOutput(id) {

@@ -34,6 +34,7 @@ class ApiV1Controller @Autowired constructor(
     data class StateSnapshot(
         val running: List<RunningRow>,
         val retrying: List<RetryingRow>,
+        val blocked: List<BlockedRow>,
         val tokenTotals: Totals,
         val rateLimits: Map<String, String>
     )
@@ -58,6 +59,15 @@ class ApiV1Controller @Autowired constructor(
         val attempt: Int,
         val dueAtMs: Long,
         val error: String?
+    )
+
+    @Serializable
+    data class BlockedRow(
+        val issueId: String,
+        val issueIdentifier: String,
+        val title: String,
+        val url: String?,
+        val blockedBy: List<String> = emptyList()
     )
 
     @Serializable
@@ -97,6 +107,24 @@ class ApiV1Controller @Autowired constructor(
                 RetryingRow(it.issueId, it.identifier, it.attempt, it.dueAtMs, it.error)
             }
         }
+        val allBlocked = projects.values.flatMap { pr ->
+            pr.state.blocked.mapNotNull { id ->
+                val runningEntry = pr.state.running[id]
+                val identifier = runningEntry?.issue?.identifier
+                    ?: pr.state.retryAttempts[id]?.identifier
+                    ?: id
+                val title = runningEntry?.issue?.title ?: ""
+                val url = runningEntry?.issue?.url
+                val blockers = runningEntry?.issue?.blockedBy?.mapNotNull { it.identifier } ?: emptyList()
+                BlockedRow(
+                    issueId = id,
+                    issueIdentifier = identifier,
+                    title = title,
+                    url = url,
+                    blockedBy = blockers
+                )
+            }
+        }
         val tokens = projects.values.fold(Totals(0, 0, 0, 0)) { acc, pr ->
             val t = pr.state.tokenTotals
             Totals(
@@ -108,7 +136,7 @@ class ApiV1Controller @Autowired constructor(
         }
         val firstState = projects.values.firstOrNull()?.state
         val limits = firstState?.codexRateLimits?.mapValues { it.value.toString() } ?: emptyMap()
-        return Mono.just(StateSnapshot(allRunning, allRetrying, tokens, limits))
+        return Mono.just(StateSnapshot(allRunning, allRetrying, allBlocked, tokens, limits))
     }
 
     @Serializable
