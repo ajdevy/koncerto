@@ -3,6 +3,7 @@ package com.anomaly.koncerto.orchestrator
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.core.config.NotificationsConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
@@ -22,9 +23,11 @@ import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 
 private const val AGENT_LABEL_PREFIX = "agent:"
@@ -260,33 +263,72 @@ class DispatchService(
         if (attempt != null) extra["attempt"] = attempt.toString()
         logger.info("dispatch_config", extra)
 
-        scope.launch {
-            if (!state.claimed.add(issue.id)) return@launch
-            issueProjectMap[issue.id] = projectSlug
+        val threadId = java.util.UUID.randomUUID().toString()
+        val turnId = java.util.UUID.randomUUID().toString()
+        val entry = RunningEntry(
+            issue = issue,
+            threadId = threadId,
+            turnId = turnId,
+            startedAt = Instant.now(),
+            lastCodexTimestamp = null
+        )
+        state.running[issue.id] = entry
 
-            val entry = state.running[issue.id]
+        scope.launch {
+            if (!state.claimed.add(issue.id)) {
+                state.running.remove(issue.id)
+                return@launch
+            }
+            issueProjectMap[issue.id] = projectSlug
+            agentIdToIssueId[threadId] = issue.id
 
             val result = agentRunner.run(
                 issue, attempt, prompt, resolved.kind, resolved.command,
                 turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
                 stallTimeoutMs = projectConfig.agent.stallTimeoutMs
             )
+
+            scope.launch {
+                agentRunner.events().collect { event ->
+                    if (event is AgentEvent.TurnCompleted) {
+                        event.usage?.let { usage ->
+                            val current = state.running[issue.id]
+                            current?.let { updated ->
+                                state.running[issue.id] = updated.copy(
+                                    inputTokens = updated.inputTokens + usage.inputTokens,
+                                    outputTokens = updated.outputTokens + usage.outputTokens,
+                                    totalTokens = updated.totalTokens + usage.totalTokens,
+                                    turnCount = updated.turnCount + 1
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             result.onSuccess {
                 ensureActive()
                 state.claimed.remove(issue.id)
+                agentIdToIssueId.remove(threadId)
+                issueProjectMap.remove(issue.id)
+                val finalEntry = state.running.remove(issue.id)
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
                     projectSlug = projectSlug,
                     result = "success",
-                    inputTokens = entry?.inputTokens ?: 0,
-                    outputTokens = entry?.outputTokens ?: 0,
-                    totalTokens = entry?.totalTokens ?: 0
+                    inputTokens = finalEntry?.inputTokens ?: 0,
+                    outputTokens = finalEntry?.outputTokens ?: 0,
+                    totalTokens = finalEntry?.totalTokens ?: 0
                 )
-                handleWorkplanIfPresent(issue, stageConfig, entry)
-                handleNormalCompletion(issue, stageConfig, entry)
+                handleWorkplanIfPresent(issue, stageConfig, finalEntry)
+                handleNormalCompletion(issue, stageConfig, finalEntry)
             }.onFailure { err ->
                 ensureActive()
+                state.claimed.remove(issue.id)
+                agentIdToIssueId.remove(threadId)
+                issueProjectMap.remove(issue.id)
+                state.running.remove(issue.id)
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
@@ -445,17 +487,17 @@ class DispatchService(
     }
 
     suspend fun handleClarification(issueId: String, clarificationContent: String) {
-        val issue = linear.fetchIssueById(issueId) ?: return
+        val issue = withContext(Dispatchers.IO) { linear.fetchIssueById(issueId) } ?: return
         logger.info("clarification_received", mapOf(
             "issue_id" to issueId,
             "issue_identifier" to issue.identifier
         ))
 
-        linear.createComment(issueId, clarificationContent)
+        withContext(Dispatchers.IO) { linear.createComment(issueId, clarificationContent) }
 
-        val blockedStateId = linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
+        val blockedStateId = withContext(Dispatchers.IO) { linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState) }
         if (blockedStateId != null) {
-            linear.updateIssueState(issueId, blockedStateId)
+            withContext(Dispatchers.IO) { linear.updateIssueState(issueId, blockedStateId) }
             logger.info("state_transitioned", mapOf(
                 "issue_id" to issueId,
                 "from_state" to issue.state,
@@ -472,7 +514,7 @@ class DispatchService(
             else -> null
         }
         if (assigneeId != null) {
-            linear.updateIssueAssignee(issueId, assigneeId)
+            withContext(Dispatchers.IO) { linear.updateIssueAssignee(issueId, assigneeId) }
             logger.info("assignee_updated", mapOf(
                 "issue_id" to issueId,
                 "assignee_id" to assigneeId
