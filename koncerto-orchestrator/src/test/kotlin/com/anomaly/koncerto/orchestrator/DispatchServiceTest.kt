@@ -5,12 +5,14 @@ import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.AgentProviderConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
+import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.TrackerConfig
 import com.anomaly.koncerto.core.config.WorkspaceConfig
@@ -375,6 +377,68 @@ class DispatchServiceTest {
         )
         runDispatchAwait(svc)
         assertThat(trackingLinear.transitionedIssueId).isEqualTo(null as String?)
+    }
+
+    @Test
+    fun `transitionOnComplete creates follow-up issue when followUp config set`() {
+        val trackingLinear = TrackingLinearClient()
+        trackingLinear.createIssueResult = issue("b", "ENG-2", "Todo")
+        val stages = mapOf(
+            "in progress" to StageAgentConfig(
+                prompt = null, model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = "Done",
+                followUp = FollowUpConfig(
+                    titleTemplate = "PR Review: {{ issue.identifier }}",
+                    state = "Todo",
+                    linkType = "blocks"
+                )
+            )
+        )
+        val state = RuntimeState()
+        val svc = createService(
+            config = config(stages = stages),
+            state = state,
+            linear = trackingLinear,
+            candidates = listOf(issue("a", "ENG-1", "In Progress"))
+        )
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        runBlocking {
+            svc.transitionOnComplete(issue("a", "ENG-1", "In Progress"), stage)
+        }
+
+        assertThat(trackingLinear.transitionedIssueId).isEqualTo("a")
+        assertThat(trackingLinear.createdIssueTitle).isEqualTo("PR Review: ENG-1")
+        assertThat(trackingLinear.createdIssueState).isEqualTo("Todo")
+        assertThat(trackingLinear.linkedSourceId).isEqualTo("a")
+        assertThat(trackingLinear.linkedTargetId).isEqualTo("b")
+        assertThat(trackingLinear.linkedType).isEqualTo("blocks")
+    }
+
+    @Test
+    fun `transitionOnComplete without followUp does not create follow-up issue`() {
+        val trackingLinear = TrackingLinearClient()
+        trackingLinear.createIssueResult = issue("b", "ENG-2", "Todo")
+        val stages = mapOf(
+            "in progress" to StageAgentConfig(
+                prompt = null, model = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = "Done"
+            )
+        )
+        val state = RuntimeState()
+        val svc = createService(
+            config = config(stages = stages),
+            state = state,
+            linear = trackingLinear,
+            candidates = listOf(issue("a", "ENG-1", "In Progress"))
+        )
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        runBlocking {
+            svc.transitionOnComplete(issue("a", "ENG-1", "In Progress"), stage)
+        }
+
+        assertThat(trackingLinear.transitionedIssueId).isEqualTo("a")
+        assertThat(trackingLinear.createdIssueTitle).isNull()
+        assertThat(trackingLinear.linkedSourceId).isNull()
     }
 
     @Test
@@ -836,6 +900,11 @@ private class SimpleLinear(private val candidates: List<Issue>) : LinearClient {
     override suspend fun createComment(issueId: String, body: String) {}
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? = null
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = null
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
 }
 
 private class TrackingLinearClient : LinearClient {
@@ -845,6 +914,14 @@ private class TrackingLinearClient : LinearClient {
     var commentedBody: String? = null
     var assignedIssueId: String? = null
     var assignedUserId: String? = null
+    var createdIssueTitle: String? = null
+    var createdIssueState: String? = null
+    var createdIssueLabels: List<String>? = null
+    var linkedSourceId: String? = null
+    var linkedTargetId: String? = null
+    var linkedType: String? = null
+    var createIssueResult: Issue? = null
+    var createLinkResult: Boolean = true
     private val candidates = mutableListOf<Issue>()
 
     fun addIssue(issue: Issue) { candidates.add(issue) }
@@ -869,6 +946,21 @@ private class TrackingLinearClient : LinearClient {
     }
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? =
         candidates.firstOrNull { it.id == issueId }?.creator
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? {
+        createdIssueTitle = title
+        createdIssueState = state
+        createdIssueLabels = labels
+        return createIssueResult
+    }
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean {
+        linkedSourceId = sourceIssueId
+        linkedTargetId = targetIssueId
+        linkedType = type
+        return createLinkResult
+    }
 }
 
 private class ThrowingLinearClient : LinearClient {
@@ -888,6 +980,12 @@ private class ThrowingLinearClient : LinearClient {
     override suspend fun createComment(issueId: String, body: String) { throw RuntimeException("API down") }
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) { throw RuntimeException("API down") }
     override suspend fun fetchIssueCreator(issueId: String): com.anomaly.koncerto.core.model.UserRef? =
+        throw RuntimeException("API down")
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = throw RuntimeException("API down")
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean =
         throw RuntimeException("API down")
 }
 

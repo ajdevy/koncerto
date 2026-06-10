@@ -3,6 +3,7 @@ package com.anomaly.koncerto.orchestrator
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
+import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
@@ -269,7 +270,7 @@ class DispatchService(
         }
     }
 
-    private suspend fun transitionOnComplete(issue: Issue, stageConfig: StageAgentConfig?) {
+    internal suspend fun transitionOnComplete(issue: Issue, stageConfig: StageAgentConfig?) {
         val targetState = stageConfig?.onCompleteState ?: return
         try {
             val stateId = linear.resolveStateId(projectSlug, targetState)
@@ -291,6 +292,38 @@ class DispatchService(
                 "issue_id" to issue.id,
                 "target_state" to targetState
             ), e)
+            return
+        }
+
+        val followUp = stageConfig?.followUp ?: return
+        val renderedTitle = FollowUpRenderer.render(followUp.titleTemplate, issue)
+        val renderedDescription = followUp.descriptionTemplate?.let { FollowUpRenderer.render(it, issue) }
+
+        val created = linear.createIssue(
+            projectSlug, renderedTitle, followUp.state,
+            renderedDescription, followUp.labels
+        )
+        if (created == null) {
+            logger.warn("follow_up_creation_failed", mapOf("source_issue_id" to issue.id))
+            return
+        }
+
+        logger.info("follow_up_created", mapOf(
+            "source_issue_id" to issue.id,
+            "source_identifier" to issue.identifier,
+            "follow_up_id" to created.id,
+            "follow_up_identifier" to created.identifier
+        ))
+
+        if (followUp.linkType.isNotBlank()) {
+            val linked = linear.createLink(issue.id, created.id, followUp.linkType)
+            if (!linked) {
+                logger.warn("follow_up_link_failed", mapOf(
+                    "source" to issue.id,
+                    "target" to created.id,
+                    "link_type" to followUp.linkType
+                ))
+            }
         }
     }
 

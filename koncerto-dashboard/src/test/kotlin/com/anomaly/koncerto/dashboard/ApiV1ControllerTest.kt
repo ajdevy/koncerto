@@ -58,6 +58,11 @@ private fun createOrchestrator(
         override suspend fun createComment(issueId: String, body: String) {}
         override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
         override suspend fun fetchIssueCreator(issueId: String) = null
+        override suspend fun createIssue(
+            projectSlug: String, title: String, state: String,
+            description: String?, labels: List<String>
+        ): Issue? = null
+        override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
     }
     return Orchestrator(
         config = config,
