@@ -4,6 +4,8 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNull
 import assertk.assertions.isNotNull
+import com.anomaly.koncerto.core.config.SubtaskDef
+import com.anomaly.koncerto.core.config.SubtaskManifest
 import java.time.Instant
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -189,6 +191,34 @@ class AgentEventTest {
         val copied = original.copy(error = "err2")
         assertThat(copied.error).isEqualTo("err2")
         assertThat(copied.threadId).isEqualTo("t1")
+    }
+
+    @Test
+    fun `subtask events carry correct metadata`() {
+        val now = Instant.now()
+        val started = AgentEvent.SubtaskStarted(subtaskId = "step-1", issueId = "KONC-123")
+        assertThat(started.subtaskId).isEqualTo("step-1")
+        assertThat(started.issueId).isEqualTo("KONC-123")
+    }
+
+    @Test
+    fun `workplan ready event carries manifest`() {
+        val manifest = SubtaskManifest(
+            issueId = "KONC-123",
+            subtasks = listOf(SubtaskDef(id = "s1", description = "Test", prompt = "Do it"))
+        )
+        val event = AgentEvent.WorkplanReady(manifest = manifest, issueId = "KONC-123")
+        assertThat(event.manifest.subtasks.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `merge conflict event carries branch info`() {
+        val event = AgentEvent.MergeConflict(
+            subtaskId = "step-2",
+            branch = "subtask/KONC-123/step-2",
+            issueId = "KONC-123"
+        )
+        assertThat(event.branch).isEqualTo("subtask/KONC-123/step-2")
     }
 
     @Test

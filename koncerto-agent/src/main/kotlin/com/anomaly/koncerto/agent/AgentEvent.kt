@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.agent
 
+import com.anomaly.koncerto.core.config.SubtaskManifest
 import java.time.Instant
 
 sealed class AgentEvent {
@@ -94,6 +95,43 @@ sealed class AgentEvent {
         val toAgentId: String,
         val payload: String,
         override val pid: Long?,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class WorkplanReady(
+        val manifest: SubtaskManifest,
+        val issueId: String,
+        override val pid: Long? = null,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class SubtaskStarted(
+        val subtaskId: String,
+        val issueId: String,
+        override val pid: Long? = null,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class SubtaskCompleted(
+        val subtaskId: String,
+        val issueId: String,
+        override val pid: Long? = null,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class SubtaskFailed(
+        val subtaskId: String,
+        val issueId: String,
+        val error: String,
+        override val pid: Long? = null,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class MergeConflict(
+        val subtaskId: String,
+        val branch: String,
+        val issueId: String,
+        override val pid: Long? = null,
         override val timestamp: Instant = Instant.now()
     ) : AgentEvent()
 }
