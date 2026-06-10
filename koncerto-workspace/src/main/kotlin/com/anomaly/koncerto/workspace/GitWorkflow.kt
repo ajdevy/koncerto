@@ -4,11 +4,47 @@ import com.anomaly.koncerto.core.config.GitConfig
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Path
 
+sealed class MergeResult {
+    object SUCCESS : MergeResult()
+    object CONFLICT : MergeResult()
+}
+
 class GitWorkflow(
     private val config: GitConfig,
     private val logger: StructuredLogger
 ) {
     fun branchName(identifier: String): String = "${config.branchPrefix}$identifier"
+
+    open fun subtaskBranchName(issueIdentifier: String, subtaskId: String): String =
+        "subtask/$issueIdentifier/$subtaskId"
+
+    open fun createBranchFrom(workspacePath: Path, branchName: String, sourceBranch: String) {
+        if (!config.enabled) return
+        runGitSafe(workspacePath, "checkout", sourceBranch)
+        runGitSafe(workspacePath, "checkout", "-b", branchName)
+        logger.info("branch_created", mapOf(
+            "branch" to branchName,
+            "source" to sourceBranch,
+            "workspace" to workspacePath.toString()
+        ))
+    }
+
+    open fun mergeBranch(workspacePath: Path, sourceBranch: String, targetBranch: String): MergeResult {
+        if (!config.enabled) return MergeResult.SUCCESS
+        runGitSafe(workspacePath, "checkout", targetBranch)
+        val output = runGitSafe(workspacePath, "merge", sourceBranch) ?: ""
+        return if (output.contains("CONFLICT", ignoreCase = true)) {
+            MergeResult.CONFLICT
+        } else {
+            MergeResult.SUCCESS
+        }
+    }
+
+    open fun deleteBranch(workspacePath: Path, branchName: String) {
+        if (!config.enabled) return
+        runGitSafe(workspacePath, "branch", "-D", branchName)
+        logger.info("branch_deleted", mapOf("branch" to branchName))
+    }
 
     fun createBranch(workspacePath: Path, issueIdentifier: String) {
         if (!config.enabled) return
