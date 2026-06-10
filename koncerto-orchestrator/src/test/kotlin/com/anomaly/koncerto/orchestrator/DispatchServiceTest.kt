@@ -8,13 +8,17 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.agent.SubtaskRunner
 import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.AgentProviderConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
+import com.anomaly.koncerto.core.config.SubtaskManifest
+import com.anomaly.koncerto.core.config.SubtaskDef
 import com.anomaly.koncerto.core.config.TrackerConfig
+import com.anomaly.koncerto.core.config.WorkplanConfig
 import com.anomaly.koncerto.core.config.WorkspaceConfig
 import com.anomaly.koncerto.core.config.WorkflowDefinition
 import com.anomaly.koncerto.orchestrator.RetryEntry
@@ -25,6 +29,7 @@ import com.anomaly.koncerto.core.result.EmptyResult
 import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.HookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -35,6 +40,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 class DispatchServiceTest {
 

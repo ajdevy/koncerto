@@ -272,6 +272,7 @@ class DispatchService(
                 stallTimeoutMs = projectConfig.agent.stallTimeoutMs
             )
             result.onSuccess {
+                ensureActive()
                 state.claimed.remove(issue.id)
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
@@ -285,6 +286,7 @@ class DispatchService(
                 handleWorkplanIfPresent(issue, stageConfig, entry)
                 handleNormalCompletion(issue, stageConfig, entry)
             }.onFailure { err ->
+                ensureActive()
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
@@ -352,16 +354,15 @@ class DispatchService(
 
     suspend fun dispatchDueRetries(scope: CoroutineScope) {
         val now = System.currentTimeMillis()
-        val due = mutableListOf<MutableMap.MutableEntry<String, RetryEntry>>()
-        for (entry in state.retryAttempts.entries) {
-            if (entry.value.dueAtMs <= now) {
-                due.add(entry)
-            }
-        }
-        for (entry in due) {
+        val dueKeys = state.retryAttempts.entries
+            .filter { it.value.dueAtMs <= now }
+            .map { it.key }
+            .toList()
+
+        for (issueId in dueKeys) {
             scope.coroutineContext.ensureActive()
-            val issueId = entry.key
-            val retryEntry = entry.value
+            val retryEntry = state.retryAttempts.remove(issueId)
+            if (retryEntry == null) continue
             if (state.availableSlots() <= 0) break
             if (state.running.containsKey(issueId) || issueId in state.claimed) continue
             val issue = try {
@@ -372,10 +373,8 @@ class DispatchService(
             }
             if (issue == null) {
                 logger.warn("retry_fetch_failed", mapOf("issue_id" to issueId))
-                state.retryAttempts.remove(issueId)
                 continue
             }
-            state.retryAttempts.remove(issueId)
             state.running.remove(issueId)
             dispatch(issue, scope, retryEntry.attempt)
         }
