@@ -15,6 +15,7 @@ dependencies {
     implementation(project(":koncerto-orchestrator"))
     implementation(project(":koncerto-metrics"))
     implementation(project(":koncerto-dashboard"))
+    implementation(project(":koncerto-notifications"))
 
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.spring.boot.starter.actuator)
@@ -22,6 +23,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.reactive)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.snakeyaml)
+    implementation("com.sun.mail:jakarta.mail:2.0.1")
 
     testImplementation(libs.spring.boot.starter.test)
     testImplementation(libs.junit5.jupiter)

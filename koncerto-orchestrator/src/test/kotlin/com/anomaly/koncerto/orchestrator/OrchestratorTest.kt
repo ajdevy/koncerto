@@ -205,7 +205,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -232,7 +232,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
         assertThat(state.claimed.contains("1")).isEqualTo(false)
     }
@@ -258,7 +258,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isTrue()
     }
 
@@ -282,7 +282,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.size).isEqualTo(0)
     }
 
@@ -318,7 +318,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey(blockerId)).isEqualTo(false)
         assertThat(state.claimed.contains(blockerId)).isEqualTo(false)
         assertThat(state.running.containsKey(issueId)).isEqualTo(false)
@@ -347,7 +347,7 @@ class OrchestratorTest {
             scope = CoroutineScope(Dispatchers.Unconfined),
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
-        orch.reconcile(orch.projects.values.first())
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isTrue()
     }
 

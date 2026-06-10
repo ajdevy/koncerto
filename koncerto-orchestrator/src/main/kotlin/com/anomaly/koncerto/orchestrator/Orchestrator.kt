@@ -6,6 +6,7 @@ import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.notifications.NotificationEvent
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -28,6 +29,9 @@ class Orchestrator(
     private val metricsRepository: MetricsRepository? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
+
+    @Volatile
+    var shutdownRequested = false
 
     data class ProjectRuntime(
         val config: ProjectConfig,
@@ -57,7 +61,9 @@ class Orchestrator(
                 projectSlug = slug,
                 workspaces = ws,
                 issueProjectMap = issueProjectMap,
-                metricsRepository = metricsRepository
+                metricsRepository = metricsRepository,
+                notifier = null,
+                notificationsConfig = pc.notifications
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }
@@ -72,11 +78,7 @@ class Orchestrator(
                     handleAgentEvent(ev)
                 }
             }
-            tick()
-            while (isActive) {
-                delay(config.pollIntervalMs)
-                tick()
-            }
+            tickLoop()
         }
     }
 
@@ -84,10 +86,36 @@ class Orchestrator(
         loopJob?.cancel()
     }
 
+    fun restart() {
+        shutdownRequested = false
+        for ((_, pr) in projects) {
+            pr.state.clearAll()
+        }
+        scope.launch { tickLoop() }
+    }
+
+    fun requestShutdown(): Boolean {
+        shutdownRequested = true
+        return runningAgentsCount() > 0
+    }
+
+    fun runningAgentsCount(): Int = projects.values.sumOf { it.state.running.size }
+
+    internal suspend fun tickLoop() {
+        while (true) {
+            if (shutdownRequested) {
+                delay(config.pollIntervalMs)
+                continue
+            }
+            tick()
+            delay(config.pollIntervalMs)
+        }
+    }
+
     private suspend fun tick() {
         for ((slug, pr) in projects) {
             try {
-                reconcile(pr)
+                reconcile(slug, pr)
                 runPreflight(pr)
                 pr.dispatch.dispatchDueRetries(scope)
                 pr.dispatch.fetchAndDispatch(scope)
@@ -97,7 +125,7 @@ class Orchestrator(
         }
     }
 
-    internal suspend fun reconcile(pr: ProjectRuntime) {
+    internal suspend fun reconcile(slug: String, pr: ProjectRuntime) {
         val state = pr.state
         if (state.running.isEmpty()) return
         val ids = state.running.keys.toList()
@@ -125,6 +153,16 @@ class Orchestrator(
                     state.running.remove(id)
                     state.claimed.remove(id)
                     state.removeOutput(id)
+                    val nc = pr.config.notifications
+                    if (nc.onStalled && pr.dispatch.notifier != null) {
+                        pr.dispatch.notifier.send(NotificationEvent.AgentStalled(
+                            projectSlug = slug,
+                            issueId = id,
+                            issueIdentifier = entry.issue.identifier,
+                            title = entry.issue.title,
+                            stallDurationMs = 0
+                        ))
+                    }
                 }
             }
             for ((id, entry) in state.running) {

@@ -73,7 +73,14 @@ data class ServiceConfig(
             val tracker = parseTrackerConfig(map["tracker"] as? Map<*, *>)
             val workspace = parseWorkspaceConfig(map["workspace"] as? Map<*, *>, workflowFileDir)
             val agent = parseAgentConfig(map["agent"] as? Map<*, *>)
-            return ProjectConfig(tracker = tracker, workspace = workspace, agent = agent)
+            val rateLimiter = parseRateLimiterConfig(map["rate_limiter"] as? Map<*, *>)
+            val circuitBreaker = parseCircuitBreakerConfig(map["circuit_breaker"] as? Map<*, *>)
+            val notifications = parseNotificationsConfig(map["notifications"] as? Map<*, *>)
+            return ProjectConfig(
+                tracker = tracker, workspace = workspace, agent = agent,
+                rateLimiter = rateLimiter, circuitBreaker = circuitBreaker,
+                notifications = notifications
+            )
         }
 
         internal fun parseTrackerConfig(map: Map<*, *>?): TrackerConfig {
@@ -139,6 +146,8 @@ data class ServiceConfig(
             val turnTimeoutMs = (map?.get("turn_timeout_ms") as? Number)?.toLong() ?: 3_600_000L
             val readTimeoutMs = (map?.get("read_timeout_ms") as? Number)?.toLong() ?: 5_000L
             val stallTimeoutMs = (map?.get("stall_timeout_ms") as? Number)?.toLong() ?: 300_000L
+            val heartbeatIntervalMs = (map?.get("heartbeat_interval_ms") as? Number)?.toLong() ?: 30_000L
+            val heartbeatTimeoutMs = (map?.get("heartbeat_timeout_ms") as? Number)?.toLong() ?: 90_000L
             val stages = parseStages(map)
             val agents = parseAgents(map)
             val routingRules = parseRoutingRules(map)
@@ -153,6 +162,8 @@ data class ServiceConfig(
                 turnTimeoutMs = turnTimeoutMs,
                 readTimeoutMs = readTimeoutMs,
                 stallTimeoutMs = stallTimeoutMs,
+                heartbeatIntervalMs = heartbeatIntervalMs,
+                heartbeatTimeoutMs = heartbeatTimeoutMs,
                 stages = stages,
                 agents = agents,
                 routingRules = routingRules
@@ -217,6 +228,58 @@ data class ServiceConfig(
                     maxConcurrent = (agentMap["max_concurrent"] as? Number)?.toInt()
                 )
             }.toMap()
+        }
+
+        internal fun parseRateLimiterConfig(map: Map<*, *>?): RateLimiterConfig? {
+            if (map == null) return null
+            return RateLimiterConfig(
+                requestsPerSecond = (map["requests_per_second"] as? Number)?.toInt() ?: 10,
+                maxBurst = (map["max_burst"] as? Number)?.toInt() ?: 20
+            )
+        }
+
+        internal fun parseCircuitBreakerConfig(map: Map<*, *>?): CircuitBreakerConfig? {
+            if (map == null) return null
+            return CircuitBreakerConfig(
+                failureThreshold = (map["failure_threshold"] as? Number)?.toInt() ?: 5,
+                resetTimeoutMs = (map["reset_timeout_ms"] as? Number)?.toLong() ?: 30_000
+            )
+        }
+
+        internal fun parseNotificationsConfig(map: Map<*, *>?): NotificationsConfig {
+            if (map == null) return NotificationsConfig(onCompleted = false, onFailed = false, onStalled = false, onClarification = false)
+            val telegramMap = map["telegram"] as? Map<*, *>
+            val emailMap = map["email"] as? Map<*, *>
+            val webhookMap = map["webhook"] as? Map<*, *>
+            return NotificationsConfig(
+                onCompleted = (map["on_completed"] as? Boolean)
+                    ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                onFailed = (map["on_failed"] as? Boolean)
+                    ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                onStalled = (map["on_stalled"] as? Boolean)
+                    ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                onClarification = (map["on_clarification"] as? Boolean)
+                    ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                telegram = telegramMap?.let { TelegramConfig(
+                    botToken = resolveEnvRef(it["bot_token"] as? String) ?: "",
+                    chatId = it["chat_id"] as? String ?: ""
+                )},
+                email = emailMap?.let { EmailConfig(
+                    smtpHost = it["smtp_host"] as? String ?: "",
+                    smtpPort = (it["smtp_port"] as? Number)?.toInt() ?: 587,
+                    username = resolveEnvRef(it["username"] as? String),
+                    password = resolveEnvRef(it["password"] as? String),
+                    from = it["from"] as? String ?: "",
+                    to = it["to"] as? String ?: ""
+                )},
+                webhook = webhookMap?.let { WebhookConfig(
+                    url = it["url"] as? String ?: "",
+                    headers = (it["headers"] as? Map<*, *>)
+                        ?.mapKeys { k -> k.key.toString() }
+                        ?.mapValues { v -> resolveEnvRef(v.value as? String) ?: v.value.toString() }
+                        ?: emptyMap()
+                )}
+            )
         }
 
         internal fun parseHooksConfig(map: Map<*, *>?): HooksConfig = HooksConfig(

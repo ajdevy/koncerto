@@ -5,6 +5,7 @@ plugins {
 
 dependencies {
     implementation(project(":koncerto-core"))
+    implementation(project(":koncerto-logging"))
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.core)

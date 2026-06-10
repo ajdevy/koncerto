@@ -11,6 +11,7 @@ interface AgentRuntime {
     fun send(method: String, params: JsonElement? = null): String
     fun events(): Flow<AgentEvent>
     val output: SharedFlow<String>
+    fun isAlive(): Boolean = true
     fun stop()
 }
 

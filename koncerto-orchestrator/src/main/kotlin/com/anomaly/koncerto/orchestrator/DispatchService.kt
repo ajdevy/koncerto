@@ -1,6 +1,8 @@
 package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.core.config.NotificationsConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.FollowUpConfig
@@ -9,6 +11,8 @@ import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.metrics.MetricsRepository
+import com.anomaly.koncerto.notifications.CompositeNotifier
+import com.anomaly.koncerto.notifications.NotificationEvent
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
@@ -34,9 +38,15 @@ class DispatchService(
     private val workspaces: WorkspaceManager? = null,
     private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs),
     private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
-    private val metricsRepository: MetricsRepository? = null
+    private val metricsRepository: MetricsRepository? = null,
+    val notifier: CompositeNotifier? = null,
+    private val notificationsConfig: NotificationsConfig? = null
 ) {
+    @Volatile
+    var shutdownRequested = false
+
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
+        if (shutdownRequested) return
         val candidates = try {
             linear.fetchCandidateIssues(projectSlug, projectConfig.tracker.activeStates)
         } catch (e: Exception) {
@@ -232,6 +242,17 @@ class DispatchService(
                         mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
                     )
                     transitionOnComplete(issue, stageConfig)
+                    if (notificationsConfig?.onCompleted == true && notifier != null) {
+                        notifier.send(NotificationEvent.AgentCompleted(
+                            projectSlug = projectSlug,
+                            issueId = issue.id,
+                            issueIdentifier = issue.identifier,
+                            title = issue.title,
+                            tokenUsage = state.running[issue.id]?.let {
+                                TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+                            }
+                        ))
+                    }
                 }
             }.onFailure { err ->
                 metricsRepository?.updateAfterRun(
@@ -244,6 +265,15 @@ class DispatchService(
                     totalTokens = 0
                 )
                 scheduleRetry(issue, err.message ?: "unknown")
+                if (notificationsConfig?.onFailed == true && notifier != null) {
+                    notifier.send(NotificationEvent.AgentFailed(
+                        projectSlug = projectSlug,
+                        issueId = issue.id,
+                        issueIdentifier = issue.identifier,
+                        title = issue.title,
+                        error = err.message ?: "unknown"
+                    ))
+                }
             }
         }
     }
@@ -370,6 +400,15 @@ class DispatchService(
         }
 
         state.blocked.add(issueId)
+
+        if (notificationsConfig?.onClarification == true && notifier != null) {
+            notifier.send(NotificationEvent.ClarificationRequested(
+                projectSlug = projectSlug,
+                issueId = issueId,
+                issueIdentifier = issue.identifier,
+                title = issue.title
+            ))
+        }
     }
 
 }

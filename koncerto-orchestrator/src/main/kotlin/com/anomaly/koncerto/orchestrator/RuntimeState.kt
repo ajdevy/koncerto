@@ -92,4 +92,13 @@ class RuntimeState {
         removeOutput(issueId)
         return true
     }
+
+    fun clearAll() {
+        running.clear()
+        claimed.clear()
+        retryAttempts.clear()
+        completed.clear()
+        blocked.clear()
+        tokenTotals = TokenTotals()
+    }
 }

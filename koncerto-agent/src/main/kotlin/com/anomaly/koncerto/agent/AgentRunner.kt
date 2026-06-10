@@ -51,7 +51,8 @@ class DefaultAgentRunner(
     private val logger: StructuredLogger,
     private val runtimeFactory: AgentRuntimeFactory? = null,
     private val gitWorkflow: GitWorkflow? = null,
-    private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null
+    private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null,
+    private val heartbeatIntervalMs: Long = 30_000L
 ) : AgentRunner {
 
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
@@ -109,6 +110,15 @@ class DefaultAgentRunner(
                         }
                     }
 
+                    val aliveJob = launch {
+                        while (true) {
+                            delay(heartbeatIntervalMs)
+                            if (!runtime.isAlive()) {
+                                throw IllegalStateException("agent_process_died")
+                            }
+                        }
+                    }
+
                     val rendered = PromptRenderer.render(
                         prompt, mapOf(
                             "issue" to issue.toTemplateMap(),
@@ -146,6 +156,7 @@ class DefaultAgentRunner(
                     runtime.stop()
                     outputJob.cancel()
                     stallJob.cancel()
+                    aliveJob.cancel()
                 }
             }
         } catch (e: Exception) {

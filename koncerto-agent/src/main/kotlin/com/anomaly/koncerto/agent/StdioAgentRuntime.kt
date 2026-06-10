@@ -177,6 +177,8 @@ abstract class StdioAgentRuntime(
         return TokenUsage(input, output, total)
     }
 
+    override fun isAlive(): Boolean = process?.isAlive == true
+
     override fun events(): Flow<AgentEvent> = events.receiveAsFlow()
 
     override fun send(method: String, params: JsonElement?): String {

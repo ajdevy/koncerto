@@ -8,4 +8,5 @@ sealed class LinearError(message: String, cause: Throwable? = null) : Exception(
     class GraphQlErrors(message: String) : LinearError("linear_graphql_errors: $message")
     class UnknownPayload : LinearError("linear_unknown_payload")
     class MissingEndCursor : LinearError("linear_missing_end_cursor")
+    class RateLimited(message: String) : LinearError("linear_rate_limited: $message")
 }

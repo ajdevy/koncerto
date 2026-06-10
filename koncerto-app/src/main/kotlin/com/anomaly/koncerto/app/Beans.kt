@@ -3,13 +3,25 @@ package com.anomaly.koncerto.app
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentRunner
+import com.anomaly.koncerto.core.CircuitBreaker
+import com.anomaly.koncerto.core.TokenBucketRateLimiter
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.linear.DefaultLinearClient
 import com.anomaly.koncerto.linear.LinearClient
+import com.anomaly.koncerto.linear.LinearGraphQLClient
+import com.anomaly.koncerto.linear.RateLimitedLinearClient
 import com.anomaly.koncerto.logging.FileSink
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StderrSink
 import com.anomaly.koncerto.logging.StructuredLogger
+import com.anomaly.koncerto.notifications.CompositeNotifier
+import com.anomaly.koncerto.notifications.Notifier
+import com.anomaly.koncerto.notifications.channel.LoggingNotifier
+import com.anomaly.koncerto.notifications.channel.SmtpEmailNotifier
+import com.anomaly.koncerto.notifications.channel.TelegramNotifier
+import com.anomaly.koncerto.notifications.channel.WebhookNotifier
+
 import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.metrics.SqliteMetricsRepository
 import com.anomaly.koncerto.orchestrator.Orchestrator
@@ -89,11 +101,26 @@ class Beans {
     }
 
     @Bean
-    fun linearClientFactory(): (ProjectConfig) -> LinearClient = { pc ->
-        val graphql = com.anomaly.koncerto.linear.LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey)
+    fun linearClientFactory(
+        logger: StructuredLogger
+    ): (ProjectConfig) -> LinearClient = { pc ->
+        val graphql = LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey)
         val slug = pc.tracker.projectSlug
             ?: throw IllegalStateException("missing_tracker_project_slug")
-        com.anomaly.koncerto.linear.DefaultLinearClient(graphql, slug)
+        val base = DefaultLinearClient(graphql, slug)
+        val rateLimiter = pc.rateLimiter?.let {
+            TokenBucketRateLimiter(
+                maxTokens = it.maxBurst,
+                refillIntervalMs = 1000,
+                refillCount = it.requestsPerSecond
+            )
+        }
+        val circuitBreaker = pc.circuitBreaker?.let {
+            CircuitBreaker(it.failureThreshold, it.resetTimeoutMs)
+        }
+        if (rateLimiter != null || circuitBreaker != null) {
+            RateLimitedLinearClient(base, rateLimiter, circuitBreaker, logger)
+        } else base
     }
 
     @Bean
@@ -104,6 +131,35 @@ class Beans {
         GitWorkflow(config.gitConfig, logger)
 
     @Bean
+    fun logNotifier(logger: StructuredLogger): LoggingNotifier = LoggingNotifier(logger)
+
+    @Bean
+    fun compositeNotifier(
+        config: ServiceConfig,
+        logNotifier: LoggingNotifier
+    ): CompositeNotifier {
+        val notifiers = mutableListOf<Notifier>(logNotifier)
+        val nc = config.projects.values.firstOrNull()?.notifications ?: return CompositeNotifier(notifiers)
+        val webhook = nc.webhook
+        if (webhook != null) {
+            notifiers.add(WebhookNotifier(webhook.url, webhook.headers))
+        }
+        val telegram = nc.telegram
+        if (telegram != null) {
+            notifiers.add(TelegramNotifier(telegram.botToken, telegram.chatId))
+        }
+        val email = nc.email
+        if (email != null) {
+            notifiers.add(SmtpEmailNotifier(
+                email.smtpHost, email.smtpPort,
+                email.username, email.password,
+                email.from, email.to
+            ))
+        }
+        return CompositeNotifier(notifiers)
+    }
+
+    @Bean
     fun agentRunner(
         config: ServiceConfig,
         workspaces: WorkspaceManager,
@@ -111,14 +167,19 @@ class Beans {
         agentRuntimeFactory: AgentRuntimeFactory,
         gitWorkflow: GitWorkflow,
         runtimeStates: Map<String, RuntimeState>
-    ): AgentRunner = DefaultAgentRunner(
-        config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
-        onAgentOutput = { issueId, line ->
-            runtimeStates.values.firstOrNull {
-                it.running.containsKey(issueId) || it.claimed.contains(issueId)
-            }?.appendOutput(issueId, line)
-        }
-    )
+    ): AgentRunner {
+        val firstProject = config.projects.values.firstOrNull()
+        val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
+        return DefaultAgentRunner(
+            config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
+            onAgentOutput = { issueId, line ->
+                runtimeStates.values.firstOrNull {
+                    it.running.containsKey(issueId) || it.claimed.contains(issueId)
+                }?.appendOutput(issueId, line)
+            },
+            heartbeatIntervalMs = heartbeatInterval
+        )
+    }
 
     @Bean
     fun metricsRepository(@Value("\${koncerto.db.path:${'$'}{user.home}/.koncerto/metrics.db}") dbPath: String): MetricsRepository {
