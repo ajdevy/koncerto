@@ -326,8 +326,6 @@ class DispatchService(
         issueProjectMap[issue.id] = projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
-        val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
-
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
@@ -353,9 +351,9 @@ class DispatchService(
         }
 
         try {
+            val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
             result.onSuccess {
                 scope.coroutineContext.ensureActive()
-                eventCollector.cancel()
                 state.releaseClaim(issue.id)
                 agentIdToIssueId.remove(data.threadId)
                 issueProjectMap.remove(issue.id)
@@ -373,9 +371,9 @@ class DispatchService(
                 handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
                 handleNormalCompletion(issue, data.stageConfig, finalEntry)
+                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
             }.onFailure { err ->
                 scope.coroutineContext.ensureActive()
-                eventCollector.cancel()
                 state.releaseClaim(issue.id)
                 agentIdToIssueId.remove(data.threadId)
                 issueProjectMap.remove(issue.id)
@@ -400,13 +398,15 @@ class DispatchService(
                         error = err.message ?: "unknown"
                     ))
                 }
+                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
             }
         } finally {
+            eventCollector.cancel()
+            state.removeOutput(issue.id)
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
             state.running.remove(issue.id)
             state.releaseClaim(issue.id)
-            if (quotaAcquired) quotaEnforcer?.release(projectSlug)
         }
     }
 

@@ -91,6 +91,7 @@ class RuntimeState {
     fun cancelAgent(issueId: String): Boolean {
         val entry = running.remove(issueId) ?: return false
         val cancelledEntry = entry.copy(cancelled = true)
+        running[issueId] = cancelledEntry
         claimed.remove(issueId)
         removeOutput(issueId)
         return true
