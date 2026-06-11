@@ -9,4 +9,5 @@ sealed class LinearError(message: String, cause: Throwable? = null) : Exception(
     class UnknownPayload : LinearError("linear_unknown_payload")
     class MissingEndCursor : LinearError("linear_missing_end_cursor")
     class RateLimited(message: String) : LinearError("linear_rate_limited: $message")
+    class CircuitOpen : LinearError("linear_circuit_open")
 }

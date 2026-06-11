@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.agent
 
+import com.anomaly.koncerto.core.tenant.TenantContext
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Path
 import kotlinx.coroutines.flow.Flow
@@ -7,7 +8,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.serialization.json.JsonElement
 
 interface AgentRuntime {
-    suspend fun start(): Boolean
+    suspend fun start(tenantContext: TenantContext? = null): Boolean
     fun send(method: String, params: JsonElement? = null): String
     fun sendMessage(toAgentId: String, payload: String): String
     fun events(): Flow<AgentEvent>

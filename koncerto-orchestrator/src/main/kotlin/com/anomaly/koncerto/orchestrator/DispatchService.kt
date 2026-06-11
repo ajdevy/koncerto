@@ -117,16 +117,6 @@ class DispatchService(
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
             val perStateCap = perStateLimit ?: state.maxConcurrentAgents
             if (currentForState >= perStateCap) continue
-            val effectiveQuotaConfig = quotaConfig ?: projectConfig.quota
-            if (effectiveQuotaConfig != null) {
-                if (quotaEnforcer == null || !quotaEnforcer.tryAcquire(projectSlug, effectiveQuotaConfig)) {
-                    logger.info("quota_exceeded", mapOf(
-                        "issue_id" to issue.id,
-                        "issue_identifier" to issue.identifier
-                    ))
-                    continue
-                }
-            }
             if (projectConfig.agent.sequentialMode) {
                 dispatchSequential(issue, scope)
             } else {
@@ -251,6 +241,7 @@ class DispatchService(
             handleClarification(issue.id, clarificationContent)
         } else {
             state.completed[issue.id] = true
+            state.removeOutput(issue.id)
             logger.info(
                 "dispatch_completed",
                 mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
@@ -335,6 +326,8 @@ class DispatchService(
         issueProjectMap[issue.id] = projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
+        val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
+
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
@@ -359,53 +352,63 @@ class DispatchService(
             }
         }
 
-        result.onSuccess {
-            scope.coroutineContext.ensureActive()
-            eventCollector.cancel()
-            state.releaseClaim(issue.id)
-            agentIdToIssueId.remove(data.threadId)
-            issueProjectMap.remove(issue.id)
-            val finalEntry = state.running.remove(issue.id)
-            metricsRepository?.updateAfterRun(
-                issueId = issue.id,
-                issueIdentifier = issue.identifier,
-                projectSlug = projectSlug,
-                result = "success",
-                inputTokens = finalEntry?.inputTokens ?: 0,
-                outputTokens = finalEntry?.outputTokens ?: 0,
-                totalTokens = finalEntry?.totalTokens ?: 0
-            )
-            handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
-            quotaEnforcer?.release(projectSlug)
-            handleCrossProjectFollowUp(scope, issue, data.stageConfig)
-            handleNormalCompletion(issue, data.stageConfig, finalEntry)
-        }.onFailure { err ->
-            scope.coroutineContext.ensureActive()
-            eventCollector.cancel()
-            state.releaseClaim(issue.id)
+        try {
+            result.onSuccess {
+                scope.coroutineContext.ensureActive()
+                eventCollector.cancel()
+                state.releaseClaim(issue.id)
+                agentIdToIssueId.remove(data.threadId)
+                issueProjectMap.remove(issue.id)
+                val finalEntry = state.running.remove(issue.id)
+                state.removeOutput(issue.id)
+                metricsRepository?.updateAfterRun(
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    projectSlug = projectSlug,
+                    result = "success",
+                    inputTokens = finalEntry?.inputTokens ?: 0,
+                    outputTokens = finalEntry?.outputTokens ?: 0,
+                    totalTokens = finalEntry?.totalTokens ?: 0
+                )
+                handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
+                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
+                handleCrossProjectFollowUp(scope, issue, data.stageConfig)
+                handleNormalCompletion(issue, data.stageConfig, finalEntry)
+            }.onFailure { err ->
+                scope.coroutineContext.ensureActive()
+                eventCollector.cancel()
+                state.releaseClaim(issue.id)
+                agentIdToIssueId.remove(data.threadId)
+                issueProjectMap.remove(issue.id)
+                state.running.remove(issue.id)
+                state.removeOutput(issue.id)
+                metricsRepository?.updateAfterRun(
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    projectSlug = projectSlug,
+                    result = "failure",
+                    inputTokens = 0,
+                    outputTokens = 0,
+                    totalTokens = 0
+                )
+                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
+                scheduleRetry(issue, err.message ?: "unknown")
+                if (notificationsConfig?.onFailed == true && notifier != null) {
+                    notifier.send(NotificationEvent.AgentFailed(
+                        projectSlug = projectSlug,
+                        issueId = issue.id,
+                        issueIdentifier = issue.identifier,
+                        title = issue.title,
+                        error = err.message ?: "unknown"
+                    ))
+                }
+            }
+        } finally {
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
             state.running.remove(issue.id)
-            metricsRepository?.updateAfterRun(
-                issueId = issue.id,
-                issueIdentifier = issue.identifier,
-                projectSlug = projectSlug,
-                result = "failure",
-                inputTokens = 0,
-                outputTokens = 0,
-                totalTokens = 0
-            )
-            quotaEnforcer?.release(projectSlug)
-            scheduleRetry(issue, err.message ?: "unknown")
-            if (notificationsConfig?.onFailed == true && notifier != null) {
-                notifier.send(NotificationEvent.AgentFailed(
-                    projectSlug = projectSlug,
-                    issueId = issue.id,
-                    issueIdentifier = issue.identifier,
-                    title = issue.title,
-                    error = err.message ?: "unknown"
-                ))
-            }
+            state.releaseClaim(issue.id)
+            if (quotaAcquired) quotaEnforcer?.release(projectSlug)
         }
     }
 
@@ -548,11 +551,11 @@ class DispatchService(
         }
     }
 
-    private suspend fun readClarification(identifier: String): String? {
-        val ws = workspaces ?: return null
-        val workspace = runCatching { ws.ensureWorkspace(identifier) }.getOrNull() ?: return null
+    private suspend fun readClarification(identifier: String): String? = withContext(Dispatchers.IO) {
+        val ws = workspaces ?: return@withContext null
+        val workspace = runCatching { ws.ensureWorkspace(identifier) }.getOrNull() ?: return@withContext null
         val path = workspace.path.resolve(".koncerto").resolve("clarification.md")
-        return if (Files.exists(path)) runCatching { Files.readString(path) }.getOrNull() else null
+        if (Files.exists(path)) runCatching { Files.readString(path) }.getOrNull() else null
     }
 
     suspend fun handleClarification(issueId: String, clarificationContent: String) {

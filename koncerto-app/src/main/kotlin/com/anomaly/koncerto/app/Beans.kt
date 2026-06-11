@@ -1,13 +1,22 @@
 package com.anomaly.koncerto.app
 
+import com.anomaly.koncerto.agent.AgentHealthChecker
+import com.anomaly.koncerto.agent.AgentHealthEndpoint
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.AgentRuntimeFactory
+import com.anomaly.koncerto.agent.DefaultAgentHealthChecker
 import com.anomaly.koncerto.agent.DefaultAgentRunner
 import com.anomaly.koncerto.core.TokenBucketRateLimiter
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.CircuitBreaker
+import com.anomaly.koncerto.core.circuitbreaker.CircuitBreakerRegistry
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.dashboard.admin.ProjectRegistry
+import com.anomaly.koncerto.core.errors.DefaultErrorTracker
+import com.anomaly.koncerto.core.errors.ErrorTracker
+import com.anomaly.koncerto.core.ratelimit.DefaultRateLimitMonitor
+import com.anomaly.koncerto.core.ratelimit.RateLimitMonitor
 import com.anomaly.koncerto.core.ratelimit.RateLimitRegistry
 import com.anomaly.koncerto.linear.DefaultLinearClient
 import com.anomaly.koncerto.linear.LinearClient
@@ -60,6 +69,9 @@ class Beans {
 
     @Bean
     fun workflowCache(): WorkflowCache = WorkflowCache()
+
+    @Bean
+    fun projectRegistry(): ProjectRegistry = ProjectRegistry()
 
     @Bean
     fun configService(
@@ -117,7 +129,14 @@ class Beans {
         val rateLimitProvider = pc.rateLimits?.linear?.let { rlConfig ->
             RateLimitRegistry.getOrCreate("linear-${pc.tracker.projectSlug ?: "default"}", rlConfig, scope)
         }
-        val graphql = LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey, rateLimitProvider = rateLimitProvider)
+        val providerCbKey = "linear-${pc.tracker.projectSlug ?: "default"}"
+        val providerCb = CircuitBreakerRegistry.getOrCreate(providerCbKey,
+            com.anomaly.koncerto.core.circuitbreaker.CircuitBreakerConfig(
+                failureThreshold = pc.circuitBreaker?.failureThreshold ?: 5,
+                resetTimeoutMs = pc.circuitBreaker?.resetTimeoutMs ?: 30_000
+            )
+        )
+        val graphql = LinearGraphQLClient(pc.tracker.endpoint, pc.tracker.apiKey, rateLimitProvider = rateLimitProvider, circuitBreaker = providerCb)
         val slug = pc.tracker.projectSlug
             ?: throw IllegalStateException("missing_tracker_project_slug")
         val base = DefaultLinearClient(graphql, slug)
@@ -173,7 +192,20 @@ class Beans {
     }
 
     @Bean
+    fun agentHealthChecker(): AgentHealthChecker = DefaultAgentHealthChecker()
+
+    @Bean
+    fun agentHealthEndpoint(healthChecker: AgentHealthChecker): AgentHealthEndpoint =
+        AgentHealthEndpoint(healthChecker)
+
+    @Bean
     fun agentCircuitBreaker(): AgentCircuitBreaker = AgentCircuitBreaker()
+
+    @Bean
+    fun rateLimitMonitor(): RateLimitMonitor = DefaultRateLimitMonitor()
+
+    @Bean
+    fun errorTracker(): ErrorTracker = DefaultErrorTracker()
 
     @Bean
     fun agentRunner(
@@ -183,7 +215,9 @@ class Beans {
         agentRuntimeFactory: AgentRuntimeFactory,
         gitWorkflow: GitWorkflow,
         runtimeStates: Map<String, RuntimeState>,
-        circuitBreaker: AgentCircuitBreaker
+        circuitBreaker: AgentCircuitBreaker,
+        errorTracker: ErrorTracker,
+        healthChecker: AgentHealthChecker
     ): AgentRunner {
         val firstProject = config.projects.values.firstOrNull()
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
@@ -196,6 +230,8 @@ class Beans {
             },
             heartbeatIntervalMs = heartbeatInterval,
             circuitBreaker = circuitBreaker,
+            errorTracker = errorTracker,
+            healthChecker = healthChecker,
             maxRetries = 3,
             retryDelayMs = 5_000L
         )

@@ -39,7 +39,7 @@ data class TokenTotals(
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
     val totalTokens: Long = 0,
-    var secondsRunning: Long = 0
+    val secondsRunning: Long = 0
 )
 
 class RuntimeState {
@@ -90,6 +90,7 @@ class RuntimeState {
 
     fun cancelAgent(issueId: String): Boolean {
         val entry = running.remove(issueId) ?: return false
+        val cancelledEntry = entry.copy(cancelled = true)
         claimed.remove(issueId)
         removeOutput(issueId)
         return true
@@ -102,6 +103,16 @@ class RuntimeState {
         completed.clear()
         blocked.clear()
         tokenTotals = TokenTotals()
+    }
+
+    fun updateTokenTotals(inputTokens: Long = 0, outputTokens: Long = 0, totalTokens: Long = 0, secondsRunning: Long = 0): TokenTotals {
+        tokenTotals = tokenTotals.copy(
+            inputTokens = tokenTotals.inputTokens + inputTokens,
+            outputTokens = tokenTotals.outputTokens + outputTokens,
+            totalTokens = tokenTotals.totalTokens + totalTokens,
+            secondsRunning = secondsRunning
+        )
+        return tokenTotals
     }
 
     fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null

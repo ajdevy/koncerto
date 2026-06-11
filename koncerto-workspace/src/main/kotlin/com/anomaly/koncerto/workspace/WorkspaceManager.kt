@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.workspace
 
+import com.anomaly.koncerto.core.tenant.TenantContext
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.nio.file.Path
@@ -13,13 +14,21 @@ class WorkspaceManager(
 ) {
     private val absoluteRoot: Path = root.toAbsolutePath().normalize()
 
-    fun ensureWorkspace(identifier: String): Workspace {
+    fun ensureWorkspace(identifier: String, tenantContext: TenantContext? = null): Workspace {
         val key = WorkspaceKey.sanitize(identifier)
-        val path = absoluteRoot.resolve(key).toAbsolutePath().normalize()
-        assertInsideRoot(path)
+        val path = resolvePath(key, tenantContext)
         val createdNow = !Files.exists(path)
         if (createdNow) Files.createDirectories(path)
         return Workspace(path, key, createdNow)
+    }
+
+    private fun resolvePath(key: String, tenantContext: TenantContext?): Path {
+        val base = if (tenantContext != null) {
+            absoluteRoot.resolve(tenantContext.tenantId.value).resolve(tenantContext.projectSlug)
+        } else {
+            absoluteRoot
+        }
+        return base.resolve(key).toAbsolutePath().normalize()
     }
 
     fun assertInsideRoot(candidate: Path) {
@@ -57,6 +66,16 @@ class WorkspaceManager(
         val key = WorkspaceKey.sanitize(identifier)
         val path = absoluteRoot.resolve(key).toAbsolutePath().normalize()
         assertInsideRoot(path)
+        if (Files.exists(path)) {
+            Files.walk(path)
+                .sorted(Comparator.reverseOrder())
+                .forEach { Files.deleteIfExists(it) }
+        }
+    }
+
+    fun removeWorkspace(identifier: String, tenantContext: TenantContext) {
+        val key = WorkspaceKey.sanitize(identifier)
+        val path = resolvePath(key, tenantContext)
         if (Files.exists(path)) {
             Files.walk(path)
                 .sorted(Comparator.reverseOrder())

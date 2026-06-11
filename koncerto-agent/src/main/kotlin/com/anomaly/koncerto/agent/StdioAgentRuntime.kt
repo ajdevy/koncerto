@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import com.anomaly.koncerto.core.tenant.TenantContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -39,7 +40,7 @@ abstract class StdioAgentRuntime(
     @Volatile
     private var pid: Long? = null
 
-    override suspend fun start(): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun start(tenantContext: TenantContext?): Boolean = withContext(Dispatchers.IO) {
         try {
             val pb = ProcessBuilder("bash", "-lc", command)
                 .directory(workspacePath.toFile())

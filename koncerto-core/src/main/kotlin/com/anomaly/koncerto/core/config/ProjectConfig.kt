@@ -8,7 +8,15 @@ data class ProjectConfig(
     val rateLimiter: RateLimiterConfig? = null,
     val circuitBreaker: CircuitBreakerConfig? = null,
     val rateLimits: RateLimitsConfig? = null,
-    val notifications: NotificationsConfig = NotificationsConfig(onCompleted = false, onFailed = false, onStalled = false, onClarification = false)
+    val notifications: NotificationsConfig = NotificationsConfig(onCompleted = false, onFailed = false, onStalled = false, onClarification = false),
+    val tenant: TenantConfig? = null,
+    val quota: com.anomaly.koncerto.core.quota.QuotaConfig? = null
+)
+
+@kotlinx.serialization.Serializable
+data class TenantConfig(
+    val tier: String = "standard",
+    val quotaProfile: String = "default"
 )
 
 @kotlinx.serialization.Serializable

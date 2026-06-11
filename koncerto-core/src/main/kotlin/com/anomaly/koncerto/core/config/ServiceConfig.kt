@@ -10,6 +10,7 @@ data class ServiceConfig(
     val projects: Map<String, ProjectConfig> = emptyMap(),
     val hooks: HooksConfig = HooksConfig(null, null, null, null, 60000),
     val gitConfig: GitConfig = GitConfig(),
+    val adminApiKey: String? = null,
     val deprecationWarnings: List<String> = emptyList()
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
@@ -31,12 +32,14 @@ data class ServiceConfig(
             val hooks = parseHooksConfig(map["hooks"] as? Map<*, *>)
             val git = parseGitConfig(map["git"] as? Map<*, *>)
             val projects = parseProjects(map["projects"] as? Map<*, *>, workflowFileDir)
+            val adminApiKey = (map["admin"] as? Map<*, *>)?.get("apiKey") as? String
 
             ServiceConfig(
                 pollIntervalMs = pollIntervalMs,
                 projects = projects,
                 hooks = hooks,
                 gitConfig = git,
+                adminApiKey = adminApiKey,
                 deprecationWarnings = deprecations
             )
         }
@@ -367,7 +370,8 @@ data class StageAgentConfig(
     val command: String?,
     val onCompleteState: String?,
     val agent: String? = null,
-    val followUp: FollowUpConfig? = null
+    val followUp: FollowUpConfig? = null,
+    val crossProjectFollowUp: CrossProjectFollowUpConfig? = null
 )
 
 data class GitConfig(

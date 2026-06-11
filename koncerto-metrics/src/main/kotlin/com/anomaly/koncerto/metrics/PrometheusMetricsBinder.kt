@@ -7,13 +7,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import java.util.function.Supplier
 
-class PrometheusMetricsBinder(private val metricsRepository: SqliteMetricsRepository) : MeterBinder {
+class PrometheusMetricsBinder(
+    private val metricsRepository: SqliteMetricsRepository,
+    private val quotaRemainingSuppliers: Map<String, Supplier<Double>> = emptyMap()
+) : MeterBinder {
 
     override fun bindTo(registry: MeterRegistry) {
         bindTotalRuns(registry)
         bindTotalTokens(registry)
         bindRunsByProject(registry)
         bindRunsByState(registry)
+        bindQuotaRemaining(registry)
     }
 
     private fun bindTotalRuns(registry: MeterRegistry) {
@@ -87,6 +91,15 @@ class PrometheusMetricsBinder(private val metricsRepository: SqliteMetricsReposi
                     .tag("state", state)
                     .register(registry)
             }
+        }
+    }
+
+    private fun bindQuotaRemaining(registry: MeterRegistry) {
+        for ((project, supplier) in quotaRemainingSuppliers) {
+            Gauge.builder("koncerto_quota_remaining", supplier) { supplier.get() }
+                .description("Remaining quota capacity for project")
+                .tag("project", project)
+                .register(registry)
         }
     }
 }

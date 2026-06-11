@@ -114,7 +114,7 @@ class ApiV1Controller @Autowired constructor(
             }
         }
         val allBlocked = projects.values.flatMap { pr ->
-            pr.state.blocked.mapNotNull { id ->
+            pr.state.blocked.keys.mapNotNull { id ->
                 val runningEntry = pr.state.running[id]
                 val identifier = runningEntry?.issue?.identifier
                     ?: pr.state.retryAttempts[id]?.identifier

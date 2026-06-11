@@ -2,6 +2,9 @@ package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.errors.ErrorTracker
+import com.anomaly.koncerto.core.events.AgentLifecycleEvent
+import com.anomaly.koncerto.core.events.EventBus
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.core.result.EmptyResult
 import com.anomaly.koncerto.core.result.runCatchingResult
@@ -55,6 +58,8 @@ class DefaultAgentRunner(
     private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null,
     private val heartbeatIntervalMs: Long = 30_000L,
     private val circuitBreaker: AgentCircuitBreaker? = null,
+    private val errorTracker: ErrorTracker? = null,
+    private val healthChecker: AgentHealthChecker? = null,
     private val maxRetries: Int = 1,
     private val retryDelayMs: Long = 5_000L
 ) : AgentRunner {
@@ -89,22 +94,34 @@ class DefaultAgentRunner(
                     commandOverride = commandOverride,
                     turnTimeoutMs = turnTimeoutMs,
                     stallTimeoutMs = stallTimeoutMs,
-                    retryAttempt = retryAttempt
+                    retryAttempt = retryAttempt,
+                    agentKey = agentKey
                 )
                 circuitBreaker?.recordSuccess(agentKey)
+                EventBus.publish(AgentLifecycleEvent.Completed(agentKey, true))
                 return@runCatchingResult result
             } catch (e: Exception) {
                 lastException = e
+                val errorMsg = e.message ?: e.javaClass.simpleName
+                errorTracker?.recordError(agentKey, errorMsg, "agent")
                 logger.warn("agent_run_failed_retry", mapOf(
                     "issue_id" to issue.id,
                     "issue_identifier" to issue.identifier,
                     "agent_key" to agentKey,
                     "retry_attempt" to retryAttempt,
                     "max_retries" to maxRetries,
-                    "error" to (e.message ?: e.javaClass.simpleName)
+                    "error" to errorMsg
                 ))
+
+                if (errorMsg.contains("stalled", ignoreCase = true)) {
+                    EventBus.publish(AgentLifecycleEvent.Stalled(agentKey, 0L))
+                } else {
+                    EventBus.publish(AgentLifecycleEvent.Failed(agentKey, errorMsg, retryAttempt))
+                }
+
                 circuitBreaker?.recordFailure(agentKey)
                 if (retryAttempt < maxRetries) {
+                    EventBus.publish(AgentLifecycleEvent.Recovered(agentKey, errorMsg, retryAttempt))
                     kotlinx.coroutines.delay(retryDelayMs * retryAttempt)
                 }
             }
@@ -120,7 +137,8 @@ class DefaultAgentRunner(
         commandOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?,
-        retryAttempt: Int
+        retryAttempt: Int,
+        agentKey: String
     ) {
         val workspace = workspaces.ensureWorkspace(issue.identifier)
         workspaces.assertInsideRoot(workspace.path)
@@ -135,6 +153,9 @@ class DefaultAgentRunner(
         if (!runtime.start()) {
             throw IllegalStateException("startup_failed")
         }
+        EventBus.publish(AgentLifecycleEvent.Started(agentKey, 0L))
+        healthChecker?.reportHeartbeat(agentKey, 0L)
+        val processId = AtomicLong(0L)
 
         val effectiveTurnTimeout = turnTimeoutMs ?: 3_600_000L
         val effectiveStallTimeout = stallTimeoutMs ?: 300_000L
@@ -189,7 +210,11 @@ class DefaultAgentRunner(
                     val eventWatcher = launch {
                         runtime.events().collect { event ->
                             when (event) {
+                                is AgentEvent.SessionStarted -> {
+                                    event.pid?.let { processId.set(it) }
+                                }
                                 is AgentEvent.TurnCompleted, is AgentEvent.TurnFailed -> {
+                                    healthChecker?.reportHeartbeat(agentKey, processId.get())
                                     turnDone.complete(Unit)
                                 }
                                 else -> {}
@@ -207,6 +232,7 @@ class DefaultAgentRunner(
             }
         } catch (e: Exception) {
             runtime.stop()
+            healthChecker?.markUnhealthy(agentKey, e.message ?: e.javaClass.simpleName)
             gitWorkflow?.let { gw ->
                 try {
                     gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
@@ -218,6 +244,7 @@ class DefaultAgentRunner(
                     logger.warn("partial_commit_failed", mapOf("issue" to issue.identifier))
                 }
             }
+            healthChecker?.removeAgent(agentKey)
             throw e
         }
 
@@ -238,6 +265,7 @@ class DefaultAgentRunner(
                 }
             }
         }
+        healthChecker?.removeAgent(agentKey)
     }
 
     private fun Issue.toTemplateMap(): Map<String, Any?> = mapOf(
