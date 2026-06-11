@@ -16,7 +16,6 @@ class SubtaskManifestTest {
     fun `round-trip serialization`() {
         val manifest = SubtaskManifest(
             issueId = "KONC-123",
-            integrationBranch = "main",
             subtasks = listOf(
                 SubtaskDef(
                     id = "step-1",

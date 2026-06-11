@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.dashboard
 
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.ratelimit.RateLimitRegistry
 import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.metrics.IssueMetrics
 import com.anomaly.koncerto.metrics.MetricsRepository
@@ -293,6 +294,37 @@ class ApiV1Controller @Autowired constructor(
                     )
                 }
             )
+        }
+    }
+
+    @Serializable
+    data class RateLimitStatsEntry(
+        val availableTokens: Int,
+        val requestsLastMinute: Int,
+        val requestsLastHour: Int,
+        val limitPerMinute: Int,
+        val limitPerHour: Int
+    )
+
+    @GetMapping("/ratelimit/stats", produces = ["application/json"])
+    fun rateLimitStats(): Map<String, Map<String, RateLimitStatsEntry>> {
+        val allProviders = RateLimitRegistry.getAll()
+        return config.projects.keys.associate { slug ->
+            val matched = allProviders.filterKeys { key ->
+                key.endsWith("-$slug") || key.startsWith("$slug:")
+            }
+            val result = matched.entries.associate { (key, provider) ->
+                val type = key.removeSuffix("-$slug").removePrefix("$slug:")
+                val s = provider.getStats()
+                type to RateLimitStatsEntry(
+                    availableTokens = s.availableTokens,
+                    requestsLastMinute = s.requestsLastMinute,
+                    requestsLastHour = s.requestsLastHour,
+                    limitPerMinute = s.limitPerMinute,
+                    limitPerHour = s.limitPerHour
+                )
+            }
+            slug to result
         }
     }
 

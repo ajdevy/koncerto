@@ -5,6 +5,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import com.anomaly.koncerto.core.config.GitConfig
+import com.anomaly.koncerto.logging.StderrSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,7 +23,7 @@ class GitWorkflowBranchTest {
 
     private fun createGitWorkflow(): GitWorkflow {
         val config = GitConfig(enabled = false, branchPrefix = "feature/")
-        val logger = StructuredLogger("test")
+        val logger = StructuredLogger(listOf(StderrSink()))
         return GitWorkflow(config, logger)
     }
 }

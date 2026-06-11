@@ -333,7 +333,7 @@ class DispatchService(
         }
 
         result.onSuccess {
-            ensureActive()
+            scope.coroutineContext.ensureActive()
             state.claimed.remove(issue.id)
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
@@ -350,7 +350,7 @@ class DispatchService(
             handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
             handleNormalCompletion(issue, data.stageConfig, finalEntry)
         }.onFailure { err ->
-            ensureActive()
+            scope.coroutineContext.ensureActive()
             state.claimed.remove(issue.id)
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
