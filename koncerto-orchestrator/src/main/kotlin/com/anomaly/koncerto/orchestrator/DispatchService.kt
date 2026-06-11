@@ -109,7 +109,11 @@ class DispatchService(
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
             val perStateCap = perStateLimit ?: state.maxConcurrentAgents
             if (currentForState >= perStateCap) continue
-            dispatch(issue, scope)
+            if (projectConfig.agent.sequentialMode) {
+                dispatchSequential(issue, scope)
+            } else {
+                dispatch(issue, scope)
+            }
         }
     }
 
@@ -249,18 +253,37 @@ class DispatchService(
     }
 
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
+        val execData = prepareDispatch(issue, attempt) ?: return
+        scope.launch {
+            runIssueExecution(scope, execData, issue)
+        }
+    }
+
+    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
+        val execData = prepareDispatch(issue, attempt) ?: return
+        runIssueExecution(scope, execData, issue)
+    }
+
+    private data class DispatchExecutionData(
+        val stageConfig: StageAgentConfig?,
+        val prompt: String,
+        val resolved: ResolvedAgent,
+        val threadId: String,
+        val turnId: String,
+        val attempt: Int?
+    )
+
+    private fun prepareDispatch(issue: Issue, attempt: Int?): DispatchExecutionData? {
         logger.info(
             "dispatch_start",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         )
-
         val stageConfig = projectConfig.agent.stages[issue.normalizedState]
         val prompt = stageConfig?.prompt ?: workflowCache.current().promptTemplate
         val resolved = resolveAgent(issue, stageConfig)
 
         val extra = mutableMapOf("prompt_source" to if (stageConfig?.prompt != null) "stage" else "global")
         if (resolved.model != null) extra["model"] = resolved.model
-        if (attempt != null) extra["attempt"] = attempt.toString()
         logger.info("dispatch_config", extra)
 
         val threadId = java.util.UUID.randomUUID().toString()
@@ -274,80 +297,82 @@ class DispatchService(
         )
         state.running[issue.id] = entry
 
+        return DispatchExecutionData(stageConfig, prompt, resolved, threadId, turnId, attempt)
+    }
+
+    private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
+        if (!state.claimed.add(issue.id)) {
+            state.running.remove(issue.id)
+            return
+        }
+        issueProjectMap[issue.id] = projectSlug
+        agentIdToIssueId[data.threadId] = issue.id
+
+        val result = agentRunner.run(
+            issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
+            turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
+            stallTimeoutMs = projectConfig.agent.stallTimeoutMs
+        )
+
         scope.launch {
-            if (!state.claimed.add(issue.id)) {
-                state.running.remove(issue.id)
-                return@launch
-            }
-            issueProjectMap[issue.id] = projectSlug
-            agentIdToIssueId[threadId] = issue.id
-
-            val result = agentRunner.run(
-                issue, attempt, prompt, resolved.kind, resolved.command,
-                turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
-                stallTimeoutMs = projectConfig.agent.stallTimeoutMs
-            )
-
-            scope.launch {
-                agentRunner.events().collect { event ->
-                    if (event is AgentEvent.TurnCompleted) {
-                        event.usage?.let { usage ->
-                            val current = state.running[issue.id]
-                            current?.let { updated ->
-                                state.running[issue.id] = updated.copy(
-                                    inputTokens = updated.inputTokens + usage.inputTokens,
-                                    outputTokens = updated.outputTokens + usage.outputTokens,
-                                    totalTokens = updated.totalTokens + usage.totalTokens,
-                                    turnCount = updated.turnCount + 1
-                                )
-                            }
+            agentRunner.events().collect { event ->
+                if (event is AgentEvent.TurnCompleted) {
+                    event.usage?.let { usage ->
+                        val current = state.running[issue.id]
+                        current?.let { updated ->
+                            state.running[issue.id] = updated.copy(
+                                inputTokens = updated.inputTokens + usage.inputTokens,
+                                outputTokens = updated.outputTokens + usage.outputTokens,
+                                totalTokens = updated.totalTokens + usage.totalTokens,
+                                turnCount = updated.turnCount + 1
+                            )
                         }
                     }
                 }
             }
+        }
 
-            result.onSuccess {
-                ensureActive()
-                state.claimed.remove(issue.id)
-                agentIdToIssueId.remove(threadId)
-                issueProjectMap.remove(issue.id)
-                val finalEntry = state.running.remove(issue.id)
-                metricsRepository?.updateAfterRun(
+        result.onSuccess {
+            ensureActive()
+            state.claimed.remove(issue.id)
+            agentIdToIssueId.remove(data.threadId)
+            issueProjectMap.remove(issue.id)
+            val finalEntry = state.running.remove(issue.id)
+            metricsRepository?.updateAfterRun(
+                issueId = issue.id,
+                issueIdentifier = issue.identifier,
+                projectSlug = projectSlug,
+                result = "success",
+                inputTokens = finalEntry?.inputTokens ?: 0,
+                outputTokens = finalEntry?.outputTokens ?: 0,
+                totalTokens = finalEntry?.totalTokens ?: 0
+            )
+            handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
+            handleNormalCompletion(issue, data.stageConfig, finalEntry)
+        }.onFailure { err ->
+            ensureActive()
+            state.claimed.remove(issue.id)
+            agentIdToIssueId.remove(data.threadId)
+            issueProjectMap.remove(issue.id)
+            state.running.remove(issue.id)
+            metricsRepository?.updateAfterRun(
+                issueId = issue.id,
+                issueIdentifier = issue.identifier,
+                projectSlug = projectSlug,
+                result = "failure",
+                inputTokens = 0,
+                outputTokens = 0,
+                totalTokens = 0
+            )
+            scheduleRetry(issue, err.message ?: "unknown")
+            if (notificationsConfig?.onFailed == true && notifier != null) {
+                notifier.send(NotificationEvent.AgentFailed(
+                    projectSlug = projectSlug,
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
-                    projectSlug = projectSlug,
-                    result = "success",
-                    inputTokens = finalEntry?.inputTokens ?: 0,
-                    outputTokens = finalEntry?.outputTokens ?: 0,
-                    totalTokens = finalEntry?.totalTokens ?: 0
-                )
-                handleWorkplanIfPresent(issue, stageConfig, finalEntry)
-                handleNormalCompletion(issue, stageConfig, finalEntry)
-            }.onFailure { err ->
-                ensureActive()
-                state.claimed.remove(issue.id)
-                agentIdToIssueId.remove(threadId)
-                issueProjectMap.remove(issue.id)
-                state.running.remove(issue.id)
-                metricsRepository?.updateAfterRun(
-                    issueId = issue.id,
-                    issueIdentifier = issue.identifier,
-                    projectSlug = projectSlug,
-                    result = "failure",
-                    inputTokens = 0,
-                    outputTokens = 0,
-                    totalTokens = 0
-                )
-                scheduleRetry(issue, err.message ?: "unknown")
-                if (notificationsConfig?.onFailed == true && notifier != null) {
-                    notifier.send(NotificationEvent.AgentFailed(
-                        projectSlug = projectSlug,
-                        issueId = issue.id,
-                        issueIdentifier = issue.identifier,
-                        title = issue.title,
-                        error = err.message ?: "unknown"
-                    ))
-                }
+                    title = issue.title,
+                    error = err.message ?: "unknown"
+                ))
             }
         }
     }
@@ -418,7 +443,11 @@ class DispatchService(
                 continue
             }
             state.running.remove(issueId)
-            dispatch(issue, scope, retryEntry.attempt)
+            if (projectConfig.agent.sequentialMode) {
+                dispatchSequential(issue, scope, retryEntry.attempt)
+            } else {
+                dispatch(issue, scope, retryEntry.attempt)
+            }
         }
     }
 

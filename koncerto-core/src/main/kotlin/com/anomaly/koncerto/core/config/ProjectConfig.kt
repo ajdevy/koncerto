@@ -49,6 +49,7 @@ data class RoutingRule(
 data class AgentProjectConfig(
     val kind: String = "opencode",
     val command: String? = null,
+    val sequentialMode: Boolean = false,
     val maxConcurrentAgents: Int = 2,
     val maxTurns: Int = 20,
     val maxRetryBackoffMs: Long = 300000,
