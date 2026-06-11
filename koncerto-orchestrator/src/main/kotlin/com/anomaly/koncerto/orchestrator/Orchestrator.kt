@@ -145,7 +145,7 @@ class Orchestrator(
                         "state" to trackerState
                     )
                     state.running.remove(id)
-                    state.claimed.remove(id)
+                    state.releaseClaim(id)
                     state.removeOutput(id)
                     try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
                 } else if (pr.config.tracker.activeStates.any { it.equals(trackerState, ignoreCase = true) }) {
@@ -156,7 +156,7 @@ class Orchestrator(
                         "state" to trackerState
                     )
                     state.running.remove(id)
-                    state.claimed.remove(id)
+                    state.releaseClaim(id)
                     state.removeOutput(id)
                     val nc = pr.config.notifications
                     if (nc.onStalled && pr.dispatch.notifier != null) {
@@ -185,8 +185,8 @@ class Orchestrator(
                         mapOf("issue_id" to id, "issue_identifier" to entry.issue.identifier)
                     )
                     state.running.remove(id)
-                    state.claimed.remove(id)
-                    state.blocked.remove(id)
+                    state.releaseClaim(id)
+                    state.removeBlocked(id)
                     state.removeOutput(id)
                     try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
                 }

@@ -11,7 +11,11 @@ import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.WorkplanConfig
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.quota.QuotaConfig
+import com.anomaly.koncerto.core.quota.QuotaEnforcer
 import com.anomaly.koncerto.core.result.Result
+import com.anomaly.koncerto.core.tenant.TenantContext
+import com.anomaly.koncerto.core.tenant.TenantResolver
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.metrics.MetricsRepository
@@ -56,7 +60,11 @@ class DispatchService(
     val notifier: CompositeNotifier? = null,
     private val notificationsConfig: NotificationsConfig? = null,
     private val subtaskOrchestrator: SubtaskOrchestrator? = null,
-    private val workplanParser: WorkplanParser? = null
+    private val workplanParser: WorkplanParser? = null,
+    private val tenantResolver: TenantResolver? = null,
+    private val quotaEnforcer: QuotaEnforcer? = null,
+    private val quotaConfig: QuotaConfig? = null,
+    private val crossProjectChainer: CrossProjectChainer? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -75,7 +83,7 @@ class DispatchService(
         }
         val graph = DependencyGraph.build(candidates, projectConfig.tracker.terminalStates)
         val sorted = graph.frontier
-            .filter { !state.running.containsKey(it.id) && it.id !in state.claimed }
+            .filter { !state.running.containsKey(it.id) && !state.isClaimed(it.id) }
             .filter { matchesRequiredLabels(it) }
             .filter { !isBlockedForTodo(it) }
             .sortedWith(
@@ -88,18 +96,18 @@ class DispatchService(
             scope.coroutineContext.ensureActive()
             if (candidate.id !in graph.frontier.map { it.id }
                 && !state.running.containsKey(candidate.id)
-                && candidate.id !in state.claimed) {
-                state.blocked.add(candidate.id)
+                && !state.isClaimed(candidate.id)) {
+                state.addBlocked(candidate.id)
             }
         }
         for (frontierId in graph.frontier.map { it.id }) {
             scope.coroutineContext.ensureActive()
-            state.blocked.remove(frontierId)
+            state.removeBlocked(frontierId)
         }
         val candidateIds = candidates.map { it.id }.toSet()
-        for (id in state.blocked.toTypedArray()) {
+        for (id in state.blocked.keys.toTypedArray()) {
             scope.coroutineContext.ensureActive()
-            if (id !in candidateIds) state.blocked.remove(id)
+            if (id !in candidateIds) state.removeBlocked(id)
         }
 
         for (issue in sorted) {
@@ -109,6 +117,16 @@ class DispatchService(
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
             val perStateCap = perStateLimit ?: state.maxConcurrentAgents
             if (currentForState >= perStateCap) continue
+            val effectiveQuotaConfig = quotaConfig ?: projectConfig.quota
+            if (effectiveQuotaConfig != null) {
+                if (quotaEnforcer == null || !quotaEnforcer.tryAcquire(projectSlug, effectiveQuotaConfig)) {
+                    logger.info("quota_exceeded", mapOf(
+                        "issue_id" to issue.id,
+                        "issue_identifier" to issue.identifier
+                    ))
+                    continue
+                }
+            }
             if (projectConfig.agent.sequentialMode) {
                 dispatchSequential(issue, scope)
             } else {
@@ -137,7 +155,7 @@ class DispatchService(
 
     private fun isBlockedForTodo(issue: Issue): Boolean {
         if (!issue.normalizedState.equals("todo", ignoreCase = true)) return false
-        return issue.id in state.blocked
+        return state.isBlocked(issue.id)
     }
 
     private fun evaluateRoutingRules(issue: Issue): ResolvedAgent? {
@@ -232,7 +250,7 @@ class DispatchService(
         if (clarificationContent != null) {
             handleClarification(issue.id, clarificationContent)
         } else {
-            state.completed.add(issue.id)
+            state.completed[issue.id] = true
             logger.info(
                 "dispatch_completed",
                 mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
@@ -288,12 +306,21 @@ class DispatchService(
 
         val threadId = java.util.UUID.randomUUID().toString()
         val turnId = java.util.UUID.randomUUID().toString()
+        val tenantContext = tenantResolver?.resolveTenant(projectSlug, projectConfig)
+        val contextMap = mutableMapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
+        if (tenantContext != null) {
+            contextMap["tenant_id"] = tenantContext.tenantId.value
+            contextMap["tenant_tier"] = tenantContext.tier
+        }
+        logger.info("dispatch_context", contextMap)
+
         val entry = RunningEntry(
             issue = issue,
             threadId = threadId,
             turnId = turnId,
             startedAt = Instant.now(),
-            lastCodexTimestamp = null
+            lastCodexTimestamp = null,
+            tenantContext = tenantContext
         )
         state.running[issue.id] = entry
 
@@ -301,7 +328,7 @@ class DispatchService(
     }
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
-        if (!state.claimed.add(issue.id)) {
+        if (!state.tryClaim(issue.id)) {
             state.running.remove(issue.id)
             return
         }
@@ -314,7 +341,7 @@ class DispatchService(
             stallTimeoutMs = projectConfig.agent.stallTimeoutMs
         )
 
-        scope.launch {
+        val eventCollector = scope.launch {
             agentRunner.events().collect { event ->
                 if (event is AgentEvent.TurnCompleted) {
                     event.usage?.let { usage ->
@@ -334,7 +361,8 @@ class DispatchService(
 
         result.onSuccess {
             scope.coroutineContext.ensureActive()
-            state.claimed.remove(issue.id)
+            eventCollector.cancel()
+            state.releaseClaim(issue.id)
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
             val finalEntry = state.running.remove(issue.id)
@@ -348,10 +376,13 @@ class DispatchService(
                 totalTokens = finalEntry?.totalTokens ?: 0
             )
             handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
+            quotaEnforcer?.release(projectSlug)
+            handleCrossProjectFollowUp(scope, issue, data.stageConfig)
             handleNormalCompletion(issue, data.stageConfig, finalEntry)
         }.onFailure { err ->
             scope.coroutineContext.ensureActive()
-            state.claimed.remove(issue.id)
+            eventCollector.cancel()
+            state.releaseClaim(issue.id)
             agentIdToIssueId.remove(data.threadId)
             issueProjectMap.remove(issue.id)
             state.running.remove(issue.id)
@@ -364,6 +395,7 @@ class DispatchService(
                 outputTokens = 0,
                 totalTokens = 0
             )
+            quotaEnforcer?.release(projectSlug)
             scheduleRetry(issue, err.message ?: "unknown")
             if (notificationsConfig?.onFailed == true && notifier != null) {
                 notifier.send(NotificationEvent.AgentFailed(
@@ -419,6 +451,14 @@ class DispatchService(
         }
     }
 
+    private fun handleCrossProjectFollowUp(scope: CoroutineScope, issue: Issue, stageConfig: StageAgentConfig?) {
+        val followUpConfig = stageConfig?.crossProjectFollowUp ?: return
+        val chainer = crossProjectChainer ?: return
+        scope.launch {
+            chainer.createFollowUp(issue, followUpConfig, projectSlug)
+        }
+    }
+
     suspend fun dispatchDueRetries(scope: CoroutineScope) {
         val now = System.currentTimeMillis()
         val dueKeys = state.retryAttempts.entries
@@ -431,7 +471,7 @@ class DispatchService(
             val retryEntry = state.retryAttempts.remove(issueId)
             if (retryEntry == null) continue
             if (state.availableSlots() <= 0) break
-            if (state.running.containsKey(issueId) || issueId in state.claimed) continue
+            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) continue
             val issue = try {
                 scope.coroutineContext.ensureActive()
                 linear.fetchIssueById(issueId)
@@ -550,7 +590,7 @@ class DispatchService(
             ))
         }
 
-        state.blocked.add(issueId)
+        state.addBlocked(issueId)
 
         if (notificationsConfig?.onClarification == true && notifier != null) {
             notifier.send(NotificationEvent.ClarificationRequested(

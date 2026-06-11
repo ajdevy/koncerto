@@ -68,19 +68,19 @@ class RuntimeStateTest {
     @Test
     fun `completed set add and contains`() {
         val s = RuntimeState()
-        s.completed.add("id1")
-        s.completed.add("id2")
-        assertThat(s.completed.contains("id1")).isTrue()
-        assertThat(s.completed.contains("id2")).isTrue()
+        s.completed["id1"] = true
+        s.completed["id2"] = true
+        assertThat(s.completed.containsKey("id1")).isTrue()
+        assertThat(s.completed.containsKey("id2")).isTrue()
         assertThat(s.completed.size).isEqualTo(2)
     }
 
     @Test
     fun `completed set remove clears entry`() {
         val s = RuntimeState()
-        s.completed.add("id1")
+        s.completed["id1"] = true
         s.completed.remove("id1")
-        assertThat(s.completed.contains("id1")).isEqualTo(false)
+        assertThat(s.completed.containsKey("id1")).isEqualTo(false)
         assertThat(s.completed.size).isEqualTo(0)
     }
 
@@ -88,18 +88,18 @@ class RuntimeStateTest {
     fun `completed set is independent of running`() {
         val s = RuntimeState()
         s.running["id1"] = runningEntry("id1", "A-1")
-        s.completed.add("id1")
+        s.completed["id1"] = true
         assertThat(s.running.containsKey("id1")).isTrue()
-        assertThat(s.completed.contains("id1")).isTrue()
+        assertThat(s.completed.containsKey("id1")).isTrue()
     }
 
     @Test
     fun `claimed set add and remove`() {
         val s = RuntimeState()
-        s.claimed.add("id1")
-        assertThat(s.claimed.contains("id1")).isTrue()
+        s.claimed["id1"] = true
+        assertThat(s.claimed.containsKey("id1")).isTrue()
         s.claimed.remove("id1")
-        assertThat(s.claimed.contains("id1")).isEqualTo(false)
+        assertThat(s.claimed.containsKey("id1")).isEqualTo(false)
         assertThat(s.claimed.size).isEqualTo(0)
     }
 
@@ -194,11 +194,11 @@ class RuntimeStateTest {
     fun `cancelAgent removes entry`() {
         val s = RuntimeState()
         s.running["a"] = runningEntry("a", "A-1")
-        s.claimed.add("a")
+        s.claimed["a"] = true
         val result = s.cancelAgent("a")
         assertThat(result).isTrue()
         assertThat(s.running.containsKey("a")).isFalse()
-        assertThat(s.claimed.contains("a")).isFalse()
+        assertThat(s.claimed.containsKey("a")).isFalse()
     }
 
     @Test

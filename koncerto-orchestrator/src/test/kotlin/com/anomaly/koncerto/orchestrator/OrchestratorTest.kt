@@ -139,7 +139,7 @@ class OrchestratorTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig()
         val state = RuntimeState()
-        state.claimed.add("1")
+        state.claimed["1"] = true
         val cache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val linear = FakeLinearClient(listOf(sampleIssue("1", "A-1", "Todo")))
         val runner = FakeAgentRunner()
@@ -190,7 +190,7 @@ class OrchestratorTest {
         val config = sampleConfig()
         val state = RuntimeState()
         state.running["1"] = runningEntry("1", "A-1")
-        state.claimed.add("1")
+        state.claimed["1"] = true
         val linear = FakeLinearClientWithStates(mapOf("1" to "Done"))
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
@@ -207,7 +207,7 @@ class OrchestratorTest {
         )
         orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
-        assertThat(state.claimed.contains("1")).isEqualTo(false)
+        assertThat(state.isClaimed("1")).isEqualTo(false)
     }
 
     @Test
@@ -217,7 +217,7 @@ class OrchestratorTest {
         val config = sampleConfig()
         val state = RuntimeState()
         state.running["1"] = runningEntry("1", "A-1")
-        state.claimed.add("1")
+        state.claimed["1"] = true
         val linear = FakeLinearClientWithStates(mapOf("1" to "InvalidState"))
         val runner = FakeAgentRunner()
         val cache = WorkflowCache()
@@ -234,7 +234,7 @@ class OrchestratorTest {
         )
         orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey("1")).isEqualTo(false)
-        assertThat(state.claimed.contains("1")).isEqualTo(false)
+        assertThat(state.isClaimed("1")).isEqualTo(false)
     }
 
     @Test
@@ -296,13 +296,13 @@ class OrchestratorTest {
         val issueId = "issue-1"
 
         state.running[blockerId] = runningEntry(blockerId, "ENG-1")
-        state.claimed.add(blockerId)
+        state.claimed[blockerId] = true
         state.running[issueId] = runningEntry(issueId, "ENG-2").copy(
             issue = runningEntry(issueId, "ENG-2").issue.copy(
                 blockedBy = listOf(BlockerRef(id = blockerId, identifier = "ENG-1", state = "In Progress"))
             )
         )
-        state.claimed.add(issueId)
+        state.claimed[issueId] = true
 
         val linear = FakeLinearClientWithStates(mapOf(blockerId to "Done"))
         val runner = FakeAgentRunner()
@@ -320,10 +320,10 @@ class OrchestratorTest {
         )
         orch.reconcile(defaultProjectSlug, orch.projects.values.first())
         assertThat(state.running.containsKey(blockerId)).isEqualTo(false)
-        assertThat(state.claimed.contains(blockerId)).isEqualTo(false)
+        assertThat(state.isClaimed(blockerId)).isEqualTo(false)
         assertThat(state.running.containsKey(issueId)).isEqualTo(false)
-        assertThat(state.claimed.contains(issueId)).isEqualTo(false)
-        assertThat(state.blocked.contains(issueId)).isEqualTo(false)
+        assertThat(state.isClaimed(issueId)).isEqualTo(false)
+        assertThat(state.isBlocked(issueId)).isEqualTo(false)
     }
 
     @Test
@@ -494,8 +494,8 @@ class OrchestratorTest {
             runtimeStates = mapOf(defaultProjectSlug to state)
         )
         orch.runDispatchSync()
-        assertThat(state.claimed.contains("1")).isEqualTo(false)
-        assertThat(state.completed.contains("1")).isTrue()
+        assertThat(state.isClaimed("1")).isEqualTo(false)
+        assertThat(state.completed.containsKey("1")).isTrue()
     }
 
     @Test

@@ -92,7 +92,7 @@ class DispatchServiceTest {
 
     @Test
     fun `dispatch skips already claimed issues`() {
-        val state = RuntimeState().also { it.claimed.add("1") }
+        val state = RuntimeState().also { it.claimed["1"] = true }
         val runner = CollectingAgentRunner()
         val svc = createService(
             state = state, runner = runner,
@@ -158,8 +158,8 @@ class DispatchServiceTest {
             candidates = listOf(issue("1", "A-1", "Todo"))
         )
         runDispatch(svc)
-        assertThat(state.claimed.contains("1")).isEqualTo(false)
-        assertThat(state.completed.contains("1")).isTrue()
+        assertThat(state.isClaimed("1")).isEqualTo(false)
+        assertThat(state.completed.containsKey("1")).isTrue()
     }
 
     @Test
@@ -511,8 +511,8 @@ class DispatchServiceTest {
             runDispatchAwait(svc)
 
             assertThat(runner.dispatched.size).isEqualTo(1)
-            assertThat(state.blocked.contains("1")).isTrue()
-            assertThat(state.completed.contains("1")).isFalse()
+            assertThat(state.isBlocked("1")).isTrue()
+            assertThat(state.completed.containsKey("1")).isFalse()
             assertThat(trackingLinear.commentedIssueId).isEqualTo("1")
             assertThat(trackingLinear.commentedBody).isEqualTo("Need specs")
             assertThat(trackingLinear.transitionedIssueId).isEqualTo("1")
@@ -553,19 +553,20 @@ class DispatchServiceTest {
             )
 
             runDispatchAwait(svc)
-            assertThat(state.blocked.contains("1")).isTrue()
+            assertThat(state.isBlocked("1")).isTrue()
 
             Files.delete(workspace.path.resolve(".koncerto").resolve("clarification.md"))
-            state.blocked.remove("1")
+            state.removeBlocked("1")
 
             runDispatchAwait(svc)
 
             assertThat(runner.dispatched.size).isEqualTo(2)
-            assertThat(state.completed.contains("1")).isTrue()
-            assertThat(state.blocked.contains("1")).isFalse()
+            assertThat(state.completed.containsKey("1")).isTrue()
+            assertThat(state.isBlocked("1")).isFalse()
         } finally {
             root.toFile().deleteRecursively()
         }
+    }
     }
 
     private fun runDispatch(svc: DispatchService) {

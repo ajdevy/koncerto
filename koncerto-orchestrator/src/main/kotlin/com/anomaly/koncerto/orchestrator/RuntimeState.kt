@@ -2,11 +2,12 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
-import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+
+import com.anomaly.koncerto.core.tenant.TenantContext
 
 data class RunningEntry(
     val issue: Issue,
@@ -22,7 +23,8 @@ data class RunningEntry(
     val lastReportedTotal: Long = 0,
     val turnCount: Int = 1,
     val paused: Boolean = false,
-    val cancelled: Boolean = false
+    val cancelled: Boolean = false,
+    val tenantContext: TenantContext? = null
 )
 
 data class RetryEntry(
@@ -42,10 +44,10 @@ data class TokenTotals(
 
 class RuntimeState {
     val running = ConcurrentHashMap<String, RunningEntry>()
-    val claimed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
+    val claimed = ConcurrentHashMap<String, Boolean>()
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
-    val completed: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
-    val blocked: MutableSet<String> = Collections.synchronizedSet(LinkedHashSet())
+    val completed = ConcurrentHashMap<String, Boolean>()
+    val blocked = ConcurrentHashMap<String, Boolean>()
     var tokenTotals = TokenTotals()
     @Volatile
     var codexRateLimits: Map<String, Any?> = emptyMap()
@@ -101,4 +103,16 @@ class RuntimeState {
         blocked.clear()
         tokenTotals = TokenTotals()
     }
+
+    fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null
+
+    fun releaseClaim(issueId: String) = claimed.remove(issueId)
+
+    fun isClaimed(issueId: String): Boolean = claimed.containsKey(issueId)
+
+    fun addBlocked(issueId: String) = blocked.putIfAbsent(issueId, true) != null
+
+    fun removeBlocked(issueId: String) = blocked.remove(issueId)
+
+    fun isBlocked(issueId: String): Boolean = blocked.containsKey(issueId)
 }
