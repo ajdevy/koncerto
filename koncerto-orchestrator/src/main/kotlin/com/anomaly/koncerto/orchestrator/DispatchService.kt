@@ -371,7 +371,6 @@ class DispatchService(
                     totalTokens = finalEntry?.totalTokens ?: 0
                 )
                 handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
-                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
                 handleNormalCompletion(issue, data.stageConfig, finalEntry)
             }.onFailure { err ->
@@ -391,7 +390,6 @@ class DispatchService(
                     outputTokens = 0,
                     totalTokens = 0
                 )
-                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
                 scheduleRetry(issue, err.message ?: "unknown")
                 if (notificationsConfig?.onFailed == true && notifier != null) {
                     notifier.send(NotificationEvent.AgentFailed(
