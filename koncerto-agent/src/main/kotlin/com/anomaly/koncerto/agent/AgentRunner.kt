@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.agent
 
+import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.core.result.EmptyResult
@@ -52,9 +53,11 @@ class DefaultAgentRunner(
     private val runtimeFactory: AgentRuntimeFactory? = null,
     private val gitWorkflow: GitWorkflow? = null,
     private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null,
-    private val heartbeatIntervalMs: Long = 30_000L
+    private val heartbeatIntervalMs: Long = 30_000L,
+    private val circuitBreaker: AgentCircuitBreaker? = null,
+    private val maxRetries: Int = 1,
+    private val retryDelayMs: Long = 5_000L
 ) : AgentRunner {
-
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
 
     override fun events(): Flow<AgentEvent> = eventFlow.asSharedFlow()
@@ -68,18 +71,70 @@ class DefaultAgentRunner(
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> = runCatchingResult {
+        val effectiveAttempt = attempt ?: 1
+        val agentKey = "${agentKindOverride ?: "opencode"}:${commandOverride ?: agentKindOverride ?: "opencode"}"
+
+        if (!(circuitBreaker?.allowRequest(agentKey) ?: true)) {
+            throw IllegalStateException("circuit_breaker_open: $agentKey")
+        }
+
+        var lastException: Exception? = null
+        for (retryAttempt in 1..maxRetries) {
+            try {
+                val result = runWithRetry(
+                    issue = issue,
+                    attempt = effectiveAttempt,
+                    prompt = prompt,
+                    agentKindOverride = agentKindOverride,
+                    commandOverride = commandOverride,
+                    turnTimeoutMs = turnTimeoutMs,
+                    stallTimeoutMs = stallTimeoutMs,
+                    retryAttempt = retryAttempt
+                )
+                circuitBreaker?.recordSuccess(agentKey)
+                return@runCatchingResult result
+            } catch (e: Exception) {
+                lastException = e
+                logger.warn("agent_run_failed_retry", mapOf(
+                    "issue_id" to issue.id,
+                    "issue_identifier" to issue.identifier,
+                    "agent_key" to agentKey,
+                    "retry_attempt" to retryAttempt,
+                    "max_retries" to maxRetries,
+                    "error" to (e.message ?: e.javaClass.simpleName)
+                ))
+                circuitBreaker?.recordFailure(agentKey)
+                if (retryAttempt < maxRetries) {
+                    kotlinx.coroutines.delay(retryDelayMs * retryAttempt)
+                }
+            }
+        }
+        throw lastException ?: IllegalStateException("agent_run_failed_after_retries")
+    }
+
+    private suspend fun runWithRetry(
+        issue: Issue,
+        attempt: Int?,
+        prompt: String,
+        agentKindOverride: String?,
+        commandOverride: String?,
+        turnTimeoutMs: Long?,
+        stallTimeoutMs: Long?,
+        retryAttempt: Int
+    ) {
         val workspace = workspaces.ensureWorkspace(issue.identifier)
         workspaces.assertInsideRoot(workspace.path)
         config.hooks.afterCreate?.let { workspaces.runAfterCreate(workspace, it) }
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
-
         gitWorkflow?.createBranch(workspace.path, issue.identifier)
 
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
         val effectiveKind = agentKindOverride ?: "opencode"
         val command = commandOverride ?: effectiveKind
         val runtime = factory.create(effectiveKind, command, workspace.path)
-        if (!runtime.start()) throw IllegalStateException("startup_failed")
+        if (!runtime.start()) {
+            throw IllegalStateException("startup_failed")
+        }
 
         val effectiveTurnTimeout = turnTimeoutMs ?: 3_600_000L
         val effectiveStallTimeout = stallTimeoutMs ?: 300_000L
@@ -103,9 +158,7 @@ class DefaultAgentRunner(
                             delay(1000)
                             val elapsed = System.currentTimeMillis() - lastOutputMs.get()
                             if (elapsed > effectiveStallTimeout) {
-                                throw IllegalStateException(
-                                    "Agent stalled (no output for ${elapsed}ms)"
-                                )
+                                throw IllegalStateException("Agent stalled (no output for ${elapsed}ms)")
                             }
                         }
                     }
@@ -119,24 +172,18 @@ class DefaultAgentRunner(
                         }
                     }
 
-                    val rendered = PromptRenderer.render(
-                        prompt, mapOf(
-                            "issue" to issue.toTemplateMap(),
-                            "attempt" to attempt
-                        )
-                    )
+                    val rendered = PromptRenderer.render(prompt, mapOf(
+                        "issue" to issue.toTemplateMap(),
+                        "attempt" to attempt
+                    ))
 
                     runtime.send("initialize", null)
-                    runtime.send(
-                        "thread/start", buildJsonObject {
-                            put("working_directory", workspace.path.toString())
-                        }
-                    )
-                    runtime.send(
-                        "turn/start", buildJsonObject {
-                            put("input", rendered)
-                        }
-                    )
+                    runtime.send("thread/start", buildJsonObject {
+                        put("working_directory", workspace.path.toString())
+                    })
+                    runtime.send("turn/start", buildJsonObject {
+                        put("input", rendered)
+                    })
 
                     val turnDone = CompletableDeferred<Unit>()
                     val eventWatcher = launch {
@@ -152,7 +199,6 @@ class DefaultAgentRunner(
 
                     turnDone.await()
                     eventWatcher.cancel()
-
                     runtime.stop()
                     outputJob.cancel()
                     stallJob.cancel()
@@ -161,19 +207,18 @@ class DefaultAgentRunner(
             }
         } catch (e: Exception) {
             runtime.stop()
-            val reason = e.message ?: "agent_timeout"
             gitWorkflow?.let { gw ->
                 try {
                     gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
                     logger.info("partial_work_committed", mapOf(
                         "issue" to issue.identifier,
-                        "reason" to reason
+                        "reason" to (e.message ?: e.javaClass.simpleName)
                     ))
                 } catch (_: Exception) {
                     logger.warn("partial_commit_failed", mapOf("issue" to issue.identifier))
                 }
             }
-            throw IllegalStateException(reason)
+            throw e
         }
 
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
@@ -206,11 +251,7 @@ class DefaultAgentRunner(
         "url" to url,
         "labels" to labels,
         "blocked_by" to blockedBy.map {
-            mapOf(
-                "id" to it.id,
-                "identifier" to it.identifier,
-                "state" to it.state
-            )
+            mapOf("id" to it.id, "identifier" to it.identifier, "state" to it.state)
         },
         "created_at" to createdAt?.toString(),
         "updated_at" to updatedAt?.toString()
