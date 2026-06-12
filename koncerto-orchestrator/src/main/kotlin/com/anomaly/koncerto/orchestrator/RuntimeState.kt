@@ -4,10 +4,11 @@ import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.locks.ReentrantLock
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 import com.anomaly.koncerto.core.tenant.TenantContext
 
@@ -63,10 +64,10 @@ class RuntimeState {
         java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "symphony_workspaces")
 
     private val outputBuffers = ConcurrentHashMap<String, MutableSharedFlow<String>>()
-    private val _cancelMutex = ReentrantLock()
+    private val _cancelMutex = Mutex()
 
     fun appendOutput(issueId: String, line: String) {
-        val flow = outputBuffers.getOrPut(issueId) {
+        val flow = outputBuffers.computeIfAbsent(issueId) {
             MutableSharedFlow(replay = 2000, extraBufferCapacity = 500)
         }
         flow.tryEmit(line)
@@ -92,16 +93,13 @@ class RuntimeState {
         } != null
     }
 
-    fun cancelAgent(issueId: String): Boolean {
-        _cancelMutex.lock()
-        try {
-            return running.remove(issueId)?.let {
+    suspend fun cancelAgent(issueId: String): Boolean {
+        return _cancelMutex.withLock {
+            return@withLock running.remove(issueId)?.let {
                 claimed.remove(issueId)
                 removeOutput(issueId)
                 true
             } ?: false
-        } finally {
-            _cancelMutex.unlock()
         }
     }
 
@@ -113,7 +111,7 @@ class RuntimeState {
         _blocked.clear()
         _tokenTotals.set(TokenTotals())
         _codexRateLimits.clear()
-        // Not atomic - should only be called during shutdown
+        // Not atomic - only safe during shutdown when no concurrent operations.
     }
 
     fun updateIssueTokens(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long, turnCountInc: Int = 1): Boolean {
@@ -165,5 +163,5 @@ class RuntimeState {
 
     fun isBlocked(issueId: String): Boolean = _blocked.containsKey(issueId)
 
-    val blockedKeys: Set<String> get() = _blocked.keys
+    val blockedKeys: Set<String> get() = _blocked.keys.toSet()
 }

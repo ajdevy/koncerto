@@ -263,22 +263,24 @@ class DispatchService(
         }
     }
 
-    private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
+    private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
         val execData = prepareDispatch(issue, attempt) ?: run {
             retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
-            return
+            return false
         }
         scope.launch {
             runIssueExecution(scope, execData, issue)
         }
+        return true
     }
 
-    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
+    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
         val execData = prepareDispatch(issue, attempt) ?: run {
             retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
-            return
+            return false
         }
         runIssueExecution(scope, execData, issue)
+        return true
     }
 
     private data class DispatchExecutionData(
@@ -347,7 +349,9 @@ class DispatchService(
             }
         }
 
-        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: true
+        val quotaAcquired = quotaConfig?.let { config ->
+            quotaEnforcer?.tryAcquire(projectSlug, config) ?: true
+        } ?: true
         if (!quotaAcquired) {
             state.releaseClaim(issue.id)
             state.running.remove(issue.id)
@@ -497,10 +501,13 @@ class DispatchService(
             if (retryEntry == null) continue
 
             state.running.remove(issueId)
-            if (projectConfig.agent.sequentialMode) {
+            val success = if (projectConfig.agent.sequentialMode) {
                 dispatchSequential(issue, scope, retryEntry.attempt, retryEntry)
             } else {
                 dispatch(issue, scope, retryEntry.attempt, retryEntry)
+            }
+            if (!success) {
+                state.retryAttempts[issueId] = retryEntry.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS)
             }
         }
     }
@@ -576,32 +583,34 @@ class DispatchService(
             "issue_identifier" to issue.identifier
         ))
 
-        withContext(Dispatchers.IO) { linear.createComment(issueId, clarificationContent) }
+        withContext(Dispatchers.IO) {
+            linear.createComment(issueId, clarificationContent)
 
-        val blockedStateId = withContext(Dispatchers.IO) { linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState) }
-        if (blockedStateId != null) {
-            withContext(Dispatchers.IO) { linear.updateIssueState(issueId, blockedStateId) }
-            logger.info("state_transitioned", mapOf(
-                "issue_id" to issueId,
-                "from_state" to issue.state,
-                "to_state" to projectConfig.tracker.blockedState
-            ))
-        } else {
-            logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
-        }
+            val blockedStateId = linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
+            if (blockedStateId != null) {
+                linear.updateIssueState(issueId, blockedStateId)
+                logger.info("state_transitioned", mapOf(
+                    "issue_id" to issueId,
+                    "from_state" to issue.state,
+                    "to_state" to projectConfig.tracker.blockedState
+                ))
+            } else {
+                logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+            }
 
-        val creator = issue.creator
-        val assigneeId = when {
-            creator != null && !creator.isBot -> creator.id
-            projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
-            else -> null
-        }
-        if (assigneeId != null) {
-            withContext(Dispatchers.IO) { linear.updateIssueAssignee(issueId, assigneeId) }
-            logger.info("assignee_updated", mapOf(
-                "issue_id" to issueId,
-                "assignee_id" to assigneeId
-            ))
+            val creator = issue.creator
+            val assigneeId = when {
+                creator != null && !creator.isBot -> creator.id
+                projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
+                else -> null
+            }
+            if (assigneeId != null) {
+                linear.updateIssueAssignee(issueId, assigneeId)
+                logger.info("assignee_updated", mapOf(
+                    "issue_id" to issueId,
+                    "assignee_id" to assigneeId
+                ))
+            }
         }
 
         state.addBlocked(issueId)

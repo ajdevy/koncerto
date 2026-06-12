@@ -9,6 +9,7 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
 class RuntimeStateTest {
@@ -187,7 +188,7 @@ class RuntimeStateTest {
     }
 
     @Test
-    fun `cancelAgent removes entry`() {
+    fun `cancelAgent removes entry`() = runTest {
         val s = RuntimeState()
         s.running["a"] = runningEntry("a", "A-1")
         s.claimed["a"] = true
@@ -198,7 +199,7 @@ class RuntimeStateTest {
     }
 
     @Test
-    fun `cancelAgent removes output`() {
+    fun `cancelAgent removes output`() = runTest {
         val s = RuntimeState()
         s.running["a"] = runningEntry("a", "A-1")
         s.appendOutput("a", "line1")
@@ -220,7 +221,7 @@ class RuntimeStateTest {
     }
 
     @Test
-    fun `cancelAgent returns false for unknown id`() {
+    fun `cancelAgent returns false for unknown id`() = runTest {
         val s = RuntimeState()
         assertThat(s.cancelAgent("nonexistent")).isFalse()
     }
