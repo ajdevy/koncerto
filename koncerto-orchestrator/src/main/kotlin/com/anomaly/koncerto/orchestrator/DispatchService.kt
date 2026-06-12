@@ -25,10 +25,12 @@ import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
 import java.time.Instant
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
@@ -38,7 +40,7 @@ private const val AGENT_LABEL_PREFIX = "agent:"
 private const val MODEL_LABEL_PREFIX = "model:"
 private const val DEFAULT_PRIORITY = Int.MAX_VALUE
 private const val RETRY_RESCHEDULE_DELAY_MS = 1000L
-private val DEFAULT_CREATED_AT = Instant.MAX
+private val DEFAULT_CREATED_AT = Instant.MAX // Sort null createdAt LAST (newest first)
 
 data class ResolvedAgent(
     val kind: String,
@@ -97,7 +99,8 @@ class DispatchService(
             scope.coroutineContext.ensureActive()
             if (candidate.id !in graph.frontier.map { it.id }
                 && !state.running.containsKey(candidate.id)
-                && !state.isClaimed(candidate.id)) {
+                && !state.isClaimed(candidate.id)
+                && candidate.normalizedState.equals("todo", ignoreCase = true)) {
                 state.addBlocked(candidate.id)
             }
         }
@@ -274,12 +277,14 @@ class DispatchService(
         return true
     }
 
-    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
+    private fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
         val execData = prepareDispatch(issue, attempt) ?: run {
             retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
             return false
         }
-        runIssueExecution(scope, execData, issue)
+        scope.launch {
+            runIssueExecution(scope, execData, issue)
+        }
         return true
     }
 
@@ -330,8 +335,20 @@ class DispatchService(
     }
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
+        scope.coroutineContext.ensureActive()
         issueProjectMap[issue.id] = projectSlug
         agentIdToIssueId[data.threadId] = issue.id
+
+        // Check quota BEFORE starting agent - atomic check-and-acquire
+        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
+        if (!quotaAcquired) {
+            state.releaseClaim(issue.id)
+            state.running.remove(issue.id)
+            agentIdToIssueId.remove(data.threadId)
+            issueProjectMap.remove(issue.id)
+            scheduleRetry(issue, "Quota exhausted")
+            return
+        }
 
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
@@ -339,7 +356,7 @@ class DispatchService(
             stallTimeoutMs = projectConfig.agent.stallTimeoutMs
         )
 
-        val eventCollector = scope.launch {
+        val eventCollectorJob = scope.launch {
             agentRunner.events().collect { event ->
                 if (event is AgentEvent.TurnCompleted) {
                     event.usage?.let { usage ->
@@ -347,17 +364,6 @@ class DispatchService(
                     }
                 }
             }
-        }
-
-        val quotaAcquired = quotaConfig?.let { config ->
-            quotaEnforcer?.tryAcquire(projectSlug, config) ?: true
-        } ?: true
-        if (!quotaAcquired) {
-            state.releaseClaim(issue.id)
-            state.running.remove(issue.id)
-            scheduleRetry(issue, "Quota exhausted")
-            eventCollector.cancel()
-            return
         }
         try {
             result.onSuccess {
@@ -376,7 +382,8 @@ class DispatchService(
                     outputTokens = finalEntry?.outputTokens ?: 0,
                     totalTokens = finalEntry?.totalTokens ?: 0
                 )
-                handleWorkplanIfPresent(issue, data.stageConfig, finalEntry)
+                scope.coroutineContext.ensureActive()
+                handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
                 handleNormalCompletion(issue, data.stageConfig, finalEntry)
                 if (quotaAcquired) quotaEnforcer?.release(projectSlug)
@@ -409,15 +416,29 @@ class DispatchService(
                 if (quotaAcquired) quotaEnforcer?.release(projectSlug)
             }
         } finally {
-            eventCollector.cancel()
+            eventCollectorJob.cancel()
         }
     }
 
+    private val backgroundJobs = Collections.synchronizedList(mutableListOf<Job>())
+
+    suspend fun awaitBackgroundJobs() {
+        backgroundJobs.forEach { it.join() }
+        backgroundJobs.removeIf { it.isCompleted }
+    }
+
+    suspend fun shutdown() {
+        shutdownRequested = true
+        awaitBackgroundJobs()
+    }
+
     private suspend fun handleWorkplanIfPresent(
+        scope: CoroutineScope,
         issue: Issue,
         stageConfig: StageAgentConfig?,
         entry: RunningEntry?
     ) {
+        scope.coroutineContext.ensureActive()
         val wpConfig = projectConfig.agent.workplan
         if (wpConfig == null || subtaskOrchestrator == null || workplanParser == null) return
 
@@ -433,18 +454,21 @@ class DispatchService(
                     )
                 )
                 val orchestrator = subtaskOrchestrator ?: return
-                supervisorScope {
-                    orchestrator.execute(
-                        workspacePath = workspace.path,
-                        manifest = wpResult.value,
-                        config = wpConfig
-                    ).collect { event ->
-                        logger.info("subtask_event", mapOf(
-                            "issue_id" to issue.id,
-                            "event" to event::class.simpleName
-                        ))
+                val job = scope.launch {
+                    supervisorScope {
+                        orchestrator.execute(
+                            workspacePath = workspace.path,
+                            manifest = wpResult.value,
+                            config = wpConfig
+                        ).collect { event ->
+                            logger.info("subtask_event", mapOf(
+                                "issue_id" to issue.id,
+                                "event" to event::class.simpleName
+                            ))
+                        }
                     }
                 }
+                backgroundJobs.add(job)
             }
             is Result.Failure -> {
                 logger.debug("workplan_parse_failed", mapOf(
@@ -458,13 +482,14 @@ class DispatchService(
     private fun handleCrossProjectFollowUp(scope: CoroutineScope, issue: Issue, stageConfig: StageAgentConfig?) {
         val followUpConfig = stageConfig?.crossProjectFollowUp ?: return
         val chainer = crossProjectChainer ?: return
-        scope.launch {
+        val job = scope.launch {
             try {
                 chainer.createFollowUp(issue, followUpConfig, projectSlug)
             } catch (e: Exception) {
                 logger.failure("followup_failed", mapOf("issue_id" to issue.id), e)
             }
         }
+        backgroundJobs.add(job)
     }
 
     suspend fun dispatchDueRetries(scope: CoroutineScope) {
@@ -507,7 +532,10 @@ class DispatchService(
                 dispatch(issue, scope, retryEntry.attempt, retryEntry)
             }
             if (!success) {
-                state.retryAttempts[issueId] = retryEntry.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS)
+                // Atomic re-insert: only add back if no other thread inserted a newer entry
+                state.retryAttempts.computeIfAbsent(issueId) {
+                    retryEntry.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS)
+                }
             }
         }
     }
@@ -577,13 +605,8 @@ class DispatchService(
     }
 
     suspend fun handleClarification(issueId: String, clarificationContent: String) {
-        val issue = withContext(Dispatchers.IO) { linear.fetchIssueById(issueId) } ?: return
-        logger.info("clarification_received", mapOf(
-            "issue_id" to issueId,
-            "issue_identifier" to issue.identifier
-        ))
-
-        withContext(Dispatchers.IO) {
+        val issue = withContext(Dispatchers.IO) {
+            val fetched = linear.fetchIssueById(issueId) ?: return@withContext null
             linear.createComment(issueId, clarificationContent)
 
             val blockedStateId = linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
@@ -591,14 +614,14 @@ class DispatchService(
                 linear.updateIssueState(issueId, blockedStateId)
                 logger.info("state_transitioned", mapOf(
                     "issue_id" to issueId,
-                    "from_state" to issue.state,
+                    "from_state" to fetched.state,
                     "to_state" to projectConfig.tracker.blockedState
                 ))
             } else {
                 logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
             }
 
-            val creator = issue.creator
+            val creator = fetched.creator
             val assigneeId = when {
                 creator != null && !creator.isBot -> creator.id
                 projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
@@ -611,7 +634,13 @@ class DispatchService(
                     "assignee_id" to assigneeId
                 ))
             }
-        }
+            fetched
+        } ?: return
+
+        logger.info("clarification_received", mapOf(
+            "issue_id" to issueId,
+            "issue_identifier" to issue.identifier
+        ))
 
         state.addBlocked(issueId)
 

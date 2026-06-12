@@ -64,11 +64,23 @@ class RuntimeState {
         java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "symphony_workspaces")
 
     private val outputBuffers = ConcurrentHashMap<String, MutableSharedFlow<String>>()
+    private val MAX_OUTPUT_BUFFERS = 1000
+    private val OUTPUT_BUFFER_REPLAY = 500
+    private val OUTPUT_BUFFER_EXTRA = 200
+    private val _outputBuffersMutex = Mutex()
     private val _cancelMutex = Mutex()
+    private val _clearMutex = Mutex()
+    private val _blockedKeysCache = AtomicReference<Set<String>?>(null)
 
-    fun appendOutput(issueId: String, line: String) {
-        val flow = outputBuffers.computeIfAbsent(issueId) {
-            MutableSharedFlow(replay = 2000, extraBufferCapacity = 500)
+    suspend fun appendOutput(issueId: String, line: String) {
+        val flow = _outputBuffersMutex.withLock {
+            outputBuffers.computeIfAbsent(issueId) {
+                if (outputBuffers.size >= MAX_OUTPUT_BUFFERS) {
+                    val oldestKey = outputBuffers.keys.firstOrNull() ?: issueId
+                    outputBuffers.remove(oldestKey)
+                }
+                MutableSharedFlow(replay = OUTPUT_BUFFER_REPLAY, extraBufferCapacity = OUTPUT_BUFFER_EXTRA)
+            }
         }
         flow.tryEmit(line)
     }
@@ -80,6 +92,7 @@ class RuntimeState {
     }
 
     fun availableSlots(): Int = (maxConcurrentAgents - running.size).coerceAtLeast(0)
+        // Best-effort check; actual limit enforced by atomic tryClaim in dispatch.
 
     fun pauseAgent(issueId: String): Boolean {
         return running.computeIfPresent(issueId) { _, entry ->
@@ -103,15 +116,18 @@ class RuntimeState {
         }
     }
 
-    fun clearAll() {
-        running.clear()
-        claimed.clear()
-        retryAttempts.clear()
-        completed.clear()
-        _blocked.clear()
-        _tokenTotals.set(TokenTotals())
-        _codexRateLimits.clear()
-        // Not atomic - only safe during shutdown when no concurrent operations.
+    suspend fun clearAll() {
+        _clearMutex.withLock {
+            running.clear()
+            claimed.clear()
+            retryAttempts.clear()
+            completed.clear()
+            _blocked.clear()
+            outputBuffers.clear()
+            _tokenTotals.set(TokenTotals())
+            _codexRateLimits.clear()
+            _blockedKeysCache.set(null)
+        }
     }
 
     fun updateIssueTokens(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long, turnCountInc: Int = 1): Boolean {
@@ -157,11 +173,24 @@ class RuntimeState {
 
     fun isClaimed(issueId: String): Boolean = claimed.containsKey(issueId)
 
-    fun addBlocked(issueId: String): Boolean = _blocked.putIfAbsent(issueId, true) == null
+    fun addBlocked(issueId: String): Boolean {
+        val added = _blocked.putIfAbsent(issueId, true) == null
+        if (added) _blockedKeysCache.set(null)
+        return added
+    }
 
-    fun removeBlocked(issueId: String) = _blocked.remove(issueId)
+    fun removeBlocked(issueId: String): Boolean {
+        val removed = _blocked.remove(issueId) != null
+        if (removed) _blockedKeysCache.set(null)
+        return removed
+    }
 
     fun isBlocked(issueId: String): Boolean = _blocked.containsKey(issueId)
 
-    val blockedKeys: Set<String> get() = _blocked.keys.toSet()
+    val blockedKeys: Set<String> get() {
+        var cached = _blockedKeysCache.get()
+        if (cached != null) return cached
+        val computed = _blocked.keys.toSet()
+        return if (_blockedKeysCache.compareAndSet(null, computed)) computed else _blockedKeysCache.get()!!
+    }
 }
