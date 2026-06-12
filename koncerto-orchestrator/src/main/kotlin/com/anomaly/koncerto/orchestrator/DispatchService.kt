@@ -27,6 +27,7 @@ import java.nio.file.Files
 import java.time.Instant
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -35,6 +36,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.takeWhile
 
 private const val AGENT_LABEL_PREFIX = "agent:"
 private const val MODEL_LABEL_PREFIX = "model:"
@@ -321,6 +323,14 @@ class DispatchService(
         logger.info("dispatch_context", contextMap)
 
         if (!state.tryClaim(issue.id)) return null
+
+        // Check quota atomically with claim
+        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
+        if (!quotaAcquired) {
+            state.releaseClaim(issue.id)
+            return null
+        }
+
         val entry = RunningEntry(
             issue = issue,
             threadId = threadId,
@@ -339,17 +349,6 @@ class DispatchService(
         issueProjectMap[issue.id] = projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
-        // Check quota BEFORE starting agent - atomic check-and-acquire
-        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
-        if (!quotaAcquired) {
-            state.releaseClaim(issue.id)
-            state.running.remove(issue.id)
-            agentIdToIssueId.remove(data.threadId)
-            issueProjectMap.remove(issue.id)
-            scheduleRetry(issue, "Quota exhausted")
-            return
-        }
-
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
@@ -357,13 +356,15 @@ class DispatchService(
         )
 
         val eventCollectorJob = scope.launch {
-            agentRunner.events().collect { event ->
-                if (event is AgentEvent.TurnCompleted) {
-                    event.usage?.let { usage ->
-                        state.updateIssueTokens(issue.id, usage.inputTokens, usage.outputTokens, usage.totalTokens)
+            agentRunner.events()
+                .takeWhile { _ -> state.running.containsKey(issue.id) }
+                .collect { event ->
+                    if (event is AgentEvent.TurnCompleted) {
+                        event.usage?.let { usage ->
+                            state.updateIssueTokens(issue.id, usage.inputTokens, usage.outputTokens, usage.totalTokens)
+                        }
                     }
                 }
-            }
         }
         try {
             result.onSuccess {
@@ -386,7 +387,7 @@ class DispatchService(
                 handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
                 handleNormalCompletion(issue, data.stageConfig, finalEntry)
-                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
+                quotaEnforcer?.release(projectSlug)
             }.onFailure { err ->
                 scope.coroutineContext.ensureActive()
                 state.releaseClaim(issue.id)
@@ -413,14 +414,14 @@ class DispatchService(
                         error = err.message ?: "unknown"
                     ))
                 }
-                if (quotaAcquired) quotaEnforcer?.release(projectSlug)
+                quotaEnforcer?.release(projectSlug)
             }
         } finally {
             eventCollectorJob.cancel()
         }
     }
 
-    private val backgroundJobs = Collections.synchronizedList(mutableListOf<Job>())
+    private val backgroundJobs = CopyOnWriteArrayList<Job>()
 
     suspend fun awaitBackgroundJobs() {
         backgroundJobs.forEach { it.join() }
@@ -469,6 +470,7 @@ class DispatchService(
                     }
                 }
                 backgroundJobs.add(job)
+                job.invokeOnCompletion { cause -> backgroundJobs.remove(job) }
             }
             is Result.Failure -> {
                 logger.debug("workplan_parse_failed", mapOf(
@@ -490,6 +492,7 @@ class DispatchService(
             }
         }
         backgroundJobs.add(job)
+        job.invokeOnCompletion { cause -> backgroundJobs.remove(job) }
     }
 
     suspend fun dispatchDueRetries(scope: CoroutineScope) {

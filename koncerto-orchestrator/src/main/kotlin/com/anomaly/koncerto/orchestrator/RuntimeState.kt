@@ -190,7 +190,12 @@ class RuntimeState {
     val blockedKeys: Set<String> get() {
         var cached = _blockedKeysCache.get()
         if (cached != null) return cached
-        val computed = _blocked.keys.toSet()
-        return if (_blockedKeysCache.compareAndSet(null, computed)) computed else _blockedKeysCache.get()!!
+        var computed = _blocked.keys.toSet()
+        while (true) {
+            val current = _blockedKeysCache.get()
+            if (current != null) return current
+            if (_blockedKeysCache.compareAndSet(null, computed)) return computed
+            computed = _blocked.keys.toSet()
+        }
     }
 }
