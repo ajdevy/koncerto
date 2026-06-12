@@ -112,6 +112,7 @@ class DispatchService(
 
         for (issue in sorted) {
             scope.coroutineContext.ensureActive()
+            // Race condition acceptable - availableSlots is a hint; dispatch() uses tryClaim which is atomic.
             if (state.availableSlots() <= 0) break
             val perStateLimit = projectConfig.agent.maxConcurrentAgentsByState[issue.normalizedState]
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
@@ -342,7 +343,7 @@ class DispatchService(
             }
         }
 
-        val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: false
+        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: false
         try {
             result.onSuccess {
                 scope.coroutineContext.ensureActive()
@@ -443,7 +444,11 @@ class DispatchService(
         val followUpConfig = stageConfig?.crossProjectFollowUp ?: return
         val chainer = crossProjectChainer ?: return
         scope.launch {
-            chainer.createFollowUp(issue, followUpConfig, projectSlug)
+            try {
+                chainer.createFollowUp(issue, followUpConfig, projectSlug)
+            } catch (e: Exception) {
+                logger.failure("followup_failed", mapOf("issue_id" to issue.id), e)
+            }
         }
     }
 

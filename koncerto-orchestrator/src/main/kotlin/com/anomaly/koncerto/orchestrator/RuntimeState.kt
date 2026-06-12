@@ -4,6 +4,7 @@ import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -52,7 +53,7 @@ class RuntimeState {
     private val _tokenTotals = AtomicReference(TokenTotals())
     val tokenTotals: TokenTotals get() = _tokenTotals.get()
     private val _codexRateLimits = ConcurrentHashMap<String, Any?>()
-    val codexRateLimits: Map<String, Any?> get() = _codexRateLimits
+    val codexRateLimits: Map<String, Any?> get() = _codexRateLimits.toMap()
     @Volatile
     var pollIntervalMs: Long = 30_000
     @Volatile
@@ -62,6 +63,7 @@ class RuntimeState {
         java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "symphony_workspaces")
 
     private val outputBuffers = ConcurrentHashMap<String, MutableSharedFlow<String>>()
+    private val _cancelMutex = ReentrantLock()
 
     fun appendOutput(issueId: String, line: String) {
         val flow = outputBuffers.getOrPut(issueId) {
@@ -91,10 +93,16 @@ class RuntimeState {
     }
 
     fun cancelAgent(issueId: String): Boolean {
-        val entry = running.remove(issueId) ?: return false
-        claimed.remove(issueId)
-        removeOutput(issueId)
-        return true
+        _cancelMutex.lock()
+        try {
+            return running.remove(issueId)?.let {
+                claimed.remove(issueId)
+                removeOutput(issueId)
+                true
+            } ?: false
+        } finally {
+            _cancelMutex.unlock()
+        }
     }
 
     fun clearAll() {
@@ -109,6 +117,8 @@ class RuntimeState {
     }
 
     fun updateIssueTokens(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long, turnCountInc: Int = 1): Boolean {
+        // Note: per-issue tokens and global totals updated separately - not transactional.
+        // Acceptable since eventual consistency is sufficient.
         val updated = running.computeIfPresent(issueId) { _, entry ->
             entry.copy(
                 inputTokens = entry.inputTokens + inputTokens,
@@ -140,7 +150,7 @@ class RuntimeState {
     fun updateCodexRateLimits(limits: Map<String, Any?>) {
         _codexRateLimits.clear()
         _codexRateLimits.putAll(limits)
-        // Not atomic - concurrent reads may see partial state
+        // Not atomic - only called during startup/shutdown
     }
 
     fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null
