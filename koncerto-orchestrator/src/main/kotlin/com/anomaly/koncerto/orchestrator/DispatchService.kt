@@ -336,15 +336,7 @@ class DispatchService(
             agentRunner.events().collect { event ->
                 if (event is AgentEvent.TurnCompleted) {
                     event.usage?.let { usage ->
-                        val current = state.running[issue.id]
-                        current?.let { updated ->
-                            state.running[issue.id] = updated.copy(
-                                inputTokens = updated.inputTokens + usage.inputTokens,
-                                outputTokens = updated.outputTokens + usage.outputTokens,
-                                totalTokens = updated.totalTokens + usage.totalTokens,
-                                turnCount = updated.turnCount + 1
-                            )
-                        }
+                        state.updateIssueTokens(issue.id, usage.inputTokens, usage.outputTokens, usage.totalTokens)
                     }
                 }
             }

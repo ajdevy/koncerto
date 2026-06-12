@@ -108,14 +108,25 @@ class RuntimeState {
         // Not atomic - should only be called during shutdown
     }
 
-    fun updateTokenTotals(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long) {
-        _tokenTotals.updateAndGet { totals ->
-            totals.copy(
-                inputTokens = totals.inputTokens + inputTokens,
-                outputTokens = totals.outputTokens + outputTokens,
-                totalTokens = totals.totalTokens + totalTokens
+    fun updateIssueTokens(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long, turnCountInc: Int = 1): Boolean {
+        val updated = running.computeIfPresent(issueId) { _, entry ->
+            entry.copy(
+                inputTokens = entry.inputTokens + inputTokens,
+                outputTokens = entry.outputTokens + outputTokens,
+                totalTokens = entry.totalTokens + totalTokens,
+                turnCount = entry.turnCount + turnCountInc
             )
         }
+        if (updated != null) {
+            _tokenTotals.updateAndGet { totals ->
+                totals.copy(
+                    inputTokens = totals.inputTokens + inputTokens,
+                    outputTokens = totals.outputTokens + outputTokens,
+                    totalTokens = totals.totalTokens + totalTokens
+                )
+            }
+        }
+        return updated != null
     }
 
     fun addTokenTotals(inputTokens: Long, outputTokens: Long, totalTokens: Long) {
