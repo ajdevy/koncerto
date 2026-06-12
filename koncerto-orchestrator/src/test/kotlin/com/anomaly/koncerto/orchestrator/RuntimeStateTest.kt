@@ -109,11 +109,7 @@ class RuntimeStateTest {
         assertThat(s.tokenTotals.inputTokens).isEqualTo(0)
         assertThat(s.tokenTotals.outputTokens).isEqualTo(0)
         assertThat(s.tokenTotals.totalTokens).isEqualTo(0)
-        s.tokenTotals = s.tokenTotals.copy(
-            inputTokens = s.tokenTotals.inputTokens + 100,
-            outputTokens = s.tokenTotals.outputTokens + 50,
-            totalTokens = s.tokenTotals.totalTokens + 150
-        )
+        s.addTokenTotals(100, 50, 150)
         assertThat(s.tokenTotals.inputTokens).isEqualTo(100)
         assertThat(s.tokenTotals.outputTokens).isEqualTo(50)
         assertThat(s.tokenTotals.totalTokens).isEqualTo(150)

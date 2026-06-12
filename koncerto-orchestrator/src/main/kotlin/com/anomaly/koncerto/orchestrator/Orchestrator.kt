@@ -219,11 +219,7 @@ class Orchestrator(
                         )
                         return@let
                     }
-                    state.tokenTotals = state.tokenTotals.copy(
-                        inputTokens = state.tokenTotals.inputTokens + u.inputTokens,
-                        outputTokens = state.tokenTotals.outputTokens + u.outputTokens,
-                        totalTokens = state.tokenTotals.totalTokens + u.totalTokens
-                    )
+                    state.addTokenTotals(u.inputTokens, u.outputTokens, u.totalTokens)
                 }
             }
             else -> {

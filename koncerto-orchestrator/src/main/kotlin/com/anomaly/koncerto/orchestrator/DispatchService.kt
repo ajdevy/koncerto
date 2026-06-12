@@ -105,7 +105,7 @@ class DispatchService(
             state.removeBlocked(frontierId)
         }
         val candidateIds = candidates.map { it.id }.toSet()
-        for (id in state.blocked.keys.toTypedArray()) {
+        for (id in state.blockedKeys.toTypedArray()) {
             scope.coroutineContext.ensureActive()
             if (id !in candidateIds) state.removeBlocked(id)
         }
@@ -297,7 +297,11 @@ class DispatchService(
 
         val threadId = java.util.UUID.randomUUID().toString()
         val turnId = java.util.UUID.randomUUID().toString()
+        println("DEBUG: tenantResolver = $tenantResolver")
+        println("DEBUG: projectSlug = $projectSlug")
+        println("DEBUG: projectConfig.tenant = ${projectConfig.tenant}")
         val tenantContext = tenantResolver?.resolveTenant(projectSlug, projectConfig)
+        println("DEBUG: tenantContext = $tenantContext")
         val contextMap = mutableMapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         if (tenantContext != null) {
             contextMap["tenant_id"] = tenantContext.tenantId.value
@@ -350,8 +354,8 @@ class DispatchService(
             }
         }
 
+        val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: false
         try {
-            val quotaAcquired = projectConfig.quota?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
             result.onSuccess {
                 scope.coroutineContext.ensureActive()
                 state.releaseClaim(issue.id)
@@ -402,11 +406,6 @@ class DispatchService(
             }
         } finally {
             eventCollector.cancel()
-            state.removeOutput(issue.id)
-            agentIdToIssueId.remove(data.threadId)
-            issueProjectMap.remove(issue.id)
-            state.running.remove(issue.id)
-            state.releaseClaim(issue.id)
         }
     }
 

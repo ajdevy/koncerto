@@ -18,6 +18,7 @@ import com.anomaly.koncerto.core.tenant.TenantId
 import com.anomaly.koncerto.core.tenant.TenantResolver
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.logging.StructuredLogger
+import kotlinx.coroutines.CompletableDeferred
 import com.anomaly.koncerto.workspace.HookExecutor
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -46,13 +47,15 @@ class TenantDispatchTest {
         )
         runBlocking {
             svc.fetchAndDispatch(this)
+            runner.started.await()
+            val entry = state.running["1"]
+            assertThat(entry).isNotNull()
+            assertThat(entry!!.tenantContext).isNotNull()
+            assertThat(entry.tenantContext!!.tenantId.value).isEqualTo("my-project")
+            assertThat(entry.tenantContext!!.tier).isEqualTo("enterprise")
+            assertThat(entry.tenantContext!!.quotaProfile).isEqualTo("large")
+            runner.complete.complete(Unit)
         }
-        val entry = state.running["1"]
-        assertThat(entry).isNotNull()
-        assertThat(entry!!.tenantContext).isNotNull()
-        assertThat(entry.tenantContext!!.tenantId.value).isEqualTo("my-project")
-        assertThat(entry.tenantContext!!.tier).isEqualTo("enterprise")
-        assertThat(entry.tenantContext!!.quotaProfile).isEqualTo("large")
     }
 
     @Test
@@ -71,10 +74,12 @@ class TenantDispatchTest {
         )
         runBlocking {
             svc.fetchAndDispatch(this)
+            runner.started.await()
+            val entry = state.running["1"]
+            assertThat(entry).isNotNull()
+            assertThat(entry!!.tenantContext).isNull()
+            runner.complete.complete(Unit)
         }
-        val entry = state.running["1"]
-        assertThat(entry).isNotNull()
-        assertThat(entry!!.tenantContext).isNull()
     }
 
     @Test
@@ -87,7 +92,7 @@ class TenantDispatchTest {
                 projectSlug = "my-app"
             )
             val workspace = ws.ensureWorkspace("ISSUE-42", tenantContext)
-            val expectedPath = root.resolve("tenant-1").resolve("my-app").resolve("issue-42")
+            val expectedPath = root.resolve("tenant-1").resolve("my-app").resolve("ISSUE-42")
             assertThat(workspace.path).isEqualTo(expectedPath.toAbsolutePath().normalize())
         } finally {
             root.toFile().deleteRecursively()
@@ -100,7 +105,7 @@ class TenantDispatchTest {
         try {
             val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
             val workspace = ws.ensureWorkspace("ISSUE-42")
-            val expectedPath = root.resolve("issue-42")
+            val expectedPath = root.resolve("ISSUE-42")
             assertThat(workspace.path).isEqualTo(expectedPath.toAbsolutePath().normalize())
         } finally {
             root.toFile().deleteRecursively()
@@ -152,6 +157,8 @@ private class TenantTestLinear(private val candidates: List<Issue>) : LinearClie
 
 private class TenantTestAgentRunner : AgentRunner {
     val dispatched = mutableListOf<Issue>()
+    val started = CompletableDeferred<Unit>()
+    val complete = CompletableDeferred<Unit>()
     private val flow = MutableSharedFlow<com.anomaly.koncerto.agent.AgentEvent>()
     override fun events() = flow.asSharedFlow()
     override suspend fun run(
@@ -164,6 +171,8 @@ private class TenantTestAgentRunner : AgentRunner {
         stallTimeoutMs: Long?
     ): com.anomaly.koncerto.core.result.EmptyResult<IllegalStateException> {
         dispatched += issue
+        started.complete(Unit)
+        complete.await()
         return com.anomaly.koncerto.core.result.Result.Success(Unit)
     }
 }

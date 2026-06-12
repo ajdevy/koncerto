@@ -44,6 +44,57 @@ import org.junit.jupiter.api.io.TempDir
 
 class DispatchServiceTest {
 
+    companion object {
+        @JvmStatic
+        fun issue(
+            id: String, identifier: String, state: String,
+            priority: Int = 5, labels: List<String> = emptyList(),
+            blockers: List<BlockerRef> = emptyList()
+        ) = Issue(
+            id = id, identifier = identifier, title = "t", description = null,
+            priority = priority, state = state, branchName = null, url = null,
+            labels = labels, blockedBy = blockers,
+            createdAt = null, updatedAt = null
+        )
+
+        @JvmStatic
+        fun config(
+            stages: Map<String, StageAgentConfig> = emptyMap(),
+            agents: Map<String, AgentProviderConfig> = emptyMap(),
+            routingRules: List<RoutingRule> = emptyList()
+        ) = ProjectConfig(
+            tracker = TrackerConfig(
+                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
+                requiredLabels = emptyList(),
+                activeStates = listOf("Todo"), terminalStates = listOf("Done"),
+                blockedState = "Blocked", projectAdmin = null
+            ),
+            workspace = WorkspaceConfig(root = "/tmp"),
+            agent = AgentProjectConfig(
+                kind = "codex", command = "codex app-server",
+                maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
+                maxConcurrentAgentsByState = emptyMap(),
+                turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                stages = stages,
+                agents = agents,
+                routingRules = routingRules
+            )
+        )
+
+        @JvmStatic
+        fun runningEntry(id: String, identifier: String) = RunningEntry(
+            issue = Issue(
+                id = id, identifier = identifier, title = "t", description = null,
+                priority = 5, state = "Todo", branchName = null, url = null,
+                labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+            ),
+            threadId = "thread-$id",
+            turnId = "turn-$id",
+            startedAt = java.time.Instant.now(),
+            lastCodexTimestamp = null
+        )
+    }
+
     @Test
     fun `dispatch eligible issues and skip ineligible ones`() {
         val runner = CollectingAgentRunner()
@@ -68,7 +119,7 @@ class DispatchServiceTest {
         }
         val projectConfig = config().copy(agent = config().agent.copy(maxConcurrentAgentsByState = mapOf("todo" to 1)))
         val runner = CollectingAgentRunner()
-        val svc = createService(config = projectConfig, state = state, runner = runner)
+        val svc = createService(projectConfig = projectConfig, state = state, runner = runner)
         runDispatch(svc)
         assertThat(runner.dispatched.size).isEqualTo(0)
     }
@@ -83,7 +134,7 @@ class DispatchServiceTest {
         val projectConfig = config().copy(agent = config().agent.copy(maxConcurrentAgentsByState = mapOf("todo" to 2)))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = projectConfig, state = state, runner = runner,
+            projectConfig = projectConfig, state = state, runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo"), issue("2", "A-2", "Todo"))
         )
         runDispatch(svc)
@@ -140,7 +191,7 @@ class DispatchServiceTest {
     @Test
     fun `scheduleRetry caps backoff at maxRetryBackoffMs`() {
         val projectConfig = config().copy(agent = config().agent.copy(maxRetryBackoffMs = 60_000))
-        val (svc, state) = createServiceWithState(config = projectConfig)
+        val (svc, state) = createServiceWithState(projectConfig = projectConfig)
         repeat(10) { svc.scheduleRetry(issue("1", "A-1", "Todo"), "err") }
         val entry = state.retryAttempts["1"]
         assertThat(entry).isNotNull()
@@ -167,7 +218,7 @@ class DispatchServiceTest {
         val projectConfig = config().copy(tracker = config().tracker.copy(requiredLabels = listOf("bugfix")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = projectConfig, runner = runner,
+            projectConfig = projectConfig, runner = runner,
             candidates = listOf(
                 issue("1", "A-1", "Todo", labels = listOf("feature")),
                 issue("2", "A-2", "Todo", labels = listOf("bugfix")),
@@ -183,7 +234,7 @@ class DispatchServiceTest {
         val projectConfig = config().copy(tracker = config().tracker.copy(requiredLabels = listOf("BugFix")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = projectConfig, runner = runner,
+            projectConfig = projectConfig, runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo", labels = listOf("bugfix")))
         )
         runDispatch(svc)
@@ -237,7 +288,7 @@ class DispatchServiceTest {
         val projectConfig = config().copy(tracker = config().tracker.copy(activeStates = listOf("Todo", "In Progress")))
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = projectConfig, runner = runner,
+            projectConfig = projectConfig, runner = runner,
             candidates = listOf(
                 issue("1", "A-1", "In Progress", blockers = listOf(BlockerRef("b1", "B-1", "Todo")))
             )
@@ -299,7 +350,7 @@ class DispatchServiceTest {
         val cache = WorkflowCache()
         cache.set(WorkflowDefinition(emptyMap(), "global-prompt"))
         val svc = createService(
-            config = config(stages = stages), runner = runner,
+            projectConfig = config(stages = stages), runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo")),
             cache = cache
         )
@@ -319,7 +370,7 @@ class DispatchServiceTest {
         val cache = WorkflowCache()
         cache.set(WorkflowDefinition(emptyMap(), "global-prompt"))
         val svc = createService(
-            config = config(stages = stages), runner = runner,
+            projectConfig = config(stages = stages), runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo")),
             cache = cache
         )
@@ -337,7 +388,7 @@ class DispatchServiceTest {
             )
         )
         val svc = createService(
-            config = config(stages = stages), runner = runner,
+            projectConfig = config(stages = stages), runner = runner,
             candidates = listOf(issue("1", "A-1", "Todo"))
         )
         runDispatch(svc)
@@ -359,7 +410,7 @@ class DispatchServiceTest {
         )
         val runner = CollectingAgentRunner()
         val svc = createService(
-            config = config(stages = stages),
+            projectConfig = config(stages = stages),
             state = state,
             linear = trackingLinear,
             runner = runner,
@@ -402,7 +453,7 @@ class DispatchServiceTest {
         )
         val state = RuntimeState()
         val svc = createService(
-            config = config(stages = stages),
+            projectConfig = config(stages = stages),
             state = state,
             linear = trackingLinear,
             candidates = listOf(issue("a", "ENG-1", "In Progress"))
@@ -432,7 +483,7 @@ class DispatchServiceTest {
         )
         val state = RuntimeState()
         val svc = createService(
-            config = config(stages = stages),
+            projectConfig = config(stages = stages),
             state = state,
             linear = trackingLinear,
             candidates = listOf(issue("a", "ENG-1", "In Progress"))
@@ -501,7 +552,7 @@ class DispatchServiceTest {
             val runner = CollectingAgentRunner()
             val projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked"))
             val svc = createService(
-                config = projectConfig,
+                projectConfig = projectConfig,
                 state = state,
                 linear = trackingLinear,
                 workspaces = workspaces,
@@ -544,7 +595,7 @@ class DispatchServiceTest {
             ))
             val projectConfig = config(stages = stages).copy(tracker = config().tracker.copy(blockedState = "Blocked"))
             val svc = createService(
-                config = projectConfig,
+                projectConfig = projectConfig,
                 state = state,
                 linear = trackingLinear,
                 workspaces = workspaces,
@@ -567,7 +618,6 @@ class DispatchServiceTest {
             root.toFile().deleteRecursively()
         }
     }
-    }
 
     private fun runDispatch(svc: DispatchService) {
         runBlocking {
@@ -589,7 +639,7 @@ class DispatchServiceTest {
     }
 
     private fun createService(
-        config: ProjectConfig = config(),
+        projectConfig: ProjectConfig? = null,
         state: RuntimeState = RuntimeState(),
         linear: LinearClient? = null,
         candidates: List<Issue>? = null,
@@ -597,23 +647,24 @@ class DispatchServiceTest {
         cache: WorkflowCache? = null,
         workspaces: WorkspaceManager? = null
     ): DispatchService {
+        val cfg = projectConfig ?: DispatchServiceTest.config()
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val logger = StructuredLogger(emptyList())
         val client = linear ?: candidates?.let { SimpleLinear(it) } ?: SimpleLinear(emptyList())
-        return DispatchService(config, state, client, runner, wc, logger, "proj", workspaces)
+        return DispatchService(cfg, state, client, runner, wc, logger, "proj", workspaces)
     }
 
     private fun createServiceWithState(
-        config: ProjectConfig = config()
+        projectConfig: ProjectConfig? = null
     ): Pair<DispatchService, RuntimeState> {
         val state = RuntimeState()
-        val svc = createService(config = config, state = state)
+        val svc = createService(projectConfig = projectConfig ?: DispatchServiceTest.config(), state = state)
         return Pair(svc, state)
     }
 
     @Test
     fun `resolveAgent returns provider kind and model from named agent on stage`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
@@ -621,7 +672,7 @@ class DispatchServiceTest {
                 agent = "fast"
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress")
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress")
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -630,14 +681,14 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent falls back to agentKind when no agents map`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
                 agentKind = "codex", command = null, onCompleteState = null,
                 agent = null
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress")
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress")
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -645,15 +696,15 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent uses project default when no stage config`() {
-        val (svc, _) = createServiceWithState(config())
-        val issue = issue("1", "T-1", "In Progress")
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config())
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress")
         val resolved = svc.resolveAgent(issue, null)
         assertThat(resolved.kind).isEqualTo("codex")
     }
 
     @Test
     fun `resolveAgent label agent colon fast overrides provider`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf(
                 "fast" to AgentProviderConfig("codex", model = "claude-sonnet-4"),
                 "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
@@ -664,7 +715,7 @@ class DispatchServiceTest {
                 agent = "slow"
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:fast"))
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress", labels = listOf("agent:fast"))
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -673,7 +724,7 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent label model colon gpt4o overrides stage model`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
@@ -681,7 +732,7 @@ class DispatchServiceTest {
                 agent = "fast"
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress", labels = listOf("model:gpt-4o"))
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress", labels = listOf("model:gpt-4o"))
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -690,7 +741,7 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent combines agent and model labels`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf(
                 "fast" to AgentProviderConfig("codex"),
                 "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
@@ -701,7 +752,7 @@ class DispatchServiceTest {
                 agent = "slow"
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:fast", "model:gpt-4o"))
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress", labels = listOf("agent:fast", "model:gpt-4o"))
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -710,14 +761,14 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent handles non-existent provider label gracefully`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = null
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress", labels = listOf("agent:nonexistent"))
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress", labels = listOf("agent:nonexistent"))
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -725,14 +776,14 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent backward compat with agentKind and model labels`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
                 agentKind = "codex", command = null, onCompleteState = null,
                 agent = null
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress", labels = listOf("model:claude-3"))
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress", labels = listOf("model:claude-3"))
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -741,14 +792,14 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent uses project default kind when no stage config uses no agent`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("unknown" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = null
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress")
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress")
         val stage = svc.projectConfig.agent.stages["unknown"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -756,7 +807,7 @@ class DispatchServiceTest {
 
     @Test
     fun `resolveAgent warns when stage references non-existent provider`() {
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = emptyMap(),
             stages = mapOf("in progress" to StageAgentConfig(
                 prompt = "test", model = null, maxConcurrent = null,
@@ -764,7 +815,7 @@ class DispatchServiceTest {
                 agent = "nonexistent"
             ))
         ))
-        val issue = issue("1", "T-1", "In Progress")
+        val issue = DispatchServiceTest.issue("1", "T-1", "In Progress")
         val stage = svc.projectConfig.agent.stages["in progress"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("codex")
@@ -774,10 +825,10 @@ class DispatchServiceTest {
     fun `resolveAgent uses routing rule matching label`() {
         val agents = mapOf("frontend-agent" to AgentProviderConfig(kind = "codex", model = "gpt-4"))
         val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "frontend-agent", priority = 10))
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = agents, routingRules = rules
         ))
-        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend", "bug"))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("frontend", "bug"))
         val resolved = svc.resolveAgent(issue, stageConfig = null)
         assertThat(resolved.kind).isEqualTo("codex")
         assertThat(resolved.model).isEqualTo("gpt-4")
@@ -787,10 +838,10 @@ class DispatchServiceTest {
     fun `resolveAgent uses routing rule matching label prefix`() {
         val agents = mapOf("backend-agent" to AgentProviderConfig(kind = "opencode"))
         val rules = listOf(RoutingRule(ifLabelPrefix = "backend:", useAgent = "backend-agent", priority = 5))
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = agents, routingRules = rules
         ))
-        val issue = issue("a", "ENG-1", "Todo", labels = listOf("backend:api", "bug"))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("backend:api", "bug"))
         val resolved = svc.resolveAgent(issue, stageConfig = null)
         assertThat(resolved.kind).isEqualTo("opencode")
     }
@@ -799,10 +850,10 @@ class DispatchServiceTest {
     fun `resolveAgent falls through when no routing rule matches`() {
         val agents = mapOf("special" to AgentProviderConfig(kind = "codex"))
         val rules = listOf(RoutingRule(ifLabel = "special-label", useAgent = "special", priority = 10))
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = agents, routingRules = rules
         ))
-        val issue = issue("a", "ENG-1", "Todo", labels = listOf("normal"))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("normal"))
         val resolved = svc.resolveAgent(issue, stageConfig = null)
         assertThat(resolved.kind).isEqualTo("codex")
     }
@@ -819,10 +870,10 @@ class DispatchServiceTest {
             agentKind = null, command = null, onCompleteState = null,
             agent = "staged"
         ))
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = agents, routingRules = rules, stages = stages
         ))
-        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend"))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("frontend"))
         val stage = svc.projectConfig.agent.stages["todo"]
         val resolved = svc.resolveAgent(issue, stage)
         assertThat(resolved.kind).isEqualTo("opencode")
@@ -836,60 +887,12 @@ class DispatchServiceTest {
             "label-agent" to AgentProviderConfig(kind = "opencode")
         )
         val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "routed", priority = 10))
-        val (svc, _) = createServiceWithState(config(
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = agents, routingRules = rules
         ))
-        val issue = issue("a", "ENG-1", "Todo", labels = listOf("frontend", "agent:label-agent"))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("frontend", "agent:label-agent"))
         val resolved = svc.resolveAgent(issue, stageConfig = null)
         assertThat(resolved.kind).isEqualTo("opencode")
-    }
-
-    companion object {
-        fun issue(
-            id: String, identifier: String, state: String,
-            priority: Int = 5, labels: List<String> = emptyList(),
-            blockers: List<BlockerRef> = emptyList()
-        ) = Issue(
-            id = id, identifier = identifier, title = "t", description = null,
-            priority = priority, state = state, branchName = null, url = null,
-            labels = labels, blockedBy = blockers,
-            createdAt = null, updatedAt = null
-        )
-
-        fun config(
-            stages: Map<String, StageAgentConfig> = emptyMap(),
-            agents: Map<String, AgentProviderConfig> = emptyMap(),
-            routingRules: List<RoutingRule> = emptyList()
-        ) = ProjectConfig(
-            tracker = TrackerConfig(
-                kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
-                requiredLabels = emptyList(),
-                activeStates = listOf("Todo"), terminalStates = listOf("Done"),
-                blockedState = "Blocked", projectAdmin = null
-            ),
-            workspace = WorkspaceConfig(root = "/tmp"),
-            agent = AgentProjectConfig(
-                kind = "codex", command = "codex app-server",
-                maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
-                maxConcurrentAgentsByState = emptyMap(),
-                turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-                stages = stages,
-                agents = agents,
-                routingRules = routingRules
-            )
-        )
-
-        fun runningEntry(id: String, identifier: String) = RunningEntry(
-            issue = Issue(
-                id = id, identifier = identifier, title = "t", description = null,
-                priority = 5, state = "Todo", branchName = null, url = null,
-                labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
-            ),
-            threadId = "thread-$id",
-            turnId = "turn-$id",
-            startedAt = java.time.Instant.now(),
-            lastCodexTimestamp = null
-        )
     }
 }
 

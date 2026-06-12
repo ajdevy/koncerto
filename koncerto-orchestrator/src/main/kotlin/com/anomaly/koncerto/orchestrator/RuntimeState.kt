@@ -3,6 +3,7 @@ package com.anomaly.koncerto.orchestrator
 import com.anomaly.koncerto.core.model.Issue
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -47,10 +48,11 @@ class RuntimeState {
     val claimed = ConcurrentHashMap<String, Boolean>()
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
     val completed = ConcurrentHashMap<String, Boolean>()
-    val blocked = ConcurrentHashMap<String, Boolean>()
-    var tokenTotals = TokenTotals()
-    @Volatile
-    var codexRateLimits: Map<String, Any?> = emptyMap()
+    private val _blocked = ConcurrentHashMap<String, Boolean>()
+    private val _tokenTotals = AtomicReference(TokenTotals())
+    val tokenTotals: TokenTotals get() = _tokenTotals.get()
+    private val _codexRateLimits = ConcurrentHashMap<String, Any?>()
+    val codexRateLimits: Map<String, Any?> get() = _codexRateLimits
     @Volatile
     var pollIntervalMs: Long = 30_000
     @Volatile
@@ -90,8 +92,6 @@ class RuntimeState {
 
     fun cancelAgent(issueId: String): Boolean {
         val entry = running.remove(issueId) ?: return false
-        val cancelledEntry = entry.copy(cancelled = true)
-        running[issueId] = cancelledEntry
         claimed.remove(issueId)
         removeOutput(issueId)
         return true
@@ -102,18 +102,33 @@ class RuntimeState {
         claimed.clear()
         retryAttempts.clear()
         completed.clear()
-        blocked.clear()
-        tokenTotals = TokenTotals()
+        _blocked.clear()
+        _tokenTotals.set(TokenTotals())
+        _codexRateLimits.clear()
     }
 
-    fun updateTokenTotals(inputTokens: Long = 0, outputTokens: Long = 0, totalTokens: Long = 0, secondsRunning: Long = 0): TokenTotals {
-        tokenTotals = tokenTotals.copy(
-            inputTokens = tokenTotals.inputTokens + inputTokens,
-            outputTokens = tokenTotals.outputTokens + outputTokens,
-            totalTokens = tokenTotals.totalTokens + totalTokens,
-            secondsRunning = secondsRunning
-        )
-        return tokenTotals
+    fun updateTokenTotals(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long) {
+        val entry = running[issueId]
+        if (entry != null) {
+            _tokenTotals.updateAndGet { it.copy(
+                inputTokens = it.inputTokens + inputTokens,
+                outputTokens = it.outputTokens + outputTokens,
+                totalTokens = it.totalTokens + totalTokens
+            ) }
+        }
+    }
+
+    fun addTokenTotals(inputTokens: Long, outputTokens: Long, totalTokens: Long) {
+        _tokenTotals.updateAndGet { it.copy(
+            inputTokens = it.inputTokens + inputTokens,
+            outputTokens = it.outputTokens + outputTokens,
+            totalTokens = it.totalTokens + totalTokens
+        ) }
+    }
+
+    fun updateCodexRateLimits(limits: Map<String, Any?>) {
+        _codexRateLimits.clear()
+        _codexRateLimits.putAll(limits)
     }
 
     fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null
@@ -122,9 +137,11 @@ class RuntimeState {
 
     fun isClaimed(issueId: String): Boolean = claimed.containsKey(issueId)
 
-    fun addBlocked(issueId: String) = blocked.putIfAbsent(issueId, true) != null
+    fun addBlocked(issueId: String): Boolean = _blocked.putIfAbsent(issueId, true) == null
 
-    fun removeBlocked(issueId: String) = blocked.remove(issueId)
+    fun removeBlocked(issueId: String) = _blocked.remove(issueId)
 
-    fun isBlocked(issueId: String): Boolean = blocked.containsKey(issueId)
+    fun isBlocked(issueId: String): Boolean = _blocked.containsKey(issueId)
+
+    val blockedKeys: Set<String> get() = _blocked.keys
 }
