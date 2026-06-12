@@ -473,14 +473,6 @@ class DispatchService(
             scope.coroutineContext.ensureActive()
             if (state.availableSlots() <= 0) break
 
-            val retryEntry = state.retryAttempts[issueId]
-            if (retryEntry == null) continue
-
-            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) {
-                state.retryAttempts[issueId] = retryEntry.copy(dueAtMs = System.currentTimeMillis() + 1000)
-                continue
-            }
-
             val issue = try {
                 scope.coroutineContext.ensureActive()
                 linear.fetchIssueById(issueId)
@@ -492,14 +484,22 @@ class DispatchService(
                 continue
             }
 
-            val removedEntry = state.retryAttempts.remove(issueId)
-            if (removedEntry == null) continue
+            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) {
+                val retryEntry = state.retryAttempts[issueId]
+                retryEntry?.let {
+                    state.retryAttempts[issueId] = it.copy(dueAtMs = System.currentTimeMillis() + 1000)
+                }
+                continue
+            }
+
+            val retryEntry = state.retryAttempts.remove(issueId)
+            if (retryEntry == null) continue
 
             state.running.remove(issueId)
             if (projectConfig.agent.sequentialMode) {
-                dispatchSequential(issue, scope, removedEntry.attempt, removedEntry)
+                dispatchSequential(issue, scope, retryEntry.attempt, retryEntry)
             } else {
-                dispatch(issue, scope, removedEntry.attempt, removedEntry)
+                dispatch(issue, scope, retryEntry.attempt, retryEntry)
             }
         }
     }
