@@ -8,6 +8,8 @@ import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.notifications.CompositeNotifier
 import com.anomaly.koncerto.notifications.NotificationEvent
+import com.anomaly.koncerto.orchestrator.SubtaskOrchestrator
+import com.anomaly.koncerto.orchestrator.WorkplanParser
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -28,7 +30,9 @@ class Orchestrator(
     private val scope: CoroutineScope,
     private val runtimeStates: Map<String, RuntimeState> = emptyMap(),
     private val metricsRepository: MetricsRepository? = null,
-    private val notifier: CompositeNotifier? = null
+    private val notifier: CompositeNotifier? = null,
+    private val subtaskOrchestrator: SubtaskOrchestrator? = null,
+    private val workplanParser: WorkplanParser? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -65,7 +69,9 @@ class Orchestrator(
                 issueProjectMap = issueProjectMap,
                 metricsRepository = metricsRepository,
                 notifier = notifier,
-                notificationsConfig = pc.notifications
+                notificationsConfig = pc.notifications,
+                subtaskOrchestrator = subtaskOrchestrator,
+                workplanParser = workplanParser
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }
@@ -90,8 +96,10 @@ class Orchestrator(
 
     fun restart() {
         shutdownRequested = false
-        for ((_, pr) in projects) {
-            pr.state.clearAll()
+        scope.launch {
+            for ((_, pr) in projects) {
+                pr.state.clearAll()
+            }
         }
         scope.launch { tickLoop() }
     }

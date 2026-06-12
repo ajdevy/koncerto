@@ -6,6 +6,8 @@ import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.AgentRuntimeFactory
 import com.anomaly.koncerto.agent.DefaultAgentHealthChecker
 import com.anomaly.koncerto.agent.DefaultAgentRunner
+import com.anomaly.koncerto.agent.DefaultSubtaskRunner
+import com.anomaly.koncerto.agent.SubtaskRunner
 import com.anomaly.koncerto.core.TokenBucketRateLimiter
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.CircuitBreaker
@@ -39,6 +41,9 @@ import com.anomaly.koncerto.metrics.SqliteMetricsRepository
 import io.micrometer.core.instrument.binder.MeterBinder
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
+import com.anomaly.koncerto.orchestrator.SubtaskFrontier
+import com.anomaly.koncerto.orchestrator.SubtaskOrchestrator
+import com.anomaly.koncerto.orchestrator.WorkplanParser
 import com.anomaly.koncerto.workspace.GitWorkflow
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
@@ -163,6 +168,27 @@ class Beans {
         GitWorkflow(config.gitConfig, logger)
 
     @Bean
+    fun subtaskRunner(
+        logger: StructuredLogger,
+        runtimeFactory: AgentRuntimeFactory? = null
+    ): SubtaskRunner = DefaultSubtaskRunner(logger, runtimeFactory)
+
+    @Bean
+    fun subtaskFrontier(): SubtaskFrontier = SubtaskFrontier()
+
+    @Bean
+    fun workplanParser(
+        logger: StructuredLogger
+    ): WorkplanParser = WorkplanParser(logger)
+
+    @Bean
+    fun subtaskOrchestrator(
+        subtaskRunner: SubtaskRunner,
+        gitWorkflow: GitWorkflow,
+        logger: StructuredLogger
+    ): SubtaskOrchestrator = SubtaskOrchestrator(subtaskRunner, gitWorkflow, logger)
+
+    @Bean
     fun logNotifier(logger: StructuredLogger): LoggingNotifier = LoggingNotifier(logger)
 
     @Bean
@@ -269,7 +295,9 @@ class Beans {
         workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager,
         runtimeStates: Map<String, RuntimeState>,
         metricsRepository: MetricsRepository?,
-        compositeNotifier: CompositeNotifier?
+        compositeNotifier: CompositeNotifier?,
+        subtaskOrchestrator: SubtaskOrchestrator?,
+        workplanParser: WorkplanParser?
     ): Orchestrator = Orchestrator(
         config = config,
         linearClientFactory = linearClientFactory,
@@ -280,6 +308,8 @@ class Beans {
         scope = scope,
         runtimeStates = runtimeStates,
         metricsRepository = metricsRepository,
-        notifier = compositeNotifier
+        notifier = compositeNotifier,
+        subtaskOrchestrator = subtaskOrchestrator,
+        workplanParser = workplanParser
     )
 }
