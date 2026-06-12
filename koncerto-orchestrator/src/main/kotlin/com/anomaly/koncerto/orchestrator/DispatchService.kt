@@ -262,15 +262,21 @@ class DispatchService(
         }
     }
 
-    private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
-        val execData = prepareDispatch(issue, attempt) ?: return
+    private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
+        val execData = prepareDispatch(issue, attempt) ?: run {
+            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + 1000) }
+            return
+        }
         scope.launch {
             runIssueExecution(scope, execData, issue)
         }
     }
 
-    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null) {
-        val execData = prepareDispatch(issue, attempt) ?: return
+    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
+        val execData = prepareDispatch(issue, attempt) ?: run {
+            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + 1000) }
+            return
+        }
         runIssueExecution(scope, execData, issue)
     }
 
@@ -306,6 +312,7 @@ class DispatchService(
         }
         logger.info("dispatch_context", contextMap)
 
+        if (!state.tryClaim(issue.id)) return null
         val entry = RunningEntry(
             issue = issue,
             threadId = threadId,
@@ -320,10 +327,6 @@ class DispatchService(
     }
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
-        if (!state.tryClaim(issue.id)) {
-            state.running.remove(issue.id)
-            return
-        }
         issueProjectMap[issue.id] = projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
@@ -343,7 +346,14 @@ class DispatchService(
             }
         }
 
-        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: false
+        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } ?: true
+        if (!quotaAcquired) {
+            state.releaseClaim(issue.id)
+            state.running.remove(issue.id)
+            scheduleRetry(issue, "Quota exhausted")
+            eventCollector.cancel()
+            return
+        }
         try {
             result.onSuccess {
                 scope.coroutineContext.ensureActive()
@@ -461,10 +471,16 @@ class DispatchService(
 
         for (issueId in dueKeys) {
             scope.coroutineContext.ensureActive()
-            val retryEntry = state.retryAttempts.remove(issueId)
-            if (retryEntry == null) continue
             if (state.availableSlots() <= 0) break
-            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) continue
+
+            val retryEntry = state.retryAttempts[issueId]
+            if (retryEntry == null) continue
+
+            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) {
+                state.retryAttempts[issueId] = retryEntry.copy(dueAtMs = System.currentTimeMillis() + 1000)
+                continue
+            }
+
             val issue = try {
                 scope.coroutineContext.ensureActive()
                 linear.fetchIssueById(issueId)
@@ -475,11 +491,15 @@ class DispatchService(
                 logger.warn("retry_fetch_failed", mapOf("issue_id" to issueId))
                 continue
             }
+
+            val removedEntry = state.retryAttempts.remove(issueId)
+            if (removedEntry == null) continue
+
             state.running.remove(issueId)
             if (projectConfig.agent.sequentialMode) {
-                dispatchSequential(issue, scope, retryEntry.attempt)
+                dispatchSequential(issue, scope, removedEntry.attempt, removedEntry)
             } else {
-                dispatch(issue, scope, retryEntry.attempt)
+                dispatch(issue, scope, removedEntry.attempt, removedEntry)
             }
         }
     }
