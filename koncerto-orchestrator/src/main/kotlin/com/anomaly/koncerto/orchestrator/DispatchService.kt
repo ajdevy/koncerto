@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.Flow
 private const val AGENT_LABEL_PREFIX = "agent:"
 private const val MODEL_LABEL_PREFIX = "model:"
 private const val DEFAULT_PRIORITY = Int.MAX_VALUE
+private const val RETRY_RESCHEDULE_DELAY_MS = 1000L
 private val DEFAULT_CREATED_AT = Instant.MAX
 
 data class ResolvedAgent(
@@ -264,7 +265,7 @@ class DispatchService(
 
     private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
         val execData = prepareDispatch(issue, attempt) ?: run {
-            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + 1000) }
+            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
             return
         }
         scope.launch {
@@ -274,7 +275,7 @@ class DispatchService(
 
     private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null) {
         val execData = prepareDispatch(issue, attempt) ?: run {
-            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + 1000) }
+            retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
             return
         }
         runIssueExecution(scope, execData, issue)
@@ -487,7 +488,7 @@ class DispatchService(
             if (state.running.containsKey(issueId) || state.isClaimed(issueId)) {
                 val retryEntry = state.retryAttempts[issueId]
                 retryEntry?.let {
-                    state.retryAttempts[issueId] = it.copy(dueAtMs = System.currentTimeMillis() + 1000)
+                    state.retryAttempts[issueId] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS)
                 }
                 continue
             }
