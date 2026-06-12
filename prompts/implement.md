@@ -13,7 +13,7 @@ Requirements:
 
 If you need clarification on requirements, write a file at `.koncerto/clarification.md` with your questions. The orchestrator will detect this file, create a comment on the Linear issue, move it to Blocked state, and assign it to the issue creator.
 
-Your changes will be automatically committed and pushed, and a pull request will be created only if you complete the implementation without requesting clarification.
+Your changes will be automatically committed and pushed using conventional commits format (e.g., `feat:`, `fix:`, `chore:`, `docs:`, `refactor:`), and a pull request will be created only if you complete the implementation without requesting clarification.
 
 ## Workplan (Optional)
 
