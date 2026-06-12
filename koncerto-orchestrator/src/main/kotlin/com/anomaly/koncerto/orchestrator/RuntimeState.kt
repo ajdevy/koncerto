@@ -79,15 +79,15 @@ class RuntimeState {
     fun availableSlots(): Int = (maxConcurrentAgents - running.size).coerceAtLeast(0)
 
     fun pauseAgent(issueId: String): Boolean {
-        val entry = running[issueId] ?: return false
-        running[issueId] = entry.copy(paused = true)
-        return true
+        return running.computeIfPresent(issueId) { _, entry ->
+            if (!entry.paused) entry.copy(paused = true) else entry
+        } != null
     }
 
     fun resumeAgent(issueId: String): Boolean {
-        val entry = running[issueId] ?: return false
-        running[issueId] = entry.copy(paused = false)
-        return true
+        return running.computeIfPresent(issueId) { _, entry ->
+            if (entry.paused) entry.copy(paused = false) else entry
+        } != null
     }
 
     fun cancelAgent(issueId: String): Boolean {
@@ -105,16 +105,16 @@ class RuntimeState {
         _blocked.clear()
         _tokenTotals.set(TokenTotals())
         _codexRateLimits.clear()
+        // Not atomic - should only be called during shutdown
     }
 
     fun updateTokenTotals(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long) {
-        val entry = running[issueId]
-        if (entry != null) {
-            _tokenTotals.updateAndGet { it.copy(
-                inputTokens = it.inputTokens + inputTokens,
-                outputTokens = it.outputTokens + outputTokens,
-                totalTokens = it.totalTokens + totalTokens
-            ) }
+        _tokenTotals.updateAndGet { totals ->
+            totals.copy(
+                inputTokens = totals.inputTokens + inputTokens,
+                outputTokens = totals.outputTokens + outputTokens,
+                totalTokens = totals.totalTokens + totalTokens
+            )
         }
     }
 
@@ -129,6 +129,7 @@ class RuntimeState {
     fun updateCodexRateLimits(limits: Map<String, Any?>) {
         _codexRateLimits.clear()
         _codexRateLimits.putAll(limits)
+        // Not atomic - concurrent reads may see partial state
     }
 
     fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null

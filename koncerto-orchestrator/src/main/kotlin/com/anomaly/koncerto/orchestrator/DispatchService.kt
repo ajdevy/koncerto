@@ -297,11 +297,7 @@ class DispatchService(
 
         val threadId = java.util.UUID.randomUUID().toString()
         val turnId = java.util.UUID.randomUUID().toString()
-        println("DEBUG: tenantResolver = $tenantResolver")
-        println("DEBUG: projectSlug = $projectSlug")
-        println("DEBUG: projectConfig.tenant = ${projectConfig.tenant}")
         val tenantContext = tenantResolver?.resolveTenant(projectSlug, projectConfig)
-        println("DEBUG: tenantContext = $tenantContext")
         val contextMap = mutableMapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         if (tenantContext != null) {
             contextMap["tenant_id"] = tenantContext.tenantId.value
