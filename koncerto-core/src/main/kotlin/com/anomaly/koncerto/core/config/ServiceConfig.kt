@@ -265,6 +265,8 @@ data class ServiceConfig(
                     ?: (telegramMap != null || emailMap != null || webhookMap != null),
                 onClarification = (map["on_clarification"] as? Boolean)
                     ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                onLimit = (map["on_limit"] as? List<*>)?.map { it.toString() } ?: emptyList(),
+                limitCooldownMs = (map["limit_cooldown_ms"] as? Number)?.toLong() ?: 300_000L,
                 telegram = telegramMap?.let { TelegramConfig(
                     botToken = resolveEnvRef(it["bot_token"] as? String) ?: "",
                     chatId = it["chat_id"] as? String ?: ""
