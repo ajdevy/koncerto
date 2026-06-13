@@ -55,7 +55,7 @@ class OpenCodeE2eTest {
 
     private fun isOpencodeInstalled(cmd: String): Boolean {
         return try {
-            val proc = ProcessBuilder("bash", "-lc", "command -v $cmd")
+            val proc = ProcessBuilder("bash", "-c", "command -v $cmd")
                 .redirectErrorStream(true)
                 .start()
             proc.waitFor(3, TimeUnit.SECONDS)

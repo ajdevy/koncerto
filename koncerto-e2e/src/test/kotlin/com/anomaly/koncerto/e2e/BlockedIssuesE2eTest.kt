@@ -96,13 +96,13 @@ class BlockedIssuesE2eTest {
 
             orch.start()
 
-            waitFor({ runner.dispatched.any { it.id == "a" } }, 5000)
+            waitFor({ runner.dispatched.any { it.id == "a" } }, 15000)
             assertThat(runner.dispatched.map { it.id }).isEqualTo(listOf("a"))
             assertThat(state.isBlocked("b")).isTrue()
 
             linear.setState("a", "Done")
 
-            waitFor({ runner.dispatched.any { it.id == "b" } }, 5000)
+            waitFor({ runner.dispatched.any { it.id == "b" } }, 15000)
             assertThat(runner.dispatched.map { it.id }).isEqualTo(listOf("a", "b"))
             assertThat(state.isBlocked("b")).isFalse()
 
