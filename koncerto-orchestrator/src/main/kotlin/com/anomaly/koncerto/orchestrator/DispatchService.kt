@@ -3,6 +3,9 @@ package com.anomaly.koncerto.orchestrator
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.core.audit.AuditEvent
+import com.anomaly.koncerto.core.audit.AuditEventType
+import com.anomaly.koncerto.core.audit.AuditLogger
 import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.core.config.NotificationsConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
@@ -69,7 +72,8 @@ class DispatchService(
     private val tenantResolver: TenantResolver? = null,
     private val quotaEnforcer: QuotaEnforcer? = null,
     private val quotaConfig: QuotaConfig? = null,
-    private val crossProjectChainer: CrossProjectChainer? = null
+    private val crossProjectChainer: CrossProjectChainer? = null,
+    private val auditLogger: AuditLogger? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -142,6 +146,15 @@ class DispatchService(
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
             "attempt" to entry.attempt, "delay_ms" to (entry.dueAtMs - System.currentTimeMillis())
         )
+        auditLogger?.log(AuditEvent(
+            timestamp = System.currentTimeMillis(),
+            type = AuditEventType.AGENT_RETRY_SCHEDULED,
+            projectSlug = projectSlug,
+            issueId = issue.id,
+            issueIdentifier = issue.identifier,
+            attempt = entry.attempt,
+            error = error
+        ))
     }
 
     private fun matchesRequiredLabels(issue: Issue): Boolean {
@@ -340,6 +353,14 @@ class DispatchService(
             tenantContext = tenantContext
         )
         state.running[issue.id] = entry
+        auditLogger?.log(AuditEvent(
+            timestamp = System.currentTimeMillis(),
+            type = AuditEventType.AGENT_DISPATCHED,
+            projectSlug = projectSlug,
+            issueId = issue.id,
+            issueIdentifier = issue.identifier,
+            agentKind = resolved.kind
+        ))
 
         return DispatchExecutionData(stageConfig, prompt, resolved, threadId, turnId, attempt)
     }
@@ -383,6 +404,16 @@ class DispatchService(
                     outputTokens = finalEntry?.outputTokens ?: 0,
                     totalTokens = finalEntry?.totalTokens ?: 0
                 )
+                auditLogger?.log(AuditEvent(
+                    timestamp = System.currentTimeMillis(),
+                    type = AuditEventType.AGENT_COMPLETED,
+                    projectSlug = projectSlug,
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    inputTokens = finalEntry?.inputTokens ?: 0,
+                    outputTokens = finalEntry?.outputTokens ?: 0,
+                    totalTokens = finalEntry?.totalTokens ?: 0
+                ))
                 scope.coroutineContext.ensureActive()
                 handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
@@ -404,6 +435,14 @@ class DispatchService(
                     outputTokens = 0,
                     totalTokens = 0
                 )
+                auditLogger?.log(AuditEvent(
+                    timestamp = System.currentTimeMillis(),
+                    type = AuditEventType.AGENT_FAILED,
+                    projectSlug = projectSlug,
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    error = err.message
+                ))
                 scheduleRetry(issue, err.message ?: "unknown")
                 if (notificationsConfig?.onFailed == true && notifier != null) {
                     notifier.send(NotificationEvent.AgentFailed(

@@ -2,6 +2,7 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.core.audit.AuditLogger
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
@@ -32,7 +33,8 @@ class Orchestrator(
     private val metricsRepository: MetricsRepository? = null,
     private val notifier: CompositeNotifier? = null,
     private val subtaskOrchestrator: SubtaskOrchestrator? = null,
-    private val workplanParser: WorkplanParser? = null
+    private val workplanParser: WorkplanParser? = null,
+    private val auditLogger: AuditLogger? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -71,7 +73,8 @@ class Orchestrator(
                 notifier = notifier,
                 notificationsConfig = pc.notifications,
                 subtaskOrchestrator = subtaskOrchestrator,
-                workplanParser = workplanParser
+                workplanParser = workplanParser,
+                auditLogger = auditLogger
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }

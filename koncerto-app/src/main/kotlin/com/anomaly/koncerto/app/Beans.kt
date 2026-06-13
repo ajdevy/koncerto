@@ -9,6 +9,8 @@ import com.anomaly.koncerto.agent.DefaultAgentRunner
 import com.anomaly.koncerto.agent.DefaultSubtaskRunner
 import com.anomaly.koncerto.agent.SubtaskRunner
 import com.anomaly.koncerto.core.TokenBucketRateLimiter
+import com.anomaly.koncerto.core.audit.AuditLogger
+import com.anomaly.koncerto.logging.audit.FileAuditLogger
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.CircuitBreaker
 import com.anomaly.koncerto.core.circuitbreaker.CircuitBreakerRegistry
@@ -285,6 +287,10 @@ class Beans {
     }
 
     @Bean
+    fun auditLogger(@Value("\${koncerto.audit.path:${'$'}{user.home}/.koncerto/audit.log}") path: String): AuditLogger =
+        FileAuditLogger(java.nio.file.Paths.get(path))
+
+    @Bean
     fun orchestrator(
         config: ServiceConfig,
         runner: AgentRunner,
@@ -297,7 +303,8 @@ class Beans {
         metricsRepository: MetricsRepository?,
         compositeNotifier: CompositeNotifier?,
         subtaskOrchestrator: SubtaskOrchestrator?,
-        workplanParser: WorkplanParser?
+        workplanParser: WorkplanParser?,
+        auditLogger: AuditLogger?
     ): Orchestrator = Orchestrator(
         config = config,
         linearClientFactory = linearClientFactory,
@@ -310,6 +317,7 @@ class Beans {
         metricsRepository = metricsRepository,
         notifier = compositeNotifier,
         subtaskOrchestrator = subtaskOrchestrator,
-        workplanParser = workplanParser
+        workplanParser = workplanParser,
+        auditLogger = auditLogger
     )
 }
