@@ -51,7 +51,7 @@ class OpenCodeE2eTest {
     }
 
     private fun findAvailablePort(): Int {
-        val socket at = ServerSocket(0)
+        val socket = ServerSocket(0)
         val port = socket.localPort
         socket.close()
         return port
