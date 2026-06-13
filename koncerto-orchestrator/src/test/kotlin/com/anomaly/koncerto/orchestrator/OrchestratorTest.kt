@@ -2,12 +2,18 @@ package com.anomaly.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
 import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.core.errors.AgentError
+import com.anomaly.koncerto.core.errors.AgentErrorType
+import com.anomaly.koncerto.notifications.CompositeNotifier
+import com.anomaly.koncerto.notifications.NotificationEvent
+import com.anomaly.koncerto.notifications.Notifier
 import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
@@ -471,6 +477,156 @@ class OrchestratorTest {
             threadId = "t1", turnId = "r1", error = "boom", pid = 1234L
         ))
         assertThat(state.tokenTotals.inputTokens).isEqualTo(0)
+    }
+
+    @Test
+    fun `handleAgentEvent LimitDetected dispatches notification when notifier and config present`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-lim-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc = sampleProjectConfig().copy(
+            notifications = sampleProjectConfig().notifications.copy(
+                onLimit = listOf("logging")
+            )
+        )
+        val config = sampleConfig(pc)
+        val state = RuntimeState()
+        state.tryClaim("1")
+        state.running["1"] = RunningEntry(
+            issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
+                priority = 1, state = "Todo", branchName = null, url = null,
+                labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+        )
+        val linear = FakeLinearClient(emptyList())
+        val runner = FakeAgentRunner()
+        val cache = WorkflowCache()
+        val logger = StructuredLogger(emptyList())
+        val captured = mutableListOf<NotificationEvent>()
+        val notifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                captured += event
+            }
+        }))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state),
+            notifier = notifier
+        )
+        orch.handleAgentEvent(AgentEvent.LimitDetected(
+            agentError = AgentError(AgentErrorType.RateLimitError(details = "429", retryAfterMs = 5000), "Too many requests", "exception"),
+            issueId = "1",
+            line = "HTTP 429"
+        ))
+        assertThat(captured.size).isEqualTo(1)
+        val ev = captured[0]
+        assertThat(ev is NotificationEvent.LimitDetected).isTrue()
+        ev as NotificationEvent.LimitDetected
+        assertThat(ev.errorType).isEqualTo("RateLimitError")
+    }
+
+    @Test
+    fun `handleAgentEvent LimitDetected skips notification when onLimit empty`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-lim2-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc = sampleProjectConfig().copy(
+            notifications = sampleProjectConfig().notifications.copy(
+                onLimit = emptyList()
+            )
+        )
+        val config = sampleConfig(pc)
+        val state = RuntimeState()
+        state.tryClaim("1")
+        state.running["1"] = RunningEntry(
+            issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
+                priority = 1, state = "Todo", branchName = null, url = null,
+                labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+        )
+        val linear = FakeLinearClient(emptyList())
+        val runner = FakeAgentRunner()
+        val cache = WorkflowCache()
+        val logger = StructuredLogger(emptyList())
+        val captured = mutableListOf<NotificationEvent>()
+        val notifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                captured += event
+            }
+        }))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state),
+            notifier = notifier
+        )
+        orch.handleAgentEvent(AgentEvent.LimitDetected(
+            agentError = AgentError(AgentErrorType.RateLimitError(), "Too many requests", "exception"),
+            issueId = "1",
+            line = "HTTP 429"
+        ))
+        assertThat(captured).isEmpty()
+    }
+
+    @Test
+    fun `handleAgentEvent LimitDetected respects cooldown`() = runBlocking {
+        val root = Files.createTempDirectory("orch-test-lim3-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc = sampleProjectConfig().copy(
+            notifications = sampleProjectConfig().notifications.copy(
+                onLimit = listOf("logging"), limitCooldownMs = 60000
+            )
+        )
+        val config = sampleConfig(pc)
+        val state = RuntimeState()
+        state.tryClaim("1")
+        state.running["1"] = RunningEntry(
+            issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
+                priority = 1, state = "Todo", branchName = null, url = null,
+                labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+        )
+        val linear = FakeLinearClient(emptyList())
+        val runner = FakeAgentRunner()
+        val cache = WorkflowCache()
+        val logger = StructuredLogger(emptyList())
+        val captured = mutableListOf<NotificationEvent>()
+        val notifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                captured += event
+            }
+        }))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state),
+            notifier = notifier
+        )
+        orch.handleAgentEvent(AgentEvent.LimitDetected(
+            agentError = AgentError(AgentErrorType.RateLimitError(), "Too many requests", "exception"),
+            issueId = "1",
+            line = "HTTP 429"
+        ))
+        orch.handleAgentEvent(AgentEvent.LimitDetected(
+            agentError = AgentError(AgentErrorType.RateLimitError(), "Too many requests again", "exception"),
+            issueId = "1",
+            line = "HTTP 429"
+        ))
+        assertThat(captured.size).isEqualTo(1)
     }
 
     @Test
@@ -976,9 +1132,9 @@ class OrchestratorTest {
         )
     )
 
-    private fun sampleConfig() = ServiceConfig(
+    private fun sampleConfig(projectConfig: ProjectConfig = sampleProjectConfig()) = ServiceConfig(
         pollIntervalMs = 30000,
-        projects = mapOf(defaultProjectSlug to sampleProjectConfig()),
+        projects = mapOf(defaultProjectSlug to projectConfig),
         hooks = com.anomaly.koncerto.core.config.HooksConfig(null, null, null, null, 60000),
         gitConfig = com.anomaly.koncerto.core.config.GitConfig()
     )

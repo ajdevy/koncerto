@@ -2,12 +2,14 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
+import com.anomaly.koncerto.core.errors.AgentErrorType
 import com.anomaly.koncerto.core.audit.AuditLogger
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.linear.LinearClient
 import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.notifications.CompositeNotifier
+import com.anomaly.koncerto.notifications.LimitCooldownTracker
 import com.anomaly.koncerto.notifications.NotificationEvent
 import com.anomaly.koncerto.orchestrator.SubtaskOrchestrator
 import com.anomaly.koncerto.orchestrator.WorkplanParser
@@ -46,7 +48,8 @@ class Orchestrator(
         val linear: LinearClient,
         val workspaces: WorkspaceManager,
         val state: RuntimeState,
-        val dispatch: DispatchService
+        val dispatch: DispatchService,
+        val limitCooldown: LimitCooldownTracker = LimitCooldownTracker()
     )
 
     val projects: Map<String, ProjectRuntime>
@@ -216,7 +219,7 @@ class Orchestrator(
         }
     }
 
-    internal fun handleAgentEvent(event: AgentEvent) {
+    internal suspend fun handleAgentEvent(event: AgentEvent) {
         when (event) {
             is AgentEvent.TurnCompleted -> {
                 event.usage?.let { u ->
@@ -233,9 +236,25 @@ class Orchestrator(
                     state.addTokenTotals(u.inputTokens, u.outputTokens, u.totalTokens)
                 }
             }
-            else -> {
-                logger.warn("unhandled_agent_event", mapOf("event" to event::class.simpleName))
+            is AgentEvent.LimitDetected -> {
+                for ((slug, pr) in projects) {
+                    val entry = pr.state.running[event.issueId] ?: continue
+                    val nc = pr.config.notifications
+                    if (nc.onLimit.isEmpty() || pr.dispatch.notifier == null) return
+                    val errorTypeName = event.agentError.type::class.simpleName ?: "Unknown"
+                    if (!pr.limitCooldown.shouldSend(errorTypeName, event.issueId)) return
+                    pr.dispatch.notifier!!.send(NotificationEvent.LimitDetected(
+                        projectSlug = slug,
+                        issueId = event.issueId,
+                        issueIdentifier = entry.issue.identifier,
+                        title = entry.issue.title,
+                        errorType = errorTypeName,
+                        summary = "${errorTypeName}: ${event.agentError.message}",
+                        retryAfterMs = (event.agentError.type as? AgentErrorType.RateLimitError)?.retryAfterMs
+                    ))
+                }
             }
+            else -> {}
         }
     }
 }

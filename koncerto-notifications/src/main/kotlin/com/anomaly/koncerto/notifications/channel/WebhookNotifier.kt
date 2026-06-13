@@ -41,7 +41,10 @@ private data class WebhookPayload(
     val issueIdentifier: String,
     val title: String,
     val error: String? = null,
-    val stallDurationMs: Long? = null
+    val stallDurationMs: Long? = null,
+    val errorType: String? = null,
+    val summary: String? = null,
+    val retryAfterMs: Long? = null
 ) {
     constructor(event: NotificationEvent) : this(
         event = event::class.simpleName ?: "unknown",
@@ -50,6 +53,9 @@ private data class WebhookPayload(
         issueIdentifier = event.issueIdentifier,
         title = event.title,
         error = (event as? NotificationEvent.AgentFailed)?.error,
-        stallDurationMs = (event as? NotificationEvent.AgentStalled)?.stallDurationMs
+        stallDurationMs = (event as? NotificationEvent.AgentStalled)?.stallDurationMs,
+        errorType = (event as? NotificationEvent.LimitDetected)?.errorType,
+        summary = (event as? NotificationEvent.LimitDetected)?.summary,
+        retryAfterMs = (event as? NotificationEvent.LimitDetected)?.retryAfterMs
     )
 }

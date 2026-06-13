@@ -12,6 +12,7 @@ import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.config.TrackerConfig
 import com.anomaly.koncerto.core.config.WorkspaceConfig
+import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.errors.AgentErrorType
 import com.anomaly.koncerto.core.errors.PatternErrorClassifier
 import com.anomaly.koncerto.core.model.Issue
@@ -166,6 +167,65 @@ class AgentRunnerLimitDetectionTest {
         )
         collectorJob.cancel()
         latch.await(3, TimeUnit.SECONDS)
+    }
+
+    @Test
+    fun `rate limit failure does not trip circuit breaker`() = runBlocking {
+        val root = Files.createTempDirectory("ar-cb-rate-")
+        Files.createDirectories(root.resolve("ABC-1"))
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "false", agentKind = "opencode")
+        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60000)
+        val alwaysRateLimit = PatternErrorClassifier(
+            listOf(PatternErrorClassifier.ClassificationPattern(
+                regex = Regex(".*"),
+                build = { _, msg -> AgentErrorType.RateLimitError(details = msg, retryAfterMs = 100) }
+            ))
+        )
+        val runner = DefaultAgentRunner(
+            config, mgr, noopLogger(),
+            errorClassifier = alwaysRateLimit,
+            circuitBreaker = cb,
+            maxRetries = 2
+        )
+        val issue = sampleIssue()
+        runner.run(
+            issue, attempt = null, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        runner.run(
+            issue, attempt = null, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(cb.allowRequest("opencode:false")).isTrue()
+    }
+
+    @Test
+    fun `unclassified failure trips circuit breaker`() = runBlocking {
+        val root = Files.createTempDirectory("ar-cb-unclass-")
+        Files.createDirectories(root.resolve("ABC-1"))
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "false", agentKind = "opencode")
+        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60000)
+        val runner = DefaultAgentRunner(
+            config, mgr, noopLogger(),
+            circuitBreaker = cb,
+            maxRetries = 1
+        )
+        val issue = sampleIssue()
+        runner.run(
+            issue, attempt = null, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        runner.run(
+            issue, attempt = null, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(cb.allowRequest("opencode:false")).isFalse()
     }
 
     companion object {

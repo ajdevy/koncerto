@@ -38,4 +38,14 @@ sealed class NotificationEvent {
         override val issueIdentifier: String,
         override val title: String
     ) : NotificationEvent()
+
+    data class LimitDetected(
+        override val projectSlug: String,
+        override val issueId: String,
+        override val issueIdentifier: String,
+        override val title: String,
+        val errorType: String,
+        val summary: String,
+        val retryAfterMs: Long?
+    ) : NotificationEvent()
 }
