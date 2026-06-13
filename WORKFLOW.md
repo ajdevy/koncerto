@@ -27,6 +27,17 @@ projects:
       project_admin: "user-1"
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
+    notifications:
+      on_completed: true
+      on_failed: true
+      on_stalled: true
+      on_clarification: true
+      on_limit:
+        - telegram
+        - logging
+      telegram:
+        bot_token: $TELEGRAM_BOT_TOKEN
+        chat_id: "@ajdevy"
     agent:
       kind: opencode
       max_concurrent_agents: 2
