@@ -11,7 +11,7 @@ class OrchestratorHealthIndicator(
 ) : HealthIndicator {
     override fun health(): Health {
         val runningCount = orchestrator.projects.values.sumOf { it.state.running.size }
-        val blockedCount = orchestrator.projects.values.sumOf { it.state.blocked.size }
+        val blockedCount = orchestrator.projects.values.sumOf { it.state.blockedKeys.size }
         val retryCount = orchestrator.projects.values.sumOf { it.state.retryAttempts.size }
         return Health.up()
             .withDetail("runningAgents", runningCount)

@@ -22,7 +22,7 @@ class WorkplanParser(
             val manifest = json.decodeFromString<SubtaskManifest>(content)
             validate(manifest)
             Result.Success(manifest)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             when (e) {
                 is ParseError -> Result.Failure(e)
                 else -> Result.Failure(ParseError.INVALID(e.message ?: "unknown"))

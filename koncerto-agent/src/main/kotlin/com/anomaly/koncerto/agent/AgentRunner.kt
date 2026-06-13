@@ -56,6 +56,7 @@ class DefaultAgentRunner(
     private val runtimeFactory: AgentRuntimeFactory? = null,
     private val gitWorkflow: GitWorkflow? = null,
     private val onAgentOutput: ((issueId: String, line: String) -> Unit)? = null,
+    private val onAgentOutputSuspend: suspend (issueId: String, line: String) -> Unit = { _, _ -> },
     private val heartbeatIntervalMs: Long = 30_000L,
     private val circuitBreaker: AgentCircuitBreaker? = null,
     private val errorTracker: ErrorTracker? = null,
@@ -171,6 +172,7 @@ class DefaultAgentRunner(
                             if (onAgentOutput != null) {
                                 onAgentOutput(issue.id, line)
                             }
+                            onAgentOutputSuspend(issue.id, line)
                         }
                     }
 

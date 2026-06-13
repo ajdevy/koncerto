@@ -64,8 +64,8 @@ class OrchestratorHealthIndicatorTest {
     @Test
     fun `health reports blocked and retrying issues`() {
         val state = RuntimeState()
-        state.blocked.add("issue-1")
-        state.blocked.add("issue-2")
+        state.addBlocked("issue-1")
+        state.addBlocked("issue-2")
         state.retryAttempts["r1"] = RetryEntry(
             issueId = "r1", identifier = "ABC-3",
             attempt = 1, dueAtMs = System.currentTimeMillis() + 60000, error = "timeout"

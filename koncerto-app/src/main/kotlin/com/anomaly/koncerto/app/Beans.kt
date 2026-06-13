@@ -249,7 +249,7 @@ class Beans {
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
         return DefaultAgentRunner(
             config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
-            onAgentOutput = { issueId, line ->
+            onAgentOutputSuspend = { issueId, line ->
                 runtimeStates.values.firstOrNull {
                     it.running.containsKey(issueId) || it.claimed.contains(issueId)
                 }?.appendOutput(issueId, line)

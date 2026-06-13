@@ -114,7 +114,7 @@ class ApiV1Controller @Autowired constructor(
             }
         }
         val allBlocked = projects.values.flatMap { pr ->
-            pr.state.blocked.keys.mapNotNull { id ->
+            pr.state.blockedKeys.mapNotNull { id ->
                 val runningEntry = pr.state.running[id]
                 val identifier = runningEntry?.issue?.identifier
                     ?: pr.state.retryAttempts[id]?.identifier
@@ -350,7 +350,7 @@ class ApiV1Controller @Autowired constructor(
     fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
         val found = projects.values.any { pr ->
             val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
-            id != null && pr.state.cancelAgent(id)
+            id != null && runBlocking { pr.state.cancelAgent(id) }
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
     }

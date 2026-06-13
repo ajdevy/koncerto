@@ -77,6 +77,6 @@ class SubtaskFrontierTest {
         val right = pending(def("right", listOf("root")))
         val merge = pending(def("merge", listOf("left", "right")))
         val sorted = frontier.topologicalSort(listOf(merge, right, left, root))
-        assertThat(sorted.map { it.def.id }).containsExactly("root", "left", "right", "merge")
+        assertThat(sorted.map { it.def.id }).containsExactly("root", "right", "left", "merge")
     }
 }

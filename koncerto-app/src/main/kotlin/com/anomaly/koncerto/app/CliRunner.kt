@@ -24,7 +24,7 @@ class CliRunner(
     private fun printStatus() {
         println("[koncerto] Projects: ${orchestrator.projects.size}")
         val totalRunning = orchestrator.projects.values.sumOf { it.state.running.size }
-        val totalBlocked = orchestrator.projects.values.sumOf { it.state.blocked.size }
+        val totalBlocked = orchestrator.projects.values.sumOf { it.state.blockedKeys.size }
         val totalRetrying = orchestrator.projects.values.sumOf { it.state.retryAttempts.size }
         println("[koncerto] Running: $totalRunning")
         println("[koncerto] Blocked: $totalBlocked")
