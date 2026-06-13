@@ -89,7 +89,15 @@ projects:
           on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
+          agent_kind: claude
+          command: claude --print
           on_complete_state: "Done"
+          on_failure_state: "Needs Fix"
+          max_review_attempts: 3
+        "Needs Fix":
+          prompt: prompts/fix-review.md
+          agent_kind: opencode
+          on_complete_state: "In Review"
 ---
 ```
 
@@ -111,8 +119,43 @@ Koncerto supports multiple AI agent runtimes via `agent.kind`:
 |----------|--------|---------|----------|
 | **Opencode** | `opencode` (default) | `opencode` | JSON-RPC over stdio |
 | **Codex** | `codex` | `codex app-server` | JSON-RPC over stdio |
+| **Claude Code** | `claude` | `claude --print` | One-shot stdin/stdout |
 
 All providers implement the same `AgentRuntime` interface — events, lifecycle management, and error handling work identically regardless of provider.
+
+### Linear State Workflow
+
+Koncerto dispatches issues based on their Linear state. Each state maps to a stage in the workflow configuration, and the orchestrator polls active states on every tick:
+
+```
+                     ┌──────────────────────────────────────────────────┐
+                     │                                                  │
+                     ▼                                                  │
+  Todo ──[opencode]──> In Review ──[claude]──> .review-status ──pass──> Done
+                                                  │                     ▲
+                                                  │ fail                │
+                                                  ▼                     │
+                                             Needs Fix ──[opencode]────┘
+                                                  │
+                                                  │ (up to 3 cycles)
+                                                  ▼
+                                              Done (force)
+```
+
+| State | Agent | Prompt | On Complete | On Failure |
+|-------|-------|--------|-------------|------------|
+| `Todo` | opencode | `prompts/implement.md` | `In Review` | — |
+| `In Review` | claude | `prompts/review.md` | `Done` | `Needs Fix` |
+| `Needs Fix` | opencode | `prompts/fix-review.md` | `In Review` | — |
+
+**Review loop:**
+- When an issue moves to `In Review`, Claude Code reviews the code changes
+- If critical issues are found, the issue moves to `Needs Fix`
+- The opencode agent reads the review report, fixes findings, commits, and transitions back to `In Review`
+- After `max_review_attempts` (default: 3), the issue is forced to `Done` to prevent infinite loops
+- Agents are configured with exponential backoff retry (10s × 2^attempt) for transient failures
+
+All non-terminal states must be listed under `active_states` in the workflow config for the orchestrator to detect them.
 
 ### Named Agent Providers
 

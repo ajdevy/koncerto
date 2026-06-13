@@ -185,6 +185,8 @@ data class ServiceConfig(
                     agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
                     command = stageMap["command"] as? String,
                     onCompleteState = stageMap["on_complete_state"] as? String,
+                    onFailureState = stageMap["on_failure_state"] as? String,
+                    maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
                     agent = stageMap["agent"] as? String,
                     followUp = (stageMap["follow_up"] as? Map<*, *>)?.let { f ->
                         FollowUpConfig(
@@ -369,6 +371,8 @@ data class StageAgentConfig(
     val agentKind: String?,
     val command: String?,
     val onCompleteState: String?,
+    val onFailureState: String? = null,
+    val maxReviewAttempts: Int? = null,
     val agent: String? = null,
     val followUp: FollowUpConfig? = null,
     val crossProjectFollowUp: CrossProjectFollowUpConfig? = null

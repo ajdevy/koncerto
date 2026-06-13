@@ -13,6 +13,7 @@ import com.anomaly.koncerto.core.config.RoutingRule
 import com.anomaly.koncerto.core.config.FollowUpConfig
 import com.anomaly.koncerto.core.config.StageAgentConfig
 import com.anomaly.koncerto.core.config.WorkplanConfig
+import java.nio.file.Files
 import com.anomaly.koncerto.core.model.Issue
 import com.anomaly.koncerto.core.quota.QuotaConfig
 import com.anomaly.koncerto.core.quota.QuotaEnforcer
@@ -26,7 +27,6 @@ import com.anomaly.koncerto.notifications.CompositeNotifier
 import com.anomaly.koncerto.notifications.NotificationEvent
 import com.anomaly.koncerto.workspace.WorkspaceManager
 import com.anomaly.koncerto.workflow.WorkflowCache
-import java.nio.file.Files
 import java.time.Instant
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -582,8 +582,42 @@ class DispatchService(
         }
     }
 
+    private suspend fun resolveReviewTargetState(issue: Issue, stageConfig: StageAgentConfig): String? {
+        val onComplete = stageConfig.onCompleteState
+        val onFailure = stageConfig.onFailureState
+        val maxAttempts = stageConfig.maxReviewAttempts ?: 3
+
+        if (onFailure == null) return onComplete
+
+        val ws = workspaces ?: return onComplete
+        val workspace = runCatching { ws.ensureWorkspace(issue.identifier) }.getOrNull() ?: return onComplete
+        val statusFile = workspace.path.resolve(".review-status")
+        val attemptFile = workspace.path.resolve(".review-attempt")
+
+        if (!Files.exists(statusFile)) return onComplete
+        val status = runCatching { Files.readString(statusFile) }.getOrNull()?.trim()?.lowercase() ?: return onComplete
+
+        if (status != "fail") return onComplete
+
+        val attempt = runCatching { Files.readString(attemptFile).trim().toInt() }.getOrNull() ?: 0
+
+        return if (attempt >= maxAttempts) {
+            logger.warn("review_max_attempts_reached", mapOf(
+                "issue_id" to issue.id,
+                "attempts" to attempt.toString(),
+                "max" to maxAttempts.toString()
+            ))
+            runCatching { Files.deleteIfExists(statusFile) }
+            runCatching { Files.deleteIfExists(attemptFile) }
+            onComplete
+        } else {
+            onFailure
+        }
+    }
+
     internal suspend fun transitionOnComplete(issue: Issue, stageConfig: StageAgentConfig?) {
-        val targetState = stageConfig?.onCompleteState ?: return
+        val config = stageConfig ?: return
+        val targetState = resolveReviewTargetState(issue, config) ?: return
         try {
             val stateId = linear.resolveStateId(projectSlug, targetState)
             if (stateId == null) {
