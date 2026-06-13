@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.config.SubtaskManifest
+import com.anomaly.koncerto.core.errors.AgentError
 import java.time.Instant
 
 sealed class AgentEvent {
@@ -131,6 +132,14 @@ sealed class AgentEvent {
         val subtaskId: String,
         val branch: String,
         val issueId: String,
+        override val pid: Long? = null,
+        override val timestamp: Instant = Instant.now()
+    ) : AgentEvent()
+
+    data class LimitDetected(
+        val agentError: AgentError,
+        val issueId: String,
+        val line: String,
         override val pid: Long? = null,
         override val timestamp: Instant = Instant.now()
     ) : AgentEvent()

@@ -19,6 +19,7 @@ import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.dashboard.admin.ProjectRegistry
 import com.anomaly.koncerto.core.errors.DefaultErrorTracker
 import com.anomaly.koncerto.core.errors.ErrorTracker
+import com.anomaly.koncerto.core.errors.PatternErrorClassifier
 import com.anomaly.koncerto.core.ratelimit.DefaultRateLimitMonitor
 import com.anomaly.koncerto.core.ratelimit.RateLimitMonitor
 import com.anomaly.koncerto.core.ratelimit.RateLimitRegistry
@@ -236,6 +237,9 @@ class Beans {
     fun errorTracker(): ErrorTracker = DefaultErrorTracker()
 
     @Bean
+    fun errorClassifier(): PatternErrorClassifier = PatternErrorClassifier()
+
+    @Bean
     fun agentRunner(
         config: ServiceConfig,
         workspaces: WorkspaceManager,
@@ -245,7 +249,8 @@ class Beans {
         runtimeStates: Map<String, RuntimeState>,
         circuitBreaker: AgentCircuitBreaker,
         errorTracker: ErrorTracker,
-        healthChecker: AgentHealthChecker
+        healthChecker: AgentHealthChecker,
+        errorClassifier: PatternErrorClassifier
     ): AgentRunner {
         val firstProject = config.projects.values.firstOrNull()
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
@@ -260,6 +265,7 @@ class Beans {
             circuitBreaker = circuitBreaker,
             errorTracker = errorTracker,
             healthChecker = healthChecker,
+            errorClassifier = errorClassifier,
             maxRetries = 3,
             retryDelayMs = 5_000L
         )

@@ -2,7 +2,13 @@ package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
 import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.core.errors.AgentError
+import com.anomaly.koncerto.core.errors.AgentErrorType
+import com.anomaly.koncerto.core.errors.ErrorClassifier
 import com.anomaly.koncerto.core.errors.ErrorTracker
+import com.anomaly.koncerto.core.errors.RetryDecision
+import com.anomaly.koncerto.core.errors.RetryDecisionMaker
+import com.anomaly.koncerto.core.retry.RetryStrategy
 import com.anomaly.koncerto.core.events.AgentLifecycleEvent
 import com.anomaly.koncerto.core.events.EventBus
 import com.anomaly.koncerto.core.model.Issue
@@ -62,7 +68,8 @@ class DefaultAgentRunner(
     private val errorTracker: ErrorTracker? = null,
     private val healthChecker: AgentHealthChecker? = null,
     private val maxRetries: Int = 1,
-    private val retryDelayMs: Long = 5_000L
+    private val retryDelayMs: Long = 5_000L,
+    private val errorClassifier: ErrorClassifier? = null
 ) : AgentRunner {
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
 
@@ -105,13 +112,38 @@ class DefaultAgentRunner(
                 lastException = e
                 val errorMsg = e.message ?: e.javaClass.simpleName
                 errorTracker?.recordError(agentKey, errorMsg, "agent")
+
+                val classified = errorClassifier?.classify("exception", errorMsg)
+                val isClassified = classified != null && classified !is AgentErrorType.UnknownError
+                if (isClassified) {
+                    eventFlow.tryEmit(AgentEvent.LimitDetected(
+                        agentError = AgentError(type = classified!!, message = errorMsg, source = "exception"),
+                        issueId = issue.id,
+                        line = errorMsg
+                    ))
+                }
+
+                val decision = if (isClassified) RetryDecisionMaker.decide(classified!!, retryAttempt) else null
+
+                if (decision is RetryDecision.NoRetry) {
+                    circuitBreaker?.recordFailure(agentKey)
+                    throw e
+                }
+
+                val delayMs = when (decision) {
+                    is RetryDecision.RetryWithDelay -> decision.delayMs
+                    is RetryDecision.RetryWithBackoff -> RetryStrategy.nextDelay(retryAttempt - 1, decision.config)
+                    else -> retryDelayMs * retryAttempt
+                }
+
                 logger.warn("agent_run_failed_retry", mapOf(
                     "issue_id" to issue.id,
                     "issue_identifier" to issue.identifier,
                     "agent_key" to agentKey,
                     "retry_attempt" to retryAttempt,
                     "max_retries" to maxRetries,
-                    "error" to errorMsg
+                    "error" to errorMsg,
+                    "delay_ms" to delayMs
                 ))
 
                 if (errorMsg.contains("stalled", ignoreCase = true)) {
@@ -120,10 +152,13 @@ class DefaultAgentRunner(
                     EventBus.publish(AgentLifecycleEvent.Failed(agentKey, errorMsg, retryAttempt))
                 }
 
-                circuitBreaker?.recordFailure(agentKey)
+                if (decision !is RetryDecision.RetryWithDelay) {
+                    circuitBreaker?.recordFailure(agentKey)
+                }
+
                 if (retryAttempt < maxRetries) {
                     EventBus.publish(AgentLifecycleEvent.Recovered(agentKey, errorMsg, retryAttempt))
-                    kotlinx.coroutines.delay(retryDelayMs * retryAttempt)
+                    kotlinx.coroutines.delay(delayMs)
                 }
             }
         }
@@ -173,6 +208,21 @@ class DefaultAgentRunner(
                                 onAgentOutput(issue.id, line)
                             }
                             onAgentOutputSuspend(issue.id, line)
+                            if (errorClassifier != null && line.startsWith("[stderr]")) {
+                                val msg = line.removePrefix("[stderr] ").removePrefix("[stderr]")
+                                val classified = errorClassifier.classify("stderr", msg)
+                                if (classified !is AgentErrorType.UnknownError) {
+                                    eventFlow.tryEmit(AgentEvent.LimitDetected(
+                                        agentError = AgentError(
+                                            type = classified,
+                                            message = msg.trim(),
+                                            source = "stderr"
+                                        ),
+                                        issueId = issue.id,
+                                        line = line
+                                    ))
+                                }
+                            }
                         }
                     }
 
