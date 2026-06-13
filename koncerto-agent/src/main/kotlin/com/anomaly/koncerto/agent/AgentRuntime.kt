@@ -22,6 +22,7 @@ class AgentRuntimeFactory(private val logger: StructuredLogger) {
         return when (agentKind.lowercase()) {
             "codex" -> CodexRuntime(command, workspacePath, logger)
             "opencode" -> OpencodeRuntime(command, workspacePath, logger)
+            "claude" -> ClaudeReviewRuntime(command, workspacePath, logger)
             else -> throw IllegalArgumentException("Unknown agent.kind: $agentKind")
         }
     }

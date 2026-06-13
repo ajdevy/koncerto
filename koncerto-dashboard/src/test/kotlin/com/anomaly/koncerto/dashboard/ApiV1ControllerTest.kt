@@ -309,7 +309,7 @@ class ApiV1ControllerTest {
             issue = issue, threadId = "t-1", turnId = "u-1",
             startedAt = Instant.now(), lastCodexTimestamp = null
         )
-        state.claimed.add("1")
+        state.claimed["1"] = true
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.cancelAgent("ABC-1")
         assertThat(response.statusCodeValue).isEqualTo(200)

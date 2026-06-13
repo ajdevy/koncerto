@@ -40,6 +40,7 @@ jobs:
       - name: Install opencode CLI
         run: |
           npm install -g @opencode-ai/cli@latest
+          echo "$(npm bin -g)" >> $GITHUB_PATH
           opencode --version
 
       - name: Cache Gradle dependencies
@@ -102,6 +103,7 @@ jobs:
       - name: Install codex CLI
         run: |
           npm install -g @openai/codex@latest
+          echo "$(npm bin -g)" >> $GITHUB_PATH
           codex --version
 
       - name: Cache Gradle dependencies
@@ -165,11 +167,13 @@ jobs:
       - name: Install opencode CLI
         run: |
           npm install -g @opencode-ai/cli@latest
+          echo "$(npm bin -g)" >> $GITHUB_PATH
           opencode --version
 
       - name: Install codex CLI
         run: |
           npm install -g @openai/codex@latest
+          echo "$(npm bin -g)" >> $GITHUB_PATH
           codex --version
 
       - name: Cache Gradle dependencies

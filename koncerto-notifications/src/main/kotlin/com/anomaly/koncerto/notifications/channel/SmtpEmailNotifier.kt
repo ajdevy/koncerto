@@ -51,6 +51,7 @@ class SmtpEmailNotifier(
         when (event) {
             is NotificationEvent.AgentFailed -> appendLine("Error: ${event.error}")
             is NotificationEvent.AgentStalled -> appendLine("Stall duration: ${event.stallDurationMs}ms")
+            is NotificationEvent.LimitDetected -> appendLine("Limit: ${event.errorType} - ${event.summary}")
             else -> {}
         }
     }

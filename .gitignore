@@ -34,3 +34,6 @@ log/
 
 # Generated
 *.class
+
+# Local secrets (bot tokens, API keys)
+local.properties

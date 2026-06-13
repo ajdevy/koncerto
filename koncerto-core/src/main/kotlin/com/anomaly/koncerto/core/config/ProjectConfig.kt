@@ -99,6 +99,8 @@ data class NotificationsConfig(
     val onFailed: Boolean = true,
     val onStalled: Boolean = true,
     val onClarification: Boolean = true,
+    val onLimit: List<String> = emptyList(),
+    val limitCooldownMs: Long = 300_000L,
     val telegram: TelegramConfig? = null,
     val email: EmailConfig? = null,
     val webhook: WebhookConfig? = null
