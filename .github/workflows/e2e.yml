@@ -40,10 +40,8 @@ jobs:
       - name: Install opencode CLI
         run: |
           npm install -g @opencode-ai/cli@latest
-          NPM_BIN="$(npm bin -g)"
-          echo "$NPM_BIN" >> $GITHUB_PATH
-          export PATH="$NPM_BIN:$PATH"
-          opencode --version
+          echo "$(npm bin -g)" >> $GITHUB_PATH
+          npx @opencode-ai/cli --version
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
@@ -105,10 +103,8 @@ jobs:
       - name: Install codex CLI
         run: |
           npm install -g @openai/codex@latest
-          NPM_BIN="$(npm bin -g)"
-          echo "$NPM_BIN" >> $GITHUB_PATH
-          export PATH="$NPM_BIN:$PATH"
-          codex --version
+          echo "$(npm bin -g)" >> $GITHUB_PATH
+          npx @openai/codex --version
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
@@ -171,18 +167,14 @@ jobs:
       - name: Install opencode CLI
         run: |
           npm install -g @opencode-ai/cli@latest
-          NPM_BIN="$(npm bin -g)"
-          echo "$NPM_BIN" >> $GITHUB_PATH
-          export PATH="$NPM_BIN:$PATH"
-          opencode --version
+          echo "$(npm bin -g)" >> $GITHUB_PATH
+          npx @opencode-ai/cli --version
 
       - name: Install codex CLI
         run: |
           npm install -g @openai/codex@latest
-          NPM_BIN="$(npm bin -g)"
-          echo "$NPM_BIN" >> $GITHUB_PATH
-          export PATH="$NPM_BIN:$PATH"
-          codex --version
+          echo "$(npm bin -g)" >> $GITHUB_PATH
+          npx @openai/codex --version
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
