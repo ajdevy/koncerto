@@ -37,7 +37,7 @@ projects:
         - logging
       telegram:
         bot_token: $TELEGRAM_BOT_TOKEN
-        chat_id: "@ajdevy"
+        chat_id: "5658965359"
     agent:
       kind: opencode
       max_concurrent_agents: 2
