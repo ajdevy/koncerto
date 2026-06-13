@@ -183,7 +183,7 @@ class AdminControllerTest {
         val alpha = body.find { it.tenantSlug == "alpha" }
         assertThat(alpha).isNotNull()
         assertThat(alpha!!.projectCount).isEqualTo(1)
-        assertThat(alpha.agentKinds).contains("opencode")
+        assertThat(alpha.agentKinds.filter { it == "opencode" }.single()).isEqualTo("opencode")
     }
 
     @Test
