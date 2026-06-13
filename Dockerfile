@@ -4,7 +4,7 @@ FROM gradle:8.9-jdk21 AS builder
 WORKDIR /app
 
 COPY gradle/ gradle/
-COPY build.gradle.kts settings.gradle.kts gradle.properties* ./
+COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties* ./
 COPY koncerto-core/ koncerto-core/
 COPY koncerto-logging/ koncerto-logging/
 COPY koncerto-workflow/ koncerto-workflow/
