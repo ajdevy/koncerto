@@ -5,6 +5,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isFalse
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isTrue
+import assertk.assertions.isNotNull
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Files
