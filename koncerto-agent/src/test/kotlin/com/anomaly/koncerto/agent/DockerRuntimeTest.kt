@@ -27,7 +27,7 @@ class DockerRuntimeTest {
         DockerRuntime("echo hello", tempDir, noopLogger(), containerId)
 
     @Test
-    fun `start nonexistent container`() = runBlocking {
+    fun testStartNonexistentContainer() = runBlocking {
         // In CI, Docker daemon IS available, so this test would need a mock Docker daemon.
         // The actual behavior for nonexistent containers is tested in integration environments.
         // In CI, we verify the DockerRuntime can be instantiated and basic methods work.
@@ -38,23 +38,23 @@ class DockerRuntimeTest {
     }
 
     @Test
-    fun `isAlive returns false for nonexistent container`() {
+    fun testIsAliveReturnsFalseForNonexistentContainer() {
         assertThat(testRuntime().isAlive()).isFalse()
     }
 
     @Test
-    fun `stop does not throw for nonexistent container`() {
+    fun testStopDoesNotThrowForNonexistentContainer() {
         assertThat(runCatching { testRuntime().stop() }.isSuccess).isTrue()
     }
 
     @Test
-    fun `send without start does not throw`() {
+    fun testSendWithoutStartDoesNotThrow() {
         val id = testRuntime().send("test/method", null)
         assertThat(id).isNotEmpty()
     }
 
     @Test
-    fun `events channel closes cleanly on stop`() = runBlocking {
+    fun testEventsChannelClosesCleanlyOnStop() = runBlocking {
         val runtime = testRuntime()
         runtime.stop()
         val events = mutableListOf<AgentEvent>()
