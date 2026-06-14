@@ -16,15 +16,18 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.util.TestPropertyValues
 import org.springframework.context.ApplicationContextInitializer
 import org.springframework.context.ConfigurableApplicationContext
+import org.springframework.test.context.ActiveProfiles
 import org.springframework.test.context.ContextConfiguration
 
 @SpringBootTest(
     properties = [
         "spring.main.web-application-type=none",
+        "spring.profiles.active=test",
         "koncerto.workflow-path=${'$'}{java.io.tmpdir}/koncerto-ctx-test/WORKFLOW.md"
     ]
 )
 @ContextConfiguration(initializers = [SpringBootContextTest.TestInitializer::class])
+@ActiveProfiles("test")
 class SpringBootContextTest {
 
     @Autowired lateinit var config: ServiceConfig
