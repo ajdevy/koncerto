@@ -16,6 +16,7 @@ import kotlinx.coroutines.runBlocking
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 
+@Profile("ui-test")
 @TestConfiguration(proxyBeanMethods = false)
 class DashboardUiTestConfig {
 
