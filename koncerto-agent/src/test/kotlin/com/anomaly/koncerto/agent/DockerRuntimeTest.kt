@@ -27,8 +27,8 @@ class DockerRuntimeTest {
         DockerRuntime("echo hello", tempDir, noopLogger(), containerId)
 
     @Test
-    fun `start returns false when docker daemon is unavailable`() = runBlocking {
-        val runtime = testRuntime()
+    fun `start returns false for nonexistent container`() = runBlocking {
+        val runtime = testRuntime("nonexistent-container-12345")
         val result = withTimeout(10_000) { runtime.start() }
         assertThat(result).isFalse()
     }

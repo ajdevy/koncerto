@@ -12,6 +12,7 @@ import com.anomaly.koncerto.orchestrator.RunningEntry
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import java.time.Instant
 import java.nio.file.Paths
+import kotlinx.coroutines.runBlocking
 import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 
@@ -46,14 +47,16 @@ class DashboardUiTestConfig {
             startedAt = Instant.now(), lastCodexTimestamp = null,
             turnCount = 1
         )
-        state.appendOutput("1", "[stdout] Initializing agent session...")
-        state.appendOutput("1", "[stdout] Loading configuration")
-        state.appendOutput("1", "[stderr] debug: workspace ready")
-        state.appendOutput("1", "[stdout] Starting turn/start")
-        state.appendOutput("1", "[stdout] Tool call: read_file")
-        state.appendOutput("1", "[stderr] warn: file not found, creating")
-        state.appendOutput("1", "[stdout] Tool call: write_file")
-        state.appendOutput("1", "[stdout] Turn completed")
+        runBlocking {
+            state.appendOutput("1", "[stdout] Initializing agent session...")
+            state.appendOutput("1", "[stdout] Loading configuration")
+            state.appendOutput("1", "[stderr] debug: workspace ready")
+            state.appendOutput("1", "[stdout] Starting turn/start")
+            state.appendOutput("1", "[stdout] Tool call: read_file")
+            state.appendOutput("1", "[stderr] warn: file not found, creating")
+            state.appendOutput("1", "[stdout] Tool call: write_file")
+            state.appendOutput("1", "[stdout] Turn completed")
+        }
         return state
     }
 
