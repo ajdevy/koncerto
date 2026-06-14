@@ -82,6 +82,8 @@ Then reference them in WORKFLOW.md as `$TELEGRAM_BOT_TOKEN`, `$LINEAR_API_KEY`, 
 | `KONCERTO_LOGS_ROOT` | Log output directory | (stderr) |
 | `KONCERTO_WORKSPACE_ROOT` | Agent workspace root dir | `/tmp/koncerto` |
 | `KONCERTO_WEB_TYPE` | `reactive` for dashboard, `none` for headless | `none` |
+| `KONCERTO_DASHBOARD_PORT` | Dashboard server port | `17348` |
+| `NGROK_AUTH_TOKEN` | ngrok tunnel auth token | — |
 
 ## Running
 
@@ -89,7 +91,7 @@ Then reference them in WORKFLOW.md as `$TELEGRAM_BOT_TOKEN`, `$LINEAR_API_KEY`, 
 # Headless
 ./gradlew :koncerto-app:bootRun --args="WORKFLOW.md"
 
-# With dashboard at http://localhost:8080
+# With dashboard at http://localhost:17348
 KONCERTO_WEB_TYPE=reactive ./gradlew :koncerto-app:bootRun --args="--port WORKFLOW.md"
 
 # Fat JAR
@@ -153,6 +155,64 @@ agent:
   kind: opencode
   docker:
     enabled: false
+```
+
+## Remote Dashboard Access
+
+The dashboard can be exposed via ngrok for secure remote access with OAuth authentication.
+
+### Prerequisites
+
+1. An [ngrok account](https://dashboard.ngrok.com/signup) (free tier works)
+2. Your ngrok auth token from https://dashboard.ngrok.com/get-started/your-authtoken
+
+### Setup
+
+```bash
+# 1. Copy the example config and customize
+cp config/ngrok.example.yml config/ngrok.yml
+
+# 2. Set your auth token
+export NGROK_AUTH_TOKEN=your_token_here
+```
+
+Edit `config/ngrok.yml` and uncomment your preferred OAuth provider (Google or GitHub), then set your allowed email domains:
+
+```yaml
+oauth:
+  provider: google
+  allow_domains:
+    - yourcompany.com
+```
+
+### Running
+
+The ngrok tunnel is managed as a Docker sidecar. Start with the dashboard profile:
+
+```bash
+docker compose --profile dashboard up -d
+```
+
+This starts both `koncerto` (dashboard on port 17348) and `ngrok` (tunnel with OAuth). The ngrok URL is printed to the ngrok container logs:
+
+```bash
+docker logs koncerto-ngrok 2>&1 | grep "started tunnel"
+```
+
+### Architecture
+
+```
+┌──────────────┐     OAuth       ┌──────────────┐
+│  ngrok       │ ──────────────> │  Internet    │
+│  (sidecar)   │                 │  (Google/GH) │
+└──────┬───────┘                 └──────────────┘
+       │ http://koncerto:17348
+       ▼
+┌──────────────┐
+│  Koncerto    │
+│  Dashboard   │
+│  port 17348  │
+└──────────────┘
 ```
 
 ### Requirements

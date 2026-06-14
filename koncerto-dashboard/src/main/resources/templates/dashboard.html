@@ -43,6 +43,9 @@
     <div class="totals">
         <strong>Tokens:</strong> <span id="totals">loading...</span>
     </div>
+    <div class="totals" id="tunnel-info" style="display:none;">
+        <strong>Tunnel:</strong> <span id="tunnel-url">inactive</span>
+    </div>
 
     <section id="running">
         <h2>Running</h2>
@@ -311,13 +314,32 @@
             });
         }
 
+        async function loadTunnel() {
+            try {
+                const r = await fetch('/api/v1/tunnel');
+                const t = await r.json();
+                const info = document.getElementById('tunnel-info');
+                const url = document.getElementById('tunnel-url');
+                if (t.status === 'active' && t.url) {
+                    info.style.display = 'block';
+                    url.innerHTML = '<a href="' + t.url + '" target="_blank" style="color:#6fc;">' + t.url + '</a>';
+                } else {
+                    info.style.display = 'none';
+                }
+            } catch (e) {
+                document.getElementById('tunnel-info').style.display = 'none';
+            }
+        }
+
         refresh();
         loadHistory();
         loadStages();
         loadTokenChart();
         loadDependencies();
+        loadTunnel();
         setInterval(refresh, 5000);
         setInterval(loadDependencies, 30000);
+        setInterval(loadTunnel, 15000);
     </script>
 </body>
 </html>

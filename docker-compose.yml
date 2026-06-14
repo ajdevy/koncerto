@@ -5,11 +5,12 @@ services:
       dockerfile: Dockerfile
     container_name: koncerto
     ports:
-      - "8080:8080"
+      - "17348:17348"
     environment:
       - KONCERTO_WORKFLOW_PATH=/config/workflows
       - KONCERTO_LOGS_ROOT=/logs
       - KONCERTO_DB_PATH=/data/koncerto.db
+      - KONCERTO_DASHBOARD_PORT=17348
       - SPRING_PROFILES_ACTIVE=production
     volumes:
       - workflow-config:/config/workflows
@@ -18,10 +19,38 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - .:/app/workspace
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:17348/actuator/health"]
       interval: 30s
       timeout: 10s
       start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - koncerto-network
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: koncerto-ngrok
+    profiles:
+      - dashboard
+    environment:
+      - NGROK_AUTH_TOKEN=${NGROK_AUTH_TOKEN:?NGROK_AUTH_TOKEN is required}
+      - NGROK_ADDR=koncerto:17348
+    volumes:
+      - ./config/ngrok.yml:/etc/ngrok.yml
+    command:
+      - start
+      - --config
+      - /etc/ngrok.yml
+      - koncerto-dashboard
+    depends_on:
+      koncerto:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:4040/api/tunnels"]
+      interval: 30s
+      timeout: 10s
+      start_period: 10s
       retries: 3
     restart: unless-stopped
     networks:
