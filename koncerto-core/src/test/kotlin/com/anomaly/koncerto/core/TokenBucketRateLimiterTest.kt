@@ -37,10 +37,10 @@ class TokenBucketRateLimiterTest {
 
     @Test
     fun `tokens refill over time`() {
-        val limiter = TokenBucketRateLimiter(maxTokens = 5, refillIntervalMs = 50, refillCount = 3)
+        val limiter = TokenBucketRateLimiter(maxTokens = 5, refillIntervalMs = 1000, refillCount = 3)
         repeat(5) { assertThat(limiter.tryAcquire()).isTrue() }
         assertThat(limiter.tryAcquire()).isFalse()
-        Thread.sleep(5000)
+        Thread.sleep(1500)
         assertThat(limiter.tryAcquire()).isTrue()
         assertThat(limiter.tryAcquire()).isTrue()
         assertThat(limiter.tryAcquire()).isTrue()
@@ -49,9 +49,9 @@ class TokenBucketRateLimiterTest {
 
     @Test
     fun `tokens do not exceed maxTokens`() {
-        val limiter = TokenBucketRateLimiter(maxTokens = 3, refillIntervalMs = 50, refillCount = 5)
+        val limiter = TokenBucketRateLimiter(maxTokens = 3, refillIntervalMs = 1000, refillCount = 5)
         repeat(3) { limiter.tryAcquire() }
-        Thread.sleep(5000)
+        Thread.sleep(1500)
         assertThat(limiter.tryAcquire()).isTrue()
         assertThat(limiter.tryAcquire()).isTrue()
         assertThat(limiter.tryAcquire()).isTrue()
