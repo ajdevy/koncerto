@@ -8,6 +8,8 @@ dependencies {
     implementation(project(":koncerto-logging"))
     implementation(project(":koncerto-workflow"))
     implementation(project(":koncerto-workspace"))
+    implementation(project(":koncerto-linear"))
+    implementation(project(":koncerto-notifications"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.spring.boot.starter.actuator)

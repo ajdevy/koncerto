@@ -51,6 +51,7 @@ interface AgentRunner {
         prompt: String,
         agentKindOverride: String? = null,
         commandOverride: String? = null,
+        modelOverride: String? = null,
         turnTimeoutMs: Long? = null,
         stallTimeoutMs: Long? = null
     ): EmptyResult<IllegalStateException>
@@ -72,7 +73,9 @@ class DefaultAgentRunner(
     private val retryDelayMs: Long = 5_000L,
     private val errorClassifier: ErrorClassifier? = null,
     private val dockerConfig: DockerConfig? = null,
-    private val maxConcurrentAgents: Int = 2
+    private val maxConcurrentAgents: Int = 2,
+    private val freeModelCycler: FreeModelCycler? = null,
+    private val modelRetryHandler: ModelRetryHandler? = null
 ) : AgentRunner {
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
 
@@ -84,14 +87,34 @@ class DefaultAgentRunner(
         prompt: String,
         agentKindOverride: String?,
         commandOverride: String?,
+        modelOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> = runCatchingResult {
         val effectiveAttempt = attempt ?: 1
-        val agentKey = "${agentKindOverride ?: "opencode"}:${commandOverride ?: agentKindOverride ?: "opencode"}"
+        val agentKey = "${agentKindOverride ?: "opencode"}:${commandOverride ?: agentKindOverride ?: "opencode"}:${modelOverride ?: "default"}"
 
         if (!(circuitBreaker?.allowRequest(agentKey) ?: true)) {
             throw IllegalStateException("circuit_breaker_open: $agentKey")
+        }
+
+        // Use ModelRetryHandler for free model cycling
+        val isFreeModel = modelOverride?.lowercase() == "free"
+        if (isFreeModel && modelRetryHandler != null) {
+            return@runCatchingResult modelRetryHandler!!.executeWithRetry(issue.id) { selectedModel ->
+                runWithRetry(
+                    issue = issue,
+                    attempt = effectiveAttempt,
+                    prompt = prompt,
+                    agentKindOverride = agentKindOverride,
+                    commandOverride = commandOverride,
+                    modelOverride = selectedModel,
+                    turnTimeoutMs = turnTimeoutMs,
+                    stallTimeoutMs = stallTimeoutMs,
+                    retryAttempt = 1,
+                    agentKey = agentKey
+                )
+            }
         }
 
         var lastException: Exception? = null
@@ -103,6 +126,7 @@ class DefaultAgentRunner(
                     prompt = prompt,
                     agentKindOverride = agentKindOverride,
                     commandOverride = commandOverride,
+                    modelOverride = modelOverride,
                     turnTimeoutMs = turnTimeoutMs,
                     stallTimeoutMs = stallTimeoutMs,
                     retryAttempt = retryAttempt,
@@ -174,6 +198,7 @@ class DefaultAgentRunner(
         prompt: String,
         agentKindOverride: String?,
         commandOverride: String?,
+        modelOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?,
         retryAttempt: Int,
@@ -197,7 +222,9 @@ class DefaultAgentRunner(
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
         val effectiveKind = agentKindOverride ?: "opencode"
         val command = commandOverride ?: effectiveKind
-        val runtime = factory.create(effectiveKind, command, workspace.path, dockerConfig, containerId)
+        val model = modelOverride
+        val cycler = if (effectiveKind.lowercase() == "opencode" && model?.lowercase() == "free") freeModelCycler else null
+        val runtime = factory.create(effectiveKind, command, workspace.path, dockerConfig, containerId, model, cycler)
         if (!runtime.start()) {
             containerManager?.removeContainer(containerId ?: "")
             throw IllegalStateException("startup_failed")

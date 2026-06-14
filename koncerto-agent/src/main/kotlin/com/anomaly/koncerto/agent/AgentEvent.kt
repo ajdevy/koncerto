@@ -145,8 +145,4 @@ sealed class AgentEvent {
     ) : AgentEvent()
 }
 
-data class TokenUsage(
-    val inputTokens: Long,
-    val outputTokens: Long,
-    val totalTokens: Long
-)
+import com.anomaly.koncerto.core.model.TokenUsage
