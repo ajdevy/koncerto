@@ -116,6 +116,51 @@ koncerto-app/          Spring Boot entry point
 koncerto-e2e/          Integration tests
 ```
 
+## Docker Agent Isolation
+
+Koncerto can run each agent in a dedicated Docker container for process-level isolation. This is **enabled by default** when Docker is available.
+
+### How It Works
+
+- Each agent gets its own container (`koncerto-agent-<timestamp>-<counter>`)
+- The workspace is bind-mounted into the container
+- Communication uses `docker exec -i` (same JSON-RPC protocol as subprocess mode)
+- Container logs are captured on crash/timeout, then the container is removed
+- The agent image is built automatically on koncerto startup
+
+### Configuration
+
+In your workflow YAML under `agent.docker`:
+
+```yaml
+agent:
+  kind: opencode
+  docker:
+    enabled: true          # default: true
+    image: koncerto-agent:latest
+    cpu: "auto"            # auto = available_cpus / max_agents (min 0.5)
+    memory: "auto"         # auto = free_memory * 0.8 / max_agents (min 512MB)
+    network: true          # attach to koncerto-network bridge
+    dockerfile: Dockerfile.agent
+```
+
+### Disabling Docker Isolation
+
+Set `agent.docker.enabled: false` to use the existing subprocess mode:
+
+```yaml
+agent:
+  kind: opencode
+  docker:
+    enabled: false
+```
+
+### Requirements
+
+- Docker must be accessible via `/var/run/docker.sock`
+- The `docker` CLI must be available inside the koncerto container
+- At least 512MB free memory per agent container
+
 ## License
 
 MIT
