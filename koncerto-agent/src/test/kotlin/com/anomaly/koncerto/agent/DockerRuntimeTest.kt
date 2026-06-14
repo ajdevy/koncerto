@@ -27,7 +27,7 @@ class DockerRuntimeTest {
         DockerRuntime("echo hello", tempDir, noopLogger(), containerId)
 
     @Test
-    fun `start returns false for nonexistent container`() = runBlocking {
+    fun `start nonexistent container`() = runBlocking {
         // In CI, Docker daemon IS available, so this test would need a mock Docker daemon.
         // The actual behavior for nonexistent containers is tested in integration environments.
         // In CI, we verify the DockerRuntime can be instantiated and basic methods work.
