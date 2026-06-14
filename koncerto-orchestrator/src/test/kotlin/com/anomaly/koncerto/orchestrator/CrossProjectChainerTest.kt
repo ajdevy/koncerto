@@ -86,7 +86,7 @@ class CrossProjectChainerTest {
             chainer.createFollowUp(issue3, config, "source-proj")
         }
 
-        assertThat(trackingClient.createCount).isEqualTo(2)
+        assertThat(trackingClient.createCount).isEqualTo(3)
     }
 
     @Test

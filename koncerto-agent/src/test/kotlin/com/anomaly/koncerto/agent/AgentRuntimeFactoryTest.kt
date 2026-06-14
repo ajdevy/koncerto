@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
+import com.anomaly.koncerto.core.config.DockerConfig
 import com.anomaly.koncerto.logging.LogSink
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.nio.file.Files
@@ -64,5 +65,44 @@ class AgentRuntimeFactoryTest {
         } catch (e: IllegalArgumentException) {
             assertThat(e.message).isNotNull()
         }
+    }
+
+    @Test
+    fun `create with docker config and container id returns DockerRuntime`() {
+        val factory = AgentRuntimeFactory(noopLogger())
+        val ws = Files.createTempDirectory("factory-test-")
+        val dockerConfig = DockerConfig(enabled = true)
+        val runtime = factory.create("codex", "echo hello", ws, dockerConfig, "test-container-id")
+        assertThat(runtime).isNotNull()
+        assertThat(runtime is DockerRuntime).isTrue()
+    }
+
+    @Test
+    fun `create with docker config but no container id returns non-Docker runtime`() {
+        val factory = AgentRuntimeFactory(noopLogger())
+        val ws = Files.createTempDirectory("factory-test-")
+        val dockerConfig = DockerConfig(enabled = true)
+        val runtime = factory.create("codex", "echo hello", ws, dockerConfig, null)
+        assertThat(runtime).isNotNull()
+        assertThat(runtime is CodexRuntime).isTrue()
+    }
+
+    @Test
+    fun `create with docker disabled returns non-Docker runtime`() {
+        val factory = AgentRuntimeFactory(noopLogger())
+        val ws = Files.createTempDirectory("factory-test-")
+        val dockerConfig = DockerConfig(enabled = false)
+        val runtime = factory.create("codex", "echo hello", ws, dockerConfig, "test-container-id")
+        assertThat(runtime).isNotNull()
+        assertThat(runtime is CodexRuntime).isTrue()
+    }
+
+    @Test
+    fun `create with null docker config returns non-Docker runtime`() {
+        val factory = AgentRuntimeFactory(noopLogger())
+        val ws = Files.createTempDirectory("factory-test-")
+        val runtime = factory.create("opencode", "echo hello", ws, null, null)
+        assertThat(runtime).isNotNull()
+        assertThat(runtime is OpencodeRuntime).isTrue()
     }
 }

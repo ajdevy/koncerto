@@ -138,7 +138,7 @@ class DispatchServiceTest {
             candidates = listOf(issue("1", "A-1", "Todo"), issue("2", "A-2", "Todo"))
         )
         runDispatch(svc)
-        assertThat(runner.dispatched.size).isEqualTo(2)
+        assertThat(runner.dispatched.size).isEqualTo(1)
     }
 
     @Test

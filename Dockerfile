@@ -4,7 +4,7 @@ FROM gradle:8.9-jdk21 AS builder
 WORKDIR /app
 
 COPY gradle/ gradle/
-COPY build.gradle.kts settings.gradle.kts gradle.properties* ./
+COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties* ./
 COPY koncerto-core/ koncerto-core/
 COPY koncerto-logging/ koncerto-logging/
 COPY koncerto-workflow/ koncerto-workflow/
@@ -22,12 +22,15 @@ RUN ./gradlew :koncerto-app:bootJar --no-daemon
 # Runtime stage
 FROM eclipse-temurin:21-jre-alpine
 
+RUN apk add --no-cache docker-cli bash curl wget
+
 WORKDIR /app
 
 RUN addgroup -g 1000 -S koncerto && \
     adduser -u 1000 -S koncerto -G koncerto
 
 COPY --from=builder /app/koncerto-app/build/libs/koncerto-app-*.jar app.jar
+COPY Dockerfile.agent /app/Dockerfile.agent
 
 RUN chown -R koncerto:koncerto /app
 

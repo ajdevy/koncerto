@@ -1,20 +1,26 @@
-Review the pull request for {{ issue.identifier }}.
+Review the code changes for issue {{ issue.identifier }}.
 
 Title: {{ issue.title }}
 Description: {{ issue.description }}
 
-The implementing agent has pushed a branch and created a PR. Your job is to review the changes and post review comments on the PR using the `gh` CLI.
+Run `git diff HEAD~1 --stat` to see what files changed, then `git diff HEAD~1` to see the full diff.
 
-Use the following commands:
-- `gh pr view --json number,title,body,headRefName,baseRefName` — find the PR for branch `feature/{{ issue.identifier }}`
-- `gh pr diff {{ issue.identifier }}` — view the code changes
-- `gh pr review {{ issue.identifier }} --comment --body '...'` — post a review with inline feedback
-- `gh pr review {{ issue.identifier }} --approve --body '...'` — approve if changes look good
+Analyze the changes for:
+1. **Correctness** — logic errors, race conditions, missing edge cases
+2. **Test coverage** — are there tests? Do they cover the change adequately?
+3. **Conventions** — does the code match the project's existing patterns?
+4. **Security** — are there injection risks, credential leaks, or unsafe deserialization?
+5. **Performance** — unnecessary allocations, blocking calls on the main thread, inefficient queries
 
-Focus on:
-1. Code correctness and edge cases
-2. Test coverage
-3. Following project conventions
-4. Security and performance
+**Output Format:**
+Start with either ✅ **PASS** (no critical issues) or ❌ **FAIL** (critical issues found).
 
-When you find issues, post specific line-level comments using `gh pr review` with the `--comment` flag and reference the relevant code.
+For each issue found, use this structure:
+- **Severity:** CRITICAL / WARNING / SUGGESTION
+- **File:** `path/to/file.kt`
+- **Issue:** clear description of the problem
+- **Suggestion:** how to fix it
+
+Count the critical issues and report: `**Critical:** N` where N is the number of CRITICAL-severity findings.
+
+End with a summary verdict: "✅ Review PASSED" or "❌ Review FAILED — N critical issue(s) found".

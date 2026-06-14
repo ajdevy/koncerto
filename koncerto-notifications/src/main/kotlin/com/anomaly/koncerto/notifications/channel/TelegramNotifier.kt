@@ -39,6 +39,7 @@ class TelegramNotifier(
             is NotificationEvent.AgentFailed -> "\u274C"
             is NotificationEvent.AgentStalled -> "\u26A0\uFE0F"
             is NotificationEvent.ClarificationRequested -> "\u2753"
+            is NotificationEvent.LimitDetected -> "\u26D4"
         }
         return "$emoji *${event.issueIdentifier}*: ${event.title}"
     }

@@ -1,0 +1,11 @@
+# Koncerto local secrets
+# Copy this to local.properties and fill in your values.
+# local.properties is gitignored — never commit secrets.
+
+# Telegram notifications
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+
+# Linear API key (alternative to $LINEAR_API_KEY env var)
+# LINEAR_API_KEY=your_linear_key_here
+
+# Any config value that uses $ENV_VAR syntax can be set here

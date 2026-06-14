@@ -898,4 +898,91 @@ class ServiceConfigTest {
         assertThat(stage).isNotNull()
         assertThat(stage!!.followUp).isNull()
     }
+
+    @Test
+    fun `docker config defaults when not specified`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.docker).isNull()
+    }
+
+    @Test
+    fun `docker config parses all fields`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "docker" to mapOf(
+                            "enabled" to true,
+                            "image" to "my-agent:v2",
+                            "cpu" to "2.0",
+                            "memory" to "2g",
+                            "network" to false,
+                            "dockerfile" to "CustomDockerfile"
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val docker = config.project().agent.docker
+        assertThat(docker).isNotNull()
+        assertThat(docker!!.enabled).isEqualTo(true)
+        assertThat(docker.image).isEqualTo("my-agent:v2")
+        assertThat(docker.cpu).isEqualTo("2.0")
+        assertThat(docker.memory).isEqualTo("2g")
+        assertThat(docker.network).isEqualTo(false)
+        assertThat(docker.dockerfile).isEqualTo("CustomDockerfile")
+    }
+
+    @Test
+    fun `docker config partial fields get defaults`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "docker" to mapOf("enabled" to false)
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val docker = config.project().agent.docker
+        assertThat(docker).isNotNull()
+        assertThat(docker!!.enabled).isEqualTo(false)
+        assertThat(docker.image).isEqualTo("koncerto-agent:latest")
+        assertThat(docker.cpu).isEqualTo("auto")
+        assertThat(docker.memory).isEqualTo("auto")
+        assertThat(docker.network).isEqualTo(true)
+        assertThat(docker.dockerfile).isEqualTo("Dockerfile.agent")
+    }
+
+    @Test
+    fun `docker config disabled`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "docker" to mapOf("enabled" to false)
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.docker!!.enabled).isEqualTo(false)
+    }
 }

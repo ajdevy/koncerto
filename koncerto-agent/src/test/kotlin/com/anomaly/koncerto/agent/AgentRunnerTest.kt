@@ -8,6 +8,7 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.anomaly.koncerto.core.config.AgentProjectConfig
 import com.anomaly.koncerto.core.config.GitConfig
+import com.anomaly.koncerto.core.config.DockerConfig
 import com.anomaly.koncerto.core.config.HooksConfig
 import com.anomaly.koncerto.core.config.ProjectConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
@@ -344,5 +345,21 @@ class AgentRunnerTest {
             turnTimeoutMs = 50000, stallTimeoutMs = 50000
         )
         assertThat(result.exceptionOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `runner falls back gracefully when docker container creation fails`() = runTest {
+        val root = Files.createTempDirectory("agent-runner-docker-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "false")
+        val dockerConfig = DockerConfig(enabled = true)
+        val runner = DefaultAgentRunner(
+            config, mgr, noopLogger(),
+            dockerConfig = dockerConfig,
+            maxConcurrentAgents = 2
+        )
+        val issue = sampleIssue()
+        val result = runner.run(issue, attempt = null, prompt = "Hi", commandOverride = "false")
+        assertThat(result).isNotNull()
     }
 }

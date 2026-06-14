@@ -154,6 +154,7 @@ data class ServiceConfig(
             val stages = parseStages(map)
             val agents = parseAgents(map)
             val routingRules = parseRoutingRules(map)
+            val docker = parseDockerConfig(map)
 
             return AgentProjectConfig(
                 kind = kind,
@@ -169,7 +170,8 @@ data class ServiceConfig(
                 heartbeatTimeoutMs = heartbeatTimeoutMs,
                 stages = stages,
                 agents = agents,
-                routingRules = routingRules
+                routingRules = routingRules,
+                docker = docker
             )
         }
 
@@ -185,6 +187,8 @@ data class ServiceConfig(
                     agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
                     command = stageMap["command"] as? String,
                     onCompleteState = stageMap["on_complete_state"] as? String,
+                    onFailureState = stageMap["on_failure_state"] as? String,
+                    maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
                     agent = stageMap["agent"] as? String,
                     followUp = (stageMap["follow_up"] as? Map<*, *>)?.let { f ->
                         FollowUpConfig(
@@ -233,6 +237,18 @@ data class ServiceConfig(
             }.toMap()
         }
 
+        internal fun parseDockerConfig(agentMap: Map<*, *>?): DockerConfig? {
+            val dockerMap = agentMap?.get("docker") as? Map<*, *> ?: return null
+            return DockerConfig(
+                enabled = (dockerMap["enabled"] as? Boolean) ?: true,
+                image = (dockerMap["image"] as? String) ?: "koncerto-agent:latest",
+                cpu = (dockerMap["cpu"] as? String) ?: "auto",
+                memory = (dockerMap["memory"] as? String) ?: "auto",
+                network = (dockerMap["network"] as? Boolean) ?: true,
+                dockerfile = (dockerMap["dockerfile"] as? String) ?: "Dockerfile.agent"
+            )
+        }
+
         internal fun parseRateLimiterConfig(map: Map<*, *>?): RateLimiterConfig? {
             if (map == null) return null
             return RateLimiterConfig(
@@ -263,6 +279,8 @@ data class ServiceConfig(
                     ?: (telegramMap != null || emailMap != null || webhookMap != null),
                 onClarification = (map["on_clarification"] as? Boolean)
                     ?: (telegramMap != null || emailMap != null || webhookMap != null),
+                onLimit = (map["on_limit"] as? List<*>)?.map { it.toString() } ?: emptyList(),
+                limitCooldownMs = (map["limit_cooldown_ms"] as? Number)?.toLong() ?: 300_000L,
                 telegram = telegramMap?.let { TelegramConfig(
                     botToken = resolveEnvRef(it["bot_token"] as? String) ?: "",
                     chatId = it["chat_id"] as? String ?: ""
@@ -369,6 +387,8 @@ data class StageAgentConfig(
     val agentKind: String?,
     val command: String?,
     val onCompleteState: String?,
+    val onFailureState: String? = null,
+    val maxReviewAttempts: Int? = null,
     val agent: String? = null,
     val followUp: FollowUpConfig? = null,
     val crossProjectFollowUp: CrossProjectFollowUpConfig? = null

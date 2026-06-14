@@ -1,0 +1,18 @@
+FROM eclipse-temurin:21-jre-alpine
+
+RUN apk add --no-cache \
+    git \
+    gradle \
+    bash \
+    curl \
+    wget \
+    openssh-client \
+    docker-cli
+
+RUN curl -fsSL https://opencode.ai/install.sh | sh
+
+ENV PATH="/root/.opencode/bin:${PATH}"
+
+WORKDIR /workspace
+
+ENTRYPOINT ["sleep", "infinity"]
