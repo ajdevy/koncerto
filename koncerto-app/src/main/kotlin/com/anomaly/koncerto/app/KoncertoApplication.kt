@@ -1,5 +1,7 @@
 package com.anomaly.koncerto.app
 
+import com.anomaly.koncerto.core.config.ServiceConfig
+import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -11,6 +13,7 @@ import java.io.FileInputStream
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.Properties
+import java.util.concurrent.TimeUnit
 
 @SpringBootApplication(proxyBeanMethods = false)
 @ComponentScan(basePackages = ["com.anomaly.koncerto"])
@@ -30,6 +33,9 @@ fun main(args: Array<String>) {
         println("[koncerto] Loaded ${props.size} properties from local.properties")
     }
     val ctx = runApplication<KoncertoApplication>(*args)
+    val config = ctx.getBean(ServiceConfig::class.java)
+    val logger = ctx.getBean(StructuredLogger::class.java)
+    buildDockerAgentImage(config, logger, ctx)
     val orchestrator = ctx.getBean(Orchestrator::class.java)
     Runtime.getRuntime().addShutdownHook(Thread {
         val count = orchestrator.runningAgentsCount()
@@ -50,4 +56,40 @@ fun main(args: Array<String>) {
             }
         }
     })
+}
+
+private fun buildDockerAgentImage(config: ServiceConfig, logger: StructuredLogger, ctx: org.springframework.context.ApplicationContext) {
+    val dockerEnabled = config.projects.values.any { it.agent.docker?.enabled != false }
+    if (!dockerEnabled) {
+        logger.info("docker_image_build_skipped", mapOf("reason" to "docker_disabled"))
+        return
+    }
+
+    val dockerfile = config.projects.values.firstNotNullOfOrNull { it.agent.docker?.dockerfile } ?: "Dockerfile.agent"
+    val image = config.projects.values.firstNotNullOfOrNull { it.agent.docker?.image } ?: "koncerto-agent:latest"
+
+    try {
+        val inspectPb = ProcessBuilder("bash", "-lc", "docker image inspect $image 2>/dev/null")
+        val inspectP = inspectPb.start()
+        val inspectExited = inspectP.waitFor(5, TimeUnit.SECONDS)
+        if (inspectExited && inspectP.exitValue() == 0) {
+            logger.info("docker_image_exists", mapOf("image" to image))
+            return
+        }
+    } catch (_: Exception) {}
+
+    try {
+        logger.info("docker_image_build_starting", mapOf("dockerfile" to dockerfile, "image" to image))
+        val pb = ProcessBuilder("bash", "-lc", "docker build -f $dockerfile -t $image .")
+        pb.inheritIO()
+        val p = pb.start()
+        val buildCompleted = p.waitFor(120, TimeUnit.SECONDS)
+        if (buildCompleted && p.exitValue() == 0) {
+            logger.info("docker_image_build_completed", mapOf("image" to image))
+        } else {
+            logger.warn("docker_image_build_failed", mapOf("exit_code" to (if (buildCompleted) p.exitValue().toString() else "timeout"), "image" to image))
+        }
+    } catch (e: Exception) {
+        logger.warn("docker_image_build_error", emptyMap(), "error" to (e.message ?: "unknown"))
+    }
 }

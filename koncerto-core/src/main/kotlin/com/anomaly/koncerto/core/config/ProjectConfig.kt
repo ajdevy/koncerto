@@ -70,7 +70,8 @@ data class AgentProjectConfig(
     val stages: Map<String, StageAgentConfig> = emptyMap(),
     val agents: Map<String, AgentProviderConfig> = emptyMap(),
     val routingRules: List<RoutingRule> = emptyList(),
-    val workplan: WorkplanConfig? = null
+    val workplan: WorkplanConfig? = null,
+    val docker: DockerConfig? = null
 )
 
 @kotlinx.serialization.Serializable

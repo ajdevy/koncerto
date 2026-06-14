@@ -34,9 +34,10 @@ class DockerContainerManager(
             val pb = ProcessBuilder("bash", "-lc", runCmd)
             val p = pb.start()
             val output = p.inputStream.bufferedReader().readText().trim()
-            val exitCode = p.waitFor(30, TimeUnit.SECONDS)
+            val completed = p.waitFor(30, TimeUnit.SECONDS)
+            val exitCode = if (completed) p.exitValue() else -1
 
-            if ((exitCode as Int) == 0 || output.isBlank()) {
+            if (exitCode != 0 || output.isBlank()) {
                 logger.warn("container_create_failed", mapOf("exit_code" to exitCode.toString()))
                 return null
             }

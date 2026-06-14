@@ -337,8 +337,8 @@ class DispatchService(
 
         if (!state.tryClaim(issue.id)) return null
 
-        // Check quota atomically with claim
-        val quotaAcquired = quotaConfig?.let { quotaEnforcer?.tryAcquire(projectSlug, it) } == true
+        // Check quota atomically with claim — null quotaConfig means no limit
+        val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectSlug, quotaConfig) == true
         if (!quotaAcquired) {
             state.releaseClaim(issue.id)
             return null

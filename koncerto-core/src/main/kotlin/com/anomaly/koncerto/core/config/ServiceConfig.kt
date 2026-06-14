@@ -154,6 +154,7 @@ data class ServiceConfig(
             val stages = parseStages(map)
             val agents = parseAgents(map)
             val routingRules = parseRoutingRules(map)
+            val docker = parseDockerConfig(map)
 
             return AgentProjectConfig(
                 kind = kind,
@@ -169,7 +170,8 @@ data class ServiceConfig(
                 heartbeatTimeoutMs = heartbeatTimeoutMs,
                 stages = stages,
                 agents = agents,
-                routingRules = routingRules
+                routingRules = routingRules,
+                docker = docker
             )
         }
 
@@ -233,6 +235,18 @@ data class ServiceConfig(
                     maxConcurrent = (agentMap["max_concurrent"] as? Number)?.toInt()
                 )
             }.toMap()
+        }
+
+        internal fun parseDockerConfig(agentMap: Map<*, *>?): DockerConfig? {
+            val dockerMap = agentMap?.get("docker") as? Map<*, *> ?: return null
+            return DockerConfig(
+                enabled = (dockerMap["enabled"] as? Boolean) ?: true,
+                image = (dockerMap["image"] as? String) ?: "koncerto-agent:latest",
+                cpu = (dockerMap["cpu"] as? String) ?: "auto",
+                memory = (dockerMap["memory"] as? String) ?: "auto",
+                network = (dockerMap["network"] as? Boolean) ?: true,
+                dockerfile = (dockerMap["dockerfile"] as? String) ?: "Dockerfile.agent"
+            )
         }
 
         internal fun parseRateLimiterConfig(map: Map<*, *>?): RateLimiterConfig? {

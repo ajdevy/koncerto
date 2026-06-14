@@ -1,6 +1,7 @@
 package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.agent.AgentCircuitBreaker
+import com.anomaly.koncerto.core.config.DockerConfig
 import com.anomaly.koncerto.core.config.ServiceConfig
 import com.anomaly.koncerto.core.errors.AgentError
 import com.anomaly.koncerto.core.errors.AgentErrorType
@@ -69,7 +70,9 @@ class DefaultAgentRunner(
     private val healthChecker: AgentHealthChecker? = null,
     private val maxRetries: Int = 1,
     private val retryDelayMs: Long = 5_000L,
-    private val errorClassifier: ErrorClassifier? = null
+    private val errorClassifier: ErrorClassifier? = null,
+    private val dockerConfig: DockerConfig? = null,
+    private val maxConcurrentAgents: Int = 2
 ) : AgentRunner {
     private val eventFlow = MutableSharedFlow<AgentEvent>(extraBufferCapacity = 64)
 
@@ -182,11 +185,21 @@ class DefaultAgentRunner(
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
         gitWorkflow?.createBranch(workspace.path, issue.identifier)
 
+        val useDocker = dockerConfig?.enabled == true
+        val containerManager = if (useDocker) {
+            DockerContainerManager(dockerConfig!!, workspace.path, maxConcurrentAgents, logger)
+        } else null
+        val containerId = containerManager?.createContainer()
+        if (useDocker && containerId == null) {
+            logger.warn("docker_container_creation_failed_fallback", mapOf("issue" to issue.identifier))
+        }
+
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)
         val effectiveKind = agentKindOverride ?: "opencode"
         val command = commandOverride ?: effectiveKind
-        val runtime = factory.create(effectiveKind, command, workspace.path)
+        val runtime = factory.create(effectiveKind, command, workspace.path, dockerConfig, containerId)
         if (!runtime.start()) {
+            containerManager?.removeContainer(containerId ?: "")
             throw IllegalStateException("startup_failed")
         }
         EventBus.publish(AgentLifecycleEvent.Started(agentKey, 0L))
@@ -297,8 +310,11 @@ class DefaultAgentRunner(
                 }
             }
             healthChecker?.removeAgent(agentKey)
+            containerManager?.removeContainer(containerId ?: "")
             throw e
         }
+
+        containerManager?.removeContainer(containerId ?: "")
 
         config.hooks.afterRun?.let { workspaces.runAfterRun(workspace, it, logger) }
 

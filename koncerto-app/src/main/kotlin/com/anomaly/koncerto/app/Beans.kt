@@ -254,6 +254,8 @@ class Beans {
     ): AgentRunner {
         val firstProject = config.projects.values.firstOrNull()
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
+        val dockerConfig = firstProject?.agent?.docker
+        val maxConcurrentAgents = firstProject?.agent?.maxConcurrentAgents ?: 2
         return DefaultAgentRunner(
             config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
             onAgentOutputSuspend = { issueId, line ->
@@ -267,7 +269,9 @@ class Beans {
             healthChecker = healthChecker,
             errorClassifier = errorClassifier,
             maxRetries = 3,
-            retryDelayMs = 5_000L
+            retryDelayMs = 5_000L,
+            dockerConfig = dockerConfig,
+            maxConcurrentAgents = maxConcurrentAgents
         )
     }
 
