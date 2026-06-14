@@ -14,7 +14,7 @@ class TokenBucketRateLimiter(
     suspend fun acquire() {
         while (true) {
             if (tryAcquire()) return
-            delay(refillIntervalMs / 4)
+            delay(refillIntervalMs)
         }
     }
 
@@ -25,14 +25,16 @@ class TokenBucketRateLimiter(
         return tokens.compareAndSet(current, current - 1)
     }
 
-    private fun refill() {
+    private fun refill(): Boolean {
         val now = System.currentTimeMillis()
         val last = lastRefillMs.get()
         val elapsed = now - last
-        if (elapsed >= refillIntervalMs && lastRefillMs.compareAndSet(last, now)) {
-            val intervals = elapsed / refillIntervalMs
-            val newTokens = (intervals * refillCount).toInt()
-            tokens.updateAndGet { current -> (current + newTokens).coerceAtMost(maxTokens.toLong()) }
-        }
+        if (elapsed < refillIntervalMs) return false
+        val intervals = elapsed / refillIntervalMs
+        val newTokens = (intervals * refillCount).toLong()
+        val targetTime = last + intervals * refillIntervalMs
+        if (!lastRefillMs.compareAndSet(last, targetTime)) return false
+        tokens.updateAndGet { current -> (current + newTokens).coerceAtMost(maxTokens.toLong()) }
+        return true
     }
 }
