@@ -2,9 +2,8 @@ package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.logging.StructuredLogger
-import kotlinx.coroutines.Mutex
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withLock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 data class ModelExhaustedException(
     val modelsTried: List<String>,
@@ -17,8 +16,10 @@ class FreeModelCycler(
     private val maxRetriesPerModel: Int = 3,
     private val logger: StructuredLogger
 ) {
-    require(models.isNotEmpty()) { "At least one free model required" }
-    require(maxRetriesPerModel > 0) { "maxRetriesPerModel must be positive" }
+    init {
+        require(models.isNotEmpty()) { "At least one free model required" }
+        require(maxRetriesPerModel > 0) { "maxRetriesPerModel must be positive" }
+    }
 
     private val mutex = Mutex()
     private var currentIndex = 0
@@ -27,7 +28,7 @@ class FreeModelCycler(
 
     suspend fun nextModel(): Result<String, ModelExhaustedException> = mutex.withLock {
         if (exhausted) {
-            Result.Failure(ModelExhaustedException(
+            return@withLock Result.Failure(ModelExhaustedException(
                 modelsTried = models,
                 totalRetries = retryCounts.values.sum(),
                 lastError = "Already exhausted"
@@ -44,7 +45,7 @@ class FreeModelCycler(
                         "attempt" to (retries + 1).toString(),
                         "max_retries" to maxRetriesPerModel.toString()
                     ))
-                    Result.Success(model)
+                    return@withLock Result.Success(model)
                 } else {
                     currentIndex = (currentIndex + 1) % models.size
                     attempts++
@@ -73,7 +74,7 @@ class FreeModelCycler(
             "model" to model,
             "retry_count" to count.toString(),
             "max_retries" to maxRetriesPerModel.toString(),
-            "error" to error ?: "unknown"
+            "error" to (error ?: "unknown")
         ))
     }
 
@@ -89,7 +90,7 @@ class FreeModelCycler(
         logger.info("free_model_cycler_reset", emptyMap())
     }
 
-    fun getStatus(): Map<String, Any> = mutex.withLock {
+    suspend fun getStatus(): Map<String, Any> = mutex.withLock {
         mapOf(
             "current_index" to currentIndex,
             "models" to models,

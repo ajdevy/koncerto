@@ -1,5 +1,6 @@
 package com.anomaly.koncerto.agent
 
+import com.anomaly.koncerto.core.model.TokenUsage
 import com.anomaly.koncerto.logging.StructuredLogger
 import java.io.BufferedReader
 import java.io.BufferedWriter

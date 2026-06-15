@@ -45,7 +45,10 @@ class ModelRetryHandler(
                 is Result.Success<*> -> {}
             }
 
-            val model = modelResult.getOrThrow()
+            val model = when (modelResult) {
+                is Result.Success -> modelResult.value
+                is Result.Failure -> throw IllegalStateException("Unexpected failure in model selection")
+            }
             logger.info("model_retry_attempt", mapOf(
                 "issue_id" to issueId,
                 "model" to model
@@ -87,7 +90,7 @@ class ModelRetryHandler(
         }
     }
 
-    private fun <T> handleExhaustion(issueId: String, exhausted: ModelExhaustedException): Result<T, Exception> {
+    private suspend fun <T> handleExhaustion(issueId: String, exhausted: ModelExhaustedException): Result<T, Exception> {
         logger.error("model_exhaustion_final", mapOf(
             "issue_id" to issueId,
             "models_tried" to exhausted.modelsTried.joinToString(","),

@@ -13,7 +13,9 @@ import com.anomaly.koncerto.core.retry.RetryStrategy
 import com.anomaly.koncerto.core.events.AgentLifecycleEvent
 import com.anomaly.koncerto.core.events.EventBus
 import com.anomaly.koncerto.core.model.Issue
+import com.anomaly.koncerto.core.model.TokenUsage
 import com.anomaly.koncerto.core.result.EmptyResult
+import com.anomaly.koncerto.core.result.Result
 import com.anomaly.koncerto.core.result.runCatchingResult
 import com.anomaly.koncerto.logging.StructuredLogger
 import com.anomaly.koncerto.workspace.GitWorkflow
@@ -101,20 +103,27 @@ class DefaultAgentRunner(
         // Use ModelRetryHandler for free model cycling
         val isFreeModel = modelOverride?.lowercase() == "free"
         if (isFreeModel && modelRetryHandler != null) {
-            return@runCatchingResult modelRetryHandler!!.executeWithRetry(issue.id) { selectedModel ->
-                runWithRetry(
-                    issue = issue,
-                    attempt = effectiveAttempt,
-                    prompt = prompt,
-                    agentKindOverride = agentKindOverride,
-                    commandOverride = commandOverride,
-                    modelOverride = selectedModel,
-                    turnTimeoutMs = turnTimeoutMs,
-                    stallTimeoutMs = stallTimeoutMs,
-                    retryAttempt = 1,
-                    agentKey = agentKey
-                )
+            val result = modelRetryHandler.executeWithRetry<Unit>(issue.id) { selectedModel ->
+                runCatchingResult {
+                    runWithRetry(
+                        issue = issue,
+                        attempt = effectiveAttempt,
+                        prompt = prompt,
+                        agentKindOverride = agentKindOverride,
+                        commandOverride = commandOverride,
+                        modelOverride = selectedModel,
+                        turnTimeoutMs = turnTimeoutMs,
+                        stallTimeoutMs = stallTimeoutMs,
+                        retryAttempt = 1,
+                        agentKey = agentKey
+                    )
+                }
             }
+            when (result) {
+                is Result.Failure -> throw IllegalStateException(result.error.message ?: "model_retry_exhausted")
+                is Result.Success -> {}
+            }
+            return@runCatchingResult Unit
         }
 
         var lastException: Exception? = null

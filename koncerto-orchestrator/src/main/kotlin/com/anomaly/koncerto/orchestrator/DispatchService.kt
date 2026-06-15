@@ -2,7 +2,7 @@ package com.anomaly.koncerto.orchestrator
 
 import com.anomaly.koncerto.agent.AgentEvent
 import com.anomaly.koncerto.agent.AgentRunner
-import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.core.model.TokenUsage
 import com.anomaly.koncerto.core.audit.AuditEvent
 import com.anomaly.koncerto.core.audit.AuditEventType
 import com.anomaly.koncerto.core.audit.AuditLogger

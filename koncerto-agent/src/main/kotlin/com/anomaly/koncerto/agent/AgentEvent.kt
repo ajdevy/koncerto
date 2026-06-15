@@ -2,6 +2,7 @@ package com.anomaly.koncerto.agent
 
 import com.anomaly.koncerto.core.config.SubtaskManifest
 import com.anomaly.koncerto.core.errors.AgentError
+import com.anomaly.koncerto.core.model.TokenUsage
 import java.time.Instant
 
 sealed class AgentEvent {
@@ -144,5 +145,3 @@ sealed class AgentEvent {
         override val timestamp: Instant = Instant.now()
     ) : AgentEvent()
 }
-
-import com.anomaly.koncerto.core.model.TokenUsage
