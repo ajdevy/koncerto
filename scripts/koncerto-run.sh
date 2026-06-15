@@ -20,8 +20,8 @@ Build and run Koncerto orchestration stack.
 Options:
   --dev           Development mode: skip Gradle build, use pre-built JAR
   --clean         Clean rebuild: run gradle clean before build
-  -d, --detach    Run docker-compose in detached mode (no log tail)
-  --profile <p>   Enable docker-compose profile (e.g., --profile agent)
+  -d, --detach    Run docker compose in detached mode (no log tail)
+  --profile <p>   Enable docker compose profile (e.g., --profile agent)
   --model <m>     Implementation agent model (default: codex-5.4)
   --codex-model <m>  Alias for --model
   --help          Show this help
@@ -73,19 +73,19 @@ echo "[koncerto-run] Building koncerto-agent Docker image..."
 docker build -f "$PROJECT_ROOT/Dockerfile.agent" -t koncerto-agent:latest "$PROJECT_ROOT"
 echo "[koncerto-run] Agent image built"
 
-# Step 3: Start docker-compose
-echo "[koncerto-run] Starting docker-compose..."
+# Step 3: Start docker compose
+echo "[koncerto-run] Starting docker compose..."
 cd "$PROJECT_ROOT"
 
-# Export for docker-compose
+# Export for docker compose
 export WORKFLOW_FILE
 export KONCERTO_PORT="${KONCERTO_PORT:-17348}"
 export KONCERTO_IMPLEMENTATION_MODEL="${IMPLEMENTATION_MODEL}"
 
 if [[ "$DETACH" == "true" ]]; then
-  docker-compose $PROFILES up -d --build
+  docker compose $PROFILES up -d --build
 else
-  docker-compose $PROFILES up --build
+  docker compose $PROFILES up --build
 fi
 
 # Step 4: Wait for health (only in detached mode)
@@ -94,18 +94,18 @@ if [[ "$DETACH" == "true" ]]; then
   MAX_WAIT=60
   START=$(date +%s)
   while true; do
-    if docker-compose exec -T koncerto-app wget -qO- "http://localhost:17348/actuator/health" 2>/dev/null | grep -q '"status":"UP"'; then
+    if docker compose exec -T koncerto-app wget -qO- "http://localhost:17348/actuator/health" 2>/dev/null | grep -q '"status":"UP"'; then
       echo "[koncerto-run] koncerto-app is healthy"
       break
     fi
     NOW=$(date +%s)
     if (( NOW - START > MAX_WAIT )); then
       echo "[koncerto-run] ERROR: Health check timeout after ${MAX_WAIT}s"
-      docker-compose logs koncerto-app | tail -50
+      docker compose logs koncerto-app | tail -50
       exit 1
     fi
     sleep 2
   done
   echo "[koncerto-run] Koncerto is running at http://localhost:${KONCERTO_PORT}"
-  echo "[koncerto-run] Use 'docker-compose logs -f' to tail logs"
+  echo "[koncerto-run] Use 'docker compose logs -f' to tail logs"
 fi
