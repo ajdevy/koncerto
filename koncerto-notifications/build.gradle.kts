@@ -6,7 +6,6 @@ plugins {
 dependencies {
     implementation(project(":koncerto-core"))
     implementation(project(":koncerto-logging"))
-    implementation(project(":koncerto-agent"))
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
     implementation("com.sun.mail:jakarta.mail:2.0.1")

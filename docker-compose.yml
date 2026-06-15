@@ -1,40 +1,51 @@
 services:
-  koncerto:
+  koncerto-app:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: koncerto
+      dockerfile: koncerto-app/Dockerfile
     ports:
-      - "8080:8080"
+      - "${KONCERTO_PORT:-17348}:17348"
     environment:
-      - KONCERTO_WORKFLOW_PATH=/config/workflows
-      - KONCERTO_LOGS_ROOT=/logs
-      - KONCERTO_DB_PATH=/data/koncerto.db
-      - SPRING_PROFILES_ACTIVE=production
+      KONCERTO_WORKFLOW_PATH: /config/WORKFLOW.md
+      KONCERTO_LOGS_ROOT: /logs
+      KONCERTO_WEB_TYPE: servlet
+      KONCERTO_DASHBOARD_PORT: "17348"
+      KONCERTO_ADMIN_API_KEY: "${KONCERTO_ADMIN_API_KEY:-}"
     volumes:
-      - workflow-config:/config/workflows
-      - logs:/logs
-      - db:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-      - .:/app/workspace
+      - ./workflows:/config
+      - koncerto-logs:/logs
+      - koncerto-data:/data
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      start_period: 30s
-      retries: 3
-    restart: unless-stopped
+      test: ["CMD-SHELL", "wget -qO- http://localhost:17348/actuator/health | grep -q '\"status\":\"UP\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     networks:
       - koncerto-network
+    restart: unless-stopped
 
-volumes:
-  workflow-config:
-    driver: local
-  logs:
-    driver: local
-  db:
-    driver: local
+  koncerto-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      koncerto-app:
+        condition: service_healthy
+    environment:
+      KONCERTO_APP_URL: http://koncerto-app:17348
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - koncerto-network
+    restart: unless-stopped
+    profiles:
+      - agent
 
 networks:
   koncerto-network:
     driver: bridge
+
+volumes:
+  koncerto-logs:
+  koncerto-data:

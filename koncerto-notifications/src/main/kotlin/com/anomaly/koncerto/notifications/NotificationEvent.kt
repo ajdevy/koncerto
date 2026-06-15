@@ -1,6 +1,6 @@
 package com.anomaly.koncerto.notifications
 
-import com.anomaly.koncerto.agent.TokenUsage
+import com.anomaly.koncerto.core.model.TokenUsage
 
 sealed class NotificationEvent {
     abstract val projectSlug: String

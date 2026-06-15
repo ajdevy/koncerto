@@ -6,5 +6,10 @@ import java.nio.file.Path
 class OpencodeRuntime(
     command: String,
     workspacePath: Path,
-    logger: StructuredLogger
-) : StdioAgentRuntime(command, workspacePath, logger, "opencode")
+    logger: StructuredLogger,
+    model: String? = null,
+    freeModelCycler: FreeModelCycler? = null
+) : StdioAgentRuntime(command, workspacePath, logger, "opencode") {
+    val isFreeModel: Boolean = model?.lowercase() == "free"
+    val freeModelCycler = freeModelCycler
+}

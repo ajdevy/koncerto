@@ -31,3 +31,9 @@ data class UserRef(
     val displayName: String,
     val isBot: Boolean
 )
+
+data class TokenUsage(
+    val inputTokens: Long,
+    val outputTokens: Long,
+    val totalTokens: Long
+)

@@ -42,6 +42,8 @@ import com.anomaly.koncerto.metrics.MetricsRepository
 import com.anomaly.koncerto.metrics.PrometheusMetricsBinder
 import com.anomaly.koncerto.metrics.SqliteMetricsRepository
 import io.micrometer.core.instrument.binder.MeterBinder
+import com.anomaly.koncerto.agent.FreeModelCycler
+import com.anomaly.koncerto.agent.ModelRetryHandler
 import com.anomaly.koncerto.orchestrator.Orchestrator
 import com.anomaly.koncerto.orchestrator.RuntimeState
 import com.anomaly.koncerto.orchestrator.SubtaskFrontier
@@ -167,6 +169,28 @@ class Beans {
     fun agentRuntimeFactory(logger: StructuredLogger): AgentRuntimeFactory = AgentRuntimeFactory(logger)
 
     @Bean
+    fun freeModelCycler(logger: StructuredLogger): FreeModelCycler = FreeModelCycler.createDefault(logger)
+
+    @Bean
+    fun modelRetryHandler(
+        config: ServiceConfig,
+        linearClientFactory: (ProjectConfig) -> LinearClient,
+        compositeNotifier: CompositeNotifier,
+        logger: StructuredLogger
+    ): ModelRetryHandler {
+        val firstProject = config.projects.values.firstOrNull()
+            ?: throw IllegalStateException("No project config found")
+        val linearClient = linearClientFactory(firstProject)
+        return ModelRetryHandler(
+            cycler = freeModelCycler(logger),
+            projectConfig = firstProject,
+            linearClient = linearClient,
+            notifier = compositeNotifier,
+            logger = logger
+        )
+    }
+
+    @Bean
     fun gitWorkflow(config: ServiceConfig, logger: StructuredLogger): GitWorkflow =
         GitWorkflow(config.gitConfig, logger)
 
@@ -250,7 +274,9 @@ class Beans {
         circuitBreaker: AgentCircuitBreaker,
         errorTracker: ErrorTracker,
         healthChecker: AgentHealthChecker,
-        errorClassifier: PatternErrorClassifier
+        errorClassifier: PatternErrorClassifier,
+        freeModelCycler: FreeModelCycler,
+        modelRetryHandler: ModelRetryHandler
     ): AgentRunner {
         val firstProject = config.projects.values.firstOrNull()
         val heartbeatInterval = firstProject?.agent?.heartbeatIntervalMs ?: 30_000L
@@ -263,6 +289,8 @@ class Beans {
                     it.running.containsKey(issueId) || it.claimed.contains(issueId)
                 }?.appendOutput(issueId, line)
             },
+            freeModelCycler = freeModelCycler,
+            modelRetryHandler = modelRetryHandler,
             heartbeatIntervalMs = heartbeatInterval,
             circuitBreaker = circuitBreaker,
             errorTracker = errorTracker,

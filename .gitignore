@@ -37,3 +37,6 @@ log/
 
 # Local secrets (bot tokens, API keys)
 local.properties
+
+# ngrok config (contains OAuth email/domain allowlists)
+config/ngrok.yml
