@@ -9,6 +9,7 @@ DEV_MODE=false
 CLEAN_BUILD=false
 DETACH=false
 PROFILES=""
+IMPLEMENTATION_MODEL="${KONCERTO_IMPLEMENTATION_MODEL:-codex-5.4}"
 
 usage() {
   cat <<EOF
@@ -21,22 +22,26 @@ Options:
   --clean         Clean rebuild: run gradle clean before build
   -d, --detach    Run docker-compose in detached mode (no log tail)
   --profile <p>   Enable docker-compose profile (e.g., --profile agent)
+  --model <m>     Implementation agent model (default: codex-5.4)
+  --codex-model <m>  Alias for --model
   --help          Show this help
 
 Environment:
-  WORKFLOW_FILE   Path to workflow markdown file (default: ./WORKFLOW.md)
-  KONCERTO_PORT   Host port for koncerto-app (default: 17348)
+  WORKFLOW_FILE          Path to workflow markdown file (default: ./WORKFLOW.md)
+  KONCERTO_PORT          Host port for koncerto-app (default: 17348)
+  KONCERTO_IMPLEMENTATION_MODEL  Implementation agent model (default: codex-5.4)
 EOF
   exit 0
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --dev)        DEV_MODE=true; shift ;;
-    --clean)      CLEAN_BUILD=true; shift ;;
-    -d|--detach)  DETACH=true; shift ;;
-    --profile)    shift; PROFILES="--profile $1"; shift ;;
-    --help)       usage ;;
+    --dev)             DEV_MODE=true; shift ;;
+    --clean)           CLEAN_BUILD=true; shift ;;
+    -d|--detach)       DETACH=true; shift ;;
+    --profile)         shift; PROFILES="--profile $1"; shift ;;
+    --model|--codex-model) shift; IMPLEMENTATION_MODEL="$1"; shift ;;
+    --help)            usage ;;
     *)            echo "Unknown option: $1"; usage ;;
   esac
 done
@@ -75,6 +80,7 @@ cd "$PROJECT_ROOT"
 # Export for docker-compose
 export WORKFLOW_FILE
 export KONCERTO_PORT="${KONCERTO_PORT:-17348}"
+export KONCERTO_IMPLEMENTATION_MODEL="${IMPLEMENTATION_MODEL}"
 
 if [[ "$DETACH" == "true" ]]; then
   docker-compose $PROFILES up -d --build

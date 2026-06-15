@@ -181,11 +181,11 @@ data class ServiceConfig(
                 val stageName = (k as? String)?.lowercase() ?: return@mapNotNull null
                 val stageMap = v as? Map<*, *> ?: return@mapNotNull null
                 stageName to StageAgentConfig(
-                    prompt = stageMap["prompt"] as? String,
-                    model = stageMap["model"] as? String,
+                    prompt = resolveInlineEnvRefs(stageMap["prompt"] as? String),
+                    model = resolveInlineEnvRefs(stageMap["model"] as? String),
                     maxConcurrent = (stageMap["max_concurrent"] as? Number)?.toInt(),
                     agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
-                    command = stageMap["command"] as? String,
+                    command = resolveInlineEnvRefs(stageMap["command"] as? String),
                     onCompleteState = stageMap["on_complete_state"] as? String,
                     onFailureState = stageMap["on_failure_state"] as? String,
                     maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
@@ -331,6 +331,14 @@ data class ServiceConfig(
                 System.getProperty(name) ?: System.getenv(name)
             } else {
                 value
+            }
+        }
+
+        internal fun resolveInlineEnvRefs(value: String?): String? {
+            if (value == null) return null
+            return Regex("""\$([A-Z_][A-Z0-9_]*)|\$\{([A-Z_][A-Z0-9_]*)\}""").replace(value) { match ->
+                val name = match.groupValues[1].ifBlank { match.groupValues[2] }
+                System.getenv(name) ?: System.getProperty(name) ?: match.value
             }
         }
 

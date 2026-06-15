@@ -11,6 +11,7 @@ services:
       KONCERTO_WEB_TYPE: servlet
       KONCERTO_DASHBOARD_PORT: "17348"
       KONCERTO_ADMIN_API_KEY: "${KONCERTO_ADMIN_API_KEY:-}"
+      KONCERTO_IMPLEMENTATION_MODEL: "${KONCERTO_IMPLEMENTATION_MODEL:-codex-5.4}"
     volumes:
       - ./workflows:/config
       - koncerto-logs:/logs

@@ -46,6 +46,8 @@ projects:
       stages:
         Todo:
           prompt: prompts/implement.md
+          agent_kind: codex
+          command: codex --model $KONCERTO_IMPLEMENTATION_MODEL
           on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
