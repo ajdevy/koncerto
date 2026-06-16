@@ -270,9 +270,9 @@ git commit -m "feat: add createIssue and createLink to LinearClient"
 Create `FollowUpRendererTest.kt`:
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.core.model.Issue
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -343,9 +343,9 @@ Expected: FAIL
 Create `FollowUpRenderer.kt`:
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.core.model.Issue
 import java.time.Instant
 
 object FollowUpRenderer {

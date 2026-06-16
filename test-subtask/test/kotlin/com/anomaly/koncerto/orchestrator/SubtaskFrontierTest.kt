@@ -1,12 +1,12 @@
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
-import com.anomaly.koncerto.core.config.SubtaskDef
-import com.anomaly.koncerto.core.config.SubtaskState
-import com.anomaly.koncerto.core.config.SubtaskStatus
+import com.flexsentlabs.koncerto.core.config.SubtaskDef
+import com.flexsentlabs.koncerto.core.config.SubtaskState
+import com.flexsentlabs.koncerto.core.config.SubtaskStatus
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 

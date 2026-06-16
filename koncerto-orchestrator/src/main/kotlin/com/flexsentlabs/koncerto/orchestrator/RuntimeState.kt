@@ -1,0 +1,201 @@
+package com.flexsentlabs.koncerto.orchestrator
+
+import com.flexsentlabs.koncerto.core.model.Issue
+import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+
+import com.flexsentlabs.koncerto.core.tenant.TenantContext
+
+data class RunningEntry(
+    val issue: Issue,
+    val threadId: String,
+    val turnId: String,
+    val startedAt: Instant,
+    val lastCodexTimestamp: Instant?,
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val totalTokens: Long = 0,
+    val lastReportedInput: Long = 0,
+    val lastReportedOutput: Long = 0,
+    val lastReportedTotal: Long = 0,
+    val turnCount: Int = 1,
+    val paused: Boolean = false,
+    val cancelled: Boolean = false,
+    val tenantContext: TenantContext? = null
+)
+
+data class RetryEntry(
+    val issueId: String,
+    val identifier: String,
+    val attempt: Int,
+    val dueAtMs: Long,
+    val error: String?
+)
+
+data class TokenTotals(
+    val inputTokens: Long = 0,
+    val outputTokens: Long = 0,
+    val totalTokens: Long = 0,
+    val secondsRunning: Long = 0
+)
+
+class RuntimeState {
+    val running = ConcurrentHashMap<String, RunningEntry>()
+    val claimed = ConcurrentHashMap<String, Boolean>()
+    val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
+    val completed = ConcurrentHashMap<String, Boolean>()
+    private val _blocked = ConcurrentHashMap<String, Boolean>()
+    private val _tokenTotals = AtomicReference(TokenTotals())
+    val tokenTotals: TokenTotals get() = _tokenTotals.get()
+    private val _codexRateLimits = ConcurrentHashMap<String, Any?>()
+    val codexRateLimits: Map<String, Any?> get() = _codexRateLimits.toMap()
+    @Volatile
+    var pollIntervalMs: Long = 30_000
+    @Volatile
+    var maxConcurrentAgents: Int = 10
+    @Volatile
+    var workspaceRoot: java.nio.file.Path =
+        java.nio.file.Paths.get(System.getProperty("java.io.tmpdir"), "symphony_workspaces")
+
+    private val outputBuffers = ConcurrentHashMap<String, MutableSharedFlow<String>>()
+    private val MAX_OUTPUT_BUFFERS = 1000
+    private val OUTPUT_BUFFER_REPLAY = 500
+    private val OUTPUT_BUFFER_EXTRA = 200
+    private val _outputBuffersMutex = Mutex()
+    private val _cancelMutex = Mutex()
+    private val _clearMutex = Mutex()
+    private val _blockedKeysCache = AtomicReference<Set<String>?>(null)
+
+    suspend fun appendOutput(issueId: String, line: String) {
+        val flow = _outputBuffersMutex.withLock {
+            outputBuffers.computeIfAbsent(issueId) {
+                if (outputBuffers.size >= MAX_OUTPUT_BUFFERS) {
+                    val oldestKey = outputBuffers.keys.firstOrNull() ?: issueId
+                    outputBuffers.remove(oldestKey)
+                }
+                MutableSharedFlow(replay = OUTPUT_BUFFER_REPLAY, extraBufferCapacity = OUTPUT_BUFFER_EXTRA)
+            }
+        }
+        flow.tryEmit(line)
+    }
+
+    fun outputFlow(issueId: String): SharedFlow<String>? = outputBuffers[issueId]?.asSharedFlow()
+
+    fun removeOutput(issueId: String) {
+        outputBuffers.remove(issueId)
+    }
+
+    fun availableSlots(): Int = (maxConcurrentAgents - running.size).coerceAtLeast(0)
+        // Best-effort check; actual limit enforced by atomic tryClaim in dispatch.
+
+    fun pauseAgent(issueId: String): Boolean {
+        return running.computeIfPresent(issueId) { _, entry ->
+            if (!entry.paused) entry.copy(paused = true) else entry
+        } != null
+    }
+
+    fun resumeAgent(issueId: String): Boolean {
+        return running.computeIfPresent(issueId) { _, entry ->
+            if (entry.paused) entry.copy(paused = false) else entry
+        } != null
+    }
+
+    suspend fun cancelAgent(issueId: String): Boolean {
+        return _cancelMutex.withLock {
+            return@withLock running.remove(issueId)?.let {
+                claimed.remove(issueId)
+                removeOutput(issueId)
+                true
+            } ?: false
+        }
+    }
+
+    suspend fun clearAll() {
+        _clearMutex.withLock {
+            running.clear()
+            claimed.clear()
+            retryAttempts.clear()
+            completed.clear()
+            _blocked.clear()
+            outputBuffers.clear()
+            _tokenTotals.set(TokenTotals())
+            _codexRateLimits.clear()
+            _blockedKeysCache.set(null)
+        }
+    }
+
+    fun updateIssueTokens(issueId: String, inputTokens: Long, outputTokens: Long, totalTokens: Long, turnCountInc: Int = 1): Boolean {
+        // Note: per-issue tokens and global totals updated separately - not transactional.
+        // Acceptable since eventual consistency is sufficient.
+        val updated = running.computeIfPresent(issueId) { _, entry ->
+            entry.copy(
+                inputTokens = entry.inputTokens + inputTokens,
+                outputTokens = entry.outputTokens + outputTokens,
+                totalTokens = entry.totalTokens + totalTokens,
+                turnCount = entry.turnCount + turnCountInc
+            )
+        }
+        if (updated != null) {
+            _tokenTotals.updateAndGet { totals ->
+                totals.copy(
+                    inputTokens = totals.inputTokens + inputTokens,
+                    outputTokens = totals.outputTokens + outputTokens,
+                    totalTokens = totals.totalTokens + totalTokens
+                )
+            }
+        }
+        return updated != null
+    }
+
+    fun addTokenTotals(inputTokens: Long, outputTokens: Long, totalTokens: Long) {
+        _tokenTotals.updateAndGet { it.copy(
+            inputTokens = it.inputTokens + inputTokens,
+            outputTokens = it.outputTokens + outputTokens,
+            totalTokens = it.totalTokens + totalTokens
+        ) }
+    }
+
+    fun updateCodexRateLimits(limits: Map<String, Any?>) {
+        _codexRateLimits.clear()
+        _codexRateLimits.putAll(limits)
+        // Not atomic - only called during startup/shutdown
+    }
+
+    fun tryClaim(issueId: String): Boolean = claimed.putIfAbsent(issueId, true) == null
+
+    fun releaseClaim(issueId: String) = claimed.remove(issueId)
+
+    fun isClaimed(issueId: String): Boolean = claimed.containsKey(issueId)
+
+    fun addBlocked(issueId: String): Boolean {
+        val added = _blocked.putIfAbsent(issueId, true) == null
+        if (added) _blockedKeysCache.set(null)
+        return added
+    }
+
+    fun removeBlocked(issueId: String): Boolean {
+        val removed = _blocked.remove(issueId) != null
+        if (removed) _blockedKeysCache.set(null)
+        return removed
+    }
+
+    fun isBlocked(issueId: String): Boolean = _blocked.containsKey(issueId)
+
+    val blockedKeys: Set<String> get() {
+        var cached = _blockedKeysCache.get()
+        if (cached != null) return cached
+        var computed = _blocked.keys.toSet()
+        while (true) {
+            val current = _blockedKeysCache.get()
+            if (current != null) return current
+            if (_blockedKeysCache.compareAndSet(null, computed)) return computed
+            computed = _blocked.keys.toSet()
+        }
+    }
+}

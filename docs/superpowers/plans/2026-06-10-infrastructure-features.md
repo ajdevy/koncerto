@@ -31,9 +31,9 @@
 - [ ] **Create `OrchestratorHealthIndicator.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.app
+package com.flexsentlabs.koncerto.app
 
-import com.anomaly.koncerto.orchestrator.Orchestrator
+import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import org.springframework.boot.actuate.health.Health
 import org.springframework.boot.actuate.health.HealthIndicator
 import org.springframework.stereotype.Component
@@ -76,9 +76,9 @@ management.endpoint.health.show-details=always
 - [ ] **Rewrite `CliRunner.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.app
+package com.flexsentlabs.koncerto.app
 
-import com.anomaly.koncerto.orchestrator.Orchestrator
+import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import org.springframework.boot.CommandLineRunner
 import org.springframework.stereotype.Component
 import java.time.Duration
@@ -212,9 +212,9 @@ This requires passing a `shutdownRequested: () -> Boolean` lambda to `DispatchSe
 - [ ] **Add shutdown hook in `KoncertoApplication.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.app
+package com.flexsentlabs.koncerto.app
 
-import com.anomaly.koncerto.orchestrator.Orchestrator
+import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -226,7 +226,7 @@ import org.springframework.stereotype.Component
 import jakarta.annotation.PostConstruct
 
 @SpringBootApplication(proxyBeanMethods = false)
-@ComponentScan(basePackages = ["com.anomaly.koncerto"])
+@ComponentScan(basePackages = ["com.flexsentlabs.koncerto"])
 class KoncertoApplication
 
 fun main(args: Array<String>) {
@@ -266,7 +266,7 @@ fun main(args: Array<String>) {
 - [ ] **Create `TokenBucketRateLimiter.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.core
+package com.flexsentlabs.koncerto.core
 
 import kotlinx.coroutines.delay
 import java.util.concurrent.atomic.AtomicLong
@@ -313,7 +313,7 @@ class TokenBucketRateLimiter(
 - [ ] **Create `CircuitBreaker.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.core
+package com.flexsentlabs.koncerto.core
 
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -365,13 +365,13 @@ class CircuitBreaker(
 - [ ] **Create `RateLimitedLinearClient.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.linear
+package com.flexsentlabs.koncerto.linear
 
-import com.anomaly.koncerto.core.CircuitBreaker
-import com.anomaly.koncerto.core.TokenBucketRateLimiter
-import com.anomaly.koncerto.core.model.Issue
-import com.anomaly.koncerto.core.model.UserRef
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.CircuitBreaker
+import com.flexsentlabs.koncerto.core.TokenBucketRateLimiter
+import com.flexsentlabs.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 
 class RateLimitedLinearClient(
     private val delegate: LinearClient,
@@ -533,9 +533,9 @@ implementation(project(":koncerto-notifications"))
 - [ ] **Create `NotificationEvent.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications
+package com.flexsentlabs.koncerto.notifications
 
-import com.anomaly.koncerto.agent.TokenUsage
+import com.flexsentlabs.koncerto.agent.TokenUsage
 
 sealed class NotificationEvent {
     abstract val projectSlug: String
@@ -579,7 +579,7 @@ sealed class NotificationEvent {
 - [ ] **Create `Notifier.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications
+package com.flexsentlabs.koncerto.notifications
 
 interface Notifier {
     suspend fun send(event: NotificationEvent)
@@ -599,11 +599,11 @@ class CompositeNotifier(
 - [ ] **Create `LoggingNotifier.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications.channel
+package com.flexsentlabs.koncerto.notifications.channel
 
-import com.anomaly.koncerto.logging.StructuredLogger
-import com.anomaly.koncerto.notifications.NotificationEvent
-import com.anomaly.koncerto.notifications.Notifier
+import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.notifications.NotificationEvent
+import com.flexsentlabs.koncerto.notifications.Notifier
 
 class LoggingNotifier(
     private val logger: StructuredLogger
@@ -621,10 +621,10 @@ class LoggingNotifier(
 - [ ] **Create `WebhookNotifier.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications.channel
+package com.flexsentlabs.koncerto.notifications.channel
 
-import com.anomaly.koncerto.notifications.NotificationEvent
-import com.anomaly.koncerto.notifications.Notifier
+import com.flexsentlabs.koncerto.notifications.NotificationEvent
+import com.flexsentlabs.koncerto.notifications.Notifier
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -675,10 +675,10 @@ private data class WebhookPayload(
 - [ ] **Create `TelegramNotifier.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications.channel
+package com.flexsentlabs.koncerto.notifications.channel
 
-import com.anomaly.koncerto.notifications.NotificationEvent
-import com.anomaly.koncerto.notifications.Notifier
+import com.flexsentlabs.koncerto.notifications.NotificationEvent
+import com.flexsentlabs.koncerto.notifications.Notifier
 import io.ktor.client.HttpClient
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -724,10 +724,10 @@ private data class SendMessage(
 - [ ] **Create `SmtpEmailNotifier.kt`**
 
 ```kotlin
-package com.anomaly.koncerto.notifications.channel
+package com.flexsentlabs.koncerto.notifications.channel
 
-import com.anomaly.koncerto.notifications.NotificationEvent
-import com.anomaly.koncerto.notifications.Notifier
+import com.flexsentlabs.koncerto.notifications.NotificationEvent
+import com.flexsentlabs.koncerto.notifications.Notifier
 import java.util.Properties
 import jakarta.mail.Message
 import jakarta.mail.PasswordAuthentication

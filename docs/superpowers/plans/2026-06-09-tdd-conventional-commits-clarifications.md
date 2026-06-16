@@ -288,7 +288,7 @@ And add `creator = creator` to the `Issue` constructor call.
 
 Add the import:
 ```kotlin
-import com.anomaly.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.core.model.UserRef
 ```
 
 - [ ] **Step 4: Run mapper tests again**
@@ -334,7 +334,7 @@ suspend fun fetchIssueCreator(issueId: String): UserRef?
 
 Add imports to LinearClient.kt:
 ```kotlin
-import com.anomaly.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.core.model.UserRef
 ```
 
 Implement in `DefaultLinearClient`:
@@ -647,7 +647,7 @@ override suspend fun fetchIssueCreator(issueId: String): UserRef? =
 
 Add import to DispatchServiceTest.kt:
 ```kotlin
-import com.anomaly.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.core.model.UserRef
 ```
 
 - [ ] **Step 2: Update sampleConfig in DispatchServiceTest**
@@ -793,7 +793,7 @@ override suspend fun fetchIssueCreator(issueId: String): UserRef? =
 
 Add import:
 ```kotlin
-import com.anomaly.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.core.model.UserRef
 ```
 
 - [ ] **Step 2: Update sampleConfig in OrchestratorTest**

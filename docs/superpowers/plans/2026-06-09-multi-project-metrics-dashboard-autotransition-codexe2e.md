@@ -58,7 +58,7 @@ Phase 5: Codex E2E — independent, can go anytime
 - [ ] **Step 1: Create StageAgentConfig.kt**
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
 import kotlinx.serialization.Serializable
 
@@ -76,7 +76,7 @@ data class StageAgentConfig(
 - [ ] **Step 2: Create ProjectConfig.kt**
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
 import kotlinx.serialization.Serializable
 
@@ -114,9 +114,9 @@ data class AgentProjectConfig(
 - [ ] **Step 3: Rewrite ServiceConfig.kt**
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
-import com.anomaly.koncerto.core.config.yaml.YamlConfigLoader
+import com.flexsentlabs.koncerto.core.config.yaml.YamlConfigLoader
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -442,7 +442,7 @@ implementation(project(":koncerto-metrics"))
 - [ ] **Step 3: Create IssueMetrics data class**
 
 ```kotlin
-package com.anomaly.koncerto.metrics
+package com.flexsentlabs.koncerto.metrics
 
 data class IssueMetrics(
     val issueId: String,
@@ -469,7 +469,7 @@ data class TokenDaySummary(
 - [ ] **Step 4: Create MetricsRepository interface**
 
 ```kotlin
-package com.anomaly.koncerto.metrics
+package com.flexsentlabs.koncerto.metrics
 
 interface MetricsRepository {
     suspend fun updateAfterRun(
@@ -490,10 +490,10 @@ interface MetricsRepository {
 - [ ] **Step 5: Implement SqliteMetricsRepository**
 
 ```kotlin
-package com.anomaly.koncerto.metrics
+package com.flexsentlabs.koncerto.metrics
 
-import com.anomaly.koncerto.core.DataError
-import com.anomaly.koncerto.core.EmptyResult
+import com.flexsentlabs.koncerto.core.DataError
+import com.flexsentlabs.koncerto.core.EmptyResult
 import java.sql.Connection
 import java.sql.DriverManager
 import java.time.Instant

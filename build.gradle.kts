@@ -6,7 +6,7 @@ plugins {
 }
 
 allprojects {
-    group = "com.anomaly.koncerto"
+    group = "com.flexsentlabs.koncerto"
     version = "0.1.0-SNAPSHOT"
 
     repositories {

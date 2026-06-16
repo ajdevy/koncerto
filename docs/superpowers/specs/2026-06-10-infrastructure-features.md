@@ -93,10 +93,10 @@ All notification sections are optional. Each event type defaults to `true` when 
 ### 1.6 Module
 
 New module `koncerto-notifications` with sub-packages:
-- `com.anomaly.koncerto.notifications` — `Notifier`, `NotificationEvent`
-- `com.anomaly.koncerto.notifications.config` — `NotificationsConfig` parsing
-- `com.anomaly.koncerto.notifications.channel` — `LoggingNotifier`, `WebhookNotifier`, `TelegramNotifier`, `SmtpEmailNotifier`
-- `com.anomaly.koncerto.notifications.test` — `FakeNotifier` for tests
+- `com.flexsentlabs.koncerto.notifications` — `Notifier`, `NotificationEvent`
+- `com.flexsentlabs.koncerto.notifications.config` — `NotificationsConfig` parsing
+- `com.flexsentlabs.koncerto.notifications.channel` — `LoggingNotifier`, `WebhookNotifier`, `TelegramNotifier`, `SmtpEmailNotifier`
+- `com.flexsentlabs.koncerto.notifications.test` — `FakeNotifier` for tests
 
 Dependencies: `koncerto-core` (for event types, config models), `koncerto-logging`.
 

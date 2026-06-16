@@ -112,10 +112,10 @@ git commit -m "feat: add blocker state tracking to reconciliation"
 Create `DependencyGraphTest.kt`:
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.model.BlockerRef
-import com.anomaly.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.core.model.BlockerRef
+import com.flexsentlabs.koncerto.core.model.Issue
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -210,10 +210,10 @@ Expected: FAIL
 Create `DependencyGraph.kt`:
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.config.ProjectConfig
-import com.anomaly.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.core.config.ProjectConfig
+import com.flexsentlabs.koncerto.core.model.Issue
 
 data class DependencyGraph(
     val nodes: Map<String, Issue>,

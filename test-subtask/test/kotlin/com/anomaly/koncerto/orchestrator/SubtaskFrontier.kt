@@ -1,7 +1,7 @@
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.config.SubtaskState
-import com.anomaly.koncerto.core.config.SubtaskStatus
+import com.flexsentlabs.koncerto.core.config.SubtaskState
+import com.flexsentlabs.koncerto.core.config.SubtaskStatus
 
 class SubtaskFrontier {
 

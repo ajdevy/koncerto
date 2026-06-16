@@ -40,3 +40,6 @@ local.properties
 
 # ngrok config (contains OAuth email/domain allowlists)
 config/ngrok.yml
+
+# Env file (contains secrets)
+.env

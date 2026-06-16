@@ -150,5 +150,5 @@ core → logging → workflow → workspace → linear
 #### 2.7 Code Organization
 - One class per file (except for tightly-coupled private types)
 - Files named after the primary class: `MyClass.kt`
-- Package structure mirrors module name: `com.anomaly.koncerto.{module}`
+- Package structure mirrors module name: `com.flexsentlabs.koncerto.{module}`
 - Extension functions in files named for the extended type: `ResultExtensions.kt`

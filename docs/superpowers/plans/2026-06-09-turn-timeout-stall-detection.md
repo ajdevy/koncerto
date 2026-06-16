@@ -326,23 +326,23 @@ git commit -m "feat: pass turn timeout and stall timeout from DispatchService to
 - [ ] **Step 1: Create the test file**
 
 ```kotlin
-package com.anomaly.koncerto.agent
+package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
-import com.anomaly.koncerto.core.config.AgentProjectConfig
-import com.anomaly.koncerto.core.config.GitConfig
-import com.anomaly.koncerto.core.config.HooksConfig
-import com.anomaly.koncerto.core.config.ProjectConfig
-import com.anomaly.koncerto.core.config.ServiceConfig
-import com.anomaly.koncerto.core.config.TrackerConfig
-import com.anomaly.koncerto.core.config.WorkspaceConfig
-import com.anomaly.koncerto.core.model.Issue
-import com.anomaly.koncerto.logging.StructuredLogger
-import com.anomaly.koncerto.workspace.GitWorkflow
-import com.anomaly.koncerto.workspace.HookExecutor
-import com.anomaly.koncerto.workspace.WorkspaceManager
+import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
+import com.flexsentlabs.koncerto.core.config.GitConfig
+import com.flexsentlabs.koncerto.core.config.HooksConfig
+import com.flexsentlabs.koncerto.core.config.ProjectConfig
+import com.flexsentlabs.koncerto.core.config.ServiceConfig
+import com.flexsentlabs.koncerto.core.config.TrackerConfig
+import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
+import com.flexsentlabs.koncerto.core.model.Issue
+import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
+import com.flexsentlabs.koncerto.workspace.HookExecutor
+import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.flow.Flow

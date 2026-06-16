@@ -9,7 +9,7 @@ DEV_MODE=false
 CLEAN_BUILD=false
 DETACH=false
 PROFILES=""
-IMPLEMENTATION_MODEL="${KONCERTO_IMPLEMENTATION_MODEL:-codex-5.4}"
+IMPLEMENTATION_MODEL="${KONCERTO_IMPLEMENTATION_MODEL:-codex-5.4-mini}"
 
 usage() {
   cat <<EOF
@@ -22,14 +22,14 @@ Options:
   --clean         Clean rebuild: run gradle clean before build
   -d, --detach    Run docker compose in detached mode (no log tail)
   --profile <p>   Enable docker compose profile (e.g., --profile agent)
-  --model <m>     Implementation agent model (default: codex-5.4)
+  --model <m>     Implementation agent model (default: codex-5.4-mini)
   --codex-model <m>  Alias for --model
   --help          Show this help
 
 Environment:
   WORKFLOW_FILE          Path to workflow markdown file (default: ./WORKFLOW.md)
   KONCERTO_PORT          Host port for koncerto-app (default: 17348)
-  KONCERTO_IMPLEMENTATION_MODEL  Implementation agent model (default: codex-5.4)
+  KONCERTO_IMPLEMENTATION_MODEL  Implementation agent model (default: codex-5.4-mini)
 EOF
   exit 0
 }

@@ -44,7 +44,7 @@
 Create: `koncerto-core/src/test/kotlin/com/anomaly/koncerto/core/config/SubtaskManifestTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
@@ -109,7 +109,7 @@ Expected: FAIL - compilation error (classes don't exist)
 - [ ] **Step 3: Create SubtaskManifest.kt**
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
 import kotlinx.serialization.Serializable
 
@@ -194,7 +194,7 @@ Expected: FAIL - compilation error (WorkplanConfig not found)
 - [ ] **Step 3: Create WorkplanConfig.kt**
 
 ```kotlin
-package com.anomaly.koncerto.core.config
+package com.flexsentlabs.koncerto.core.config
 
 import kotlinx.serialization.Serializable
 
@@ -261,12 +261,12 @@ git add koncerto-core/src/main/kotlin/com/anomaly/koncerto/core/config/WorkplanC
 Create: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/AgentEventTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.agent
+package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
-import com.anomaly.koncerto.core.config.SubtaskManifest
-import com.anomaly.koncerto.core.config.SubtaskDef
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.config.SubtaskDef
 import org.junit.jupiter.api.Test
 import java.time.Instant
 
@@ -352,7 +352,7 @@ data class MergeConflict(
 
 Add import at top of file:
 ```kotlin
-import com.anomaly.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -382,13 +382,13 @@ The `SubtaskRunner` spawns an agent subprocess in an existing workspace and feed
 Create: `koncerto-agent/src/test/kotlin/com/anomaly/koncerto/agent/SubtaskRunnerTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.agent
+package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
-import com.anomaly.koncerto.core.result.EmptyResult
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.result.EmptyResult
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.test.runTest
@@ -427,11 +427,11 @@ Expected: FAIL - compilation error
 - [ ] **Step 3: Create SubtaskRunner**
 
 ```kotlin
-package com.anomaly.koncerto.agent
+package com.flexsentlabs.koncerto.agent
 
-import com.anomaly.koncerto.core.result.EmptyResult
-import com.anomaly.koncerto.core.result.Result
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.result.EmptyResult
+import com.flexsentlabs.koncerto.core.result.Result
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -544,9 +544,9 @@ class DefaultSubtaskRunner(
     private inline fun <T> runCatching(block: () -> T): EmptyResult<IllegalStateException> {
         return try {
             block()
-            com.anomaly.koncerto.core.result.Result.Success(Unit)
+            com.flexsentlabs.koncerto.core.result.Result.Success(Unit)
         } catch (e: Exception) {
-            com.anomaly.koncerto.core.result.Result.Failure(
+            com.flexsentlabs.koncerto.core.result.Result.Failure(
                 IllegalStateException(e.message ?: "unknown_error")
             )
         }
@@ -577,14 +577,14 @@ git add koncerto-agent/src/main/kotlin/com/anomaly/koncerto/agent/SubtaskRunner.
 Create: `koncerto-workspace/src/test/kotlin/com/anomaly/koncerto/workspace/GitWorkflowBranchTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.workspace
+package com.flexsentlabs.koncerto.workspace
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
-import com.anomaly.koncerto.core.config.GitConfig
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.config.GitConfig
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.nio.file.Path
 import org.junit.jupiter.api.Test
@@ -679,14 +679,14 @@ git add koncerto-workspace/src/main/kotlin/com/anomaly/koncerto/workspace/GitWor
 Create: `koncerto-orchestrator/src/test/kotlin/com/anomaly/koncerto/orchestrator/WorkplanParserTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
-import com.anomaly.koncerto.core.config.SubtaskManifest
-import com.anomaly.koncerto.core.result.Result
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.result.Result
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.serialization.json.Json
@@ -772,7 +772,7 @@ class WorkplanParserTest {
 // Reusable test fixture
 object SubtaskManifestFixtures {
     fun subtask(id: String, description: String, prompt: String, dependsOn: List<String>) =
-        com.anomaly.koncerto.core.config.SubtaskDef(
+        com.flexsentlabs.koncerto.core.config.SubtaskDef(
             id = id,
             description = description,
             prompt = prompt,
@@ -789,11 +789,11 @@ Expected: FAIL - compilation error
 - [ ] **Step 3: Create WorkplanParser**
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.config.SubtaskManifest
-import com.anomaly.koncerto.core.result.Result
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.result.Result
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.serialization.json.Json
 import java.nio.file.Files
 import java.nio.file.Path
@@ -896,15 +896,15 @@ git add koncerto-orchestrator/src/main/kotlin/com/anomaly/koncerto/orchestrator/
 Create: `koncerto-orchestrator/src/test/kotlin/com/anomaly/koncerto/orchestrator/SubtaskFrontierTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
-import com.anomaly.koncerto.core.config.SubtaskDef
-import com.anomaly.koncerto.core.config.SubtaskState
-import com.anomaly.koncerto.core.config.SubtaskStatus
+import com.flexsentlabs.koncerto.core.config.SubtaskDef
+import com.flexsentlabs.koncerto.core.config.SubtaskState
+import com.flexsentlabs.koncerto.core.config.SubtaskStatus
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -988,10 +988,10 @@ Expected: FAIL - compilation error
 - [ ] **Step 3: Create SubtaskFrontier**
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.core.config.SubtaskState
-import com.anomaly.koncerto.core.config.SubtaskStatus
+import com.flexsentlabs.koncerto.core.config.SubtaskState
+import com.flexsentlabs.koncerto.core.config.SubtaskStatus
 
 class SubtaskFrontier {
 
@@ -1064,24 +1064,24 @@ git add koncerto-orchestrator/src/main/kotlin/com/anomaly/koncerto/orchestrator/
 Create: `koncerto-orchestrator/src/test/kotlin/com/anomaly/koncerto/orchestrator/SubtaskOrchestratorTest.kt`
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isTrue
-import com.anomaly.koncerto.agent.AgentEvent
-import com.anomaly.koncerto.agent.SubtaskRunner
-import com.anomaly.koncerto.core.config.SubtaskManifest
-import com.anomaly.koncerto.core.config.SubtaskDef
-import com.anomaly.koncerto.core.config.WorkplanConfig
-import com.anomaly.koncerto.core.config.ExecutionMode
-import com.anomaly.koncerto.core.result.EmptyResult
-import com.anomaly.koncerto.core.result.Result
-import com.anomaly.koncerto.logging.StructuredLogger
-import com.anomaly.koncerto.workspace.GitWorkflow
-import com.anomaly.koncerto.workspace.MergeResult
+import com.flexsentlabs.koncerto.agent.AgentEvent
+import com.flexsentlabs.koncerto.agent.SubtaskRunner
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.config.SubtaskDef
+import com.flexsentlabs.koncerto.core.config.WorkplanConfig
+import com.flexsentlabs.koncerto.core.config.ExecutionMode
+import com.flexsentlabs.koncerto.core.result.EmptyResult
+import com.flexsentlabs.koncerto.core.result.Result
+import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
+import com.flexsentlabs.koncerto.workspace.MergeResult
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.flow.toList
@@ -1180,7 +1180,7 @@ class FakeSubtaskRunner(
 }
 
 class FakeGitWorkflow : GitWorkflow(
-    config = com.anomaly.koncerto.core.config.GitConfig(enabled = false),
+    config = com.flexsentlabs.koncerto.core.config.GitConfig(enabled = false),
     logger = StructuredLogger("test")
 ) {
     override fun subtaskBranchName(issueIdentifier: String, subtaskId: String): String =
@@ -1203,18 +1203,18 @@ Expected: FAIL - compilation error
 - [ ] **Step 3: Create SubtaskOrchestrator**
 
 ```kotlin
-package com.anomaly.koncerto.orchestrator
+package com.flexsentlabs.koncerto.orchestrator
 
-import com.anomaly.koncerto.agent.AgentEvent
-import com.anomaly.koncerto.agent.SubtaskRunner
-import com.anomaly.koncerto.core.config.SubtaskManifest
-import com.anomaly.koncerto.core.config.SubtaskState
-import com.anomaly.koncerto.core.config.SubtaskStatus
-import com.anomaly.koncerto.core.config.WorkplanConfig
-import com.anomaly.koncerto.core.config.ExecutionMode
-import com.anomaly.koncerto.logging.StructuredLogger
-import com.anomaly.koncerto.workspace.GitWorkflow
-import com.anomaly.koncerto.workspace.MergeResult
+import com.flexsentlabs.koncerto.agent.AgentEvent
+import com.flexsentlabs.koncerto.agent.SubtaskRunner
+import com.flexsentlabs.koncerto.core.config.SubtaskManifest
+import com.flexsentlabs.koncerto.core.config.SubtaskState
+import com.flexsentlabs.koncerto.core.config.SubtaskStatus
+import com.flexsentlabs.koncerto.core.config.WorkplanConfig
+import com.flexsentlabs.koncerto.core.config.ExecutionMode
+import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
+import com.flexsentlabs.koncerto.workspace.MergeResult
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -1319,7 +1319,7 @@ class SubtaskOrchestrator(
         )
 
         return when (result) {
-            is com.anomaly.koncerto.core.result.Result.Success -> {
+            is com.flexsentlabs.koncerto.core.result.Result.Success -> {
                 val completed = state.copy(
                     status = SubtaskStatus.SUCCEEDED,
                     completedAt = Instant.now()
@@ -1329,7 +1329,7 @@ class SubtaskOrchestrator(
                 ))
                 SubtaskResult(completed, events)
             }
-            is com.anomaly.koncerto.core.result.Result.Failure -> {
+            is com.flexsentlabs.koncerto.core.result.Result.Failure -> {
                 val failed = state.copy(
                     status = SubtaskStatus.FAILED,
                     completedAt = Instant.now()
@@ -1405,18 +1405,18 @@ private class FakeWorkspaceManager(private val root: Path) : WorkspaceManager(
     hookExecutor = FakeHookExecutor(), 
     logger = StructuredLogger("test")
 ) {
-    override suspend fun ensureWorkspace(identifier: String): com.anomaly.koncerto.workspace.Workspace {
+    override suspend fun ensureWorkspace(identifier: String): com.flexsentlabs.koncerto.workspace.Workspace {
         val path = root.resolve(identifier)
         Files.createDirectories(path)
-        return com.anomaly.koncerto.workspace.Workspace(identifier, path)
+        return com.flexsentlabs.koncerto.workspace.Workspace(identifier, path)
     }
 }
 
 private class FakeHookExecutor : HookExecutor {
     override fun runScript(scriptPath: String, workspacePath: Path, timeoutMs: Long, env: Map<String, String>): String? = null
-    override fun runBeforeRun(workspace: com.anomaly.koncerto.workspace.Workspace, config: Any) {}
-    override fun runAfterRun(workspace: com.anomaly.koncerto.workspace.Workspace, config: Any, logger: StructuredLogger) {}
-    override fun runAfterCreate(workspace: com.anomaly.koncerto.workspace.Workspace, config: Any) {}
+    override fun runBeforeRun(workspace: com.flexsentlabs.koncerto.workspace.Workspace, config: Any) {}
+    override fun runAfterRun(workspace: com.flexsentlabs.koncerto.workspace.Workspace, config: Any, logger: StructuredLogger) {}
+    override fun runAfterCreate(workspace: com.flexsentlabs.koncerto.workspace.Workspace, config: Any) {}
 }
 ```
 
@@ -1461,7 +1461,7 @@ result.onSuccess {
         val workspace = workspaces?.ensureWorkspace(issue.identifier)
         if (workspace != null) {
             when (val wpResult = workplanParser.parse(workspace.path)) {
-                is com.anomaly.koncerto.core.result.Result.Success -> {
+                is com.flexsentlabs.koncerto.core.result.Result.Success -> {
                     logger.info(
                         "workplan_detected",
                         mapOf(
@@ -1482,7 +1482,7 @@ result.onSuccess {
                     handleNormalCompletion(issue, stageConfig, entry)
                     return@onSuccess
                 }
-                is com.anomaly.koncerto.core.result.Result.Failure -> {
+                is com.flexsentlabs.koncerto.core.result.Result.Failure -> {
                     // No workplan or invalid — continue with normal flow
                 }
             }

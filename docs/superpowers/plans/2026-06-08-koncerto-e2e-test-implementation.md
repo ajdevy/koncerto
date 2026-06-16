@@ -93,17 +93,17 @@ mkdir -p koncerto-e2e/src/test/kotlin/com/anomaly/koncerto/e2e
 - [ ] **Step 2: Write the failing test**
 
 ```kotlin
-package com.anomaly.koncerto.e2e
+package com.flexsentlabs.koncerto.e2e
 
 import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
-import com.anomaly.koncerto.agent.AgentEvent
-import com.anomaly.koncerto.agent.OpencodeRuntime
-import com.anomaly.koncerto.logging.LogSink
-import com.anomaly.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.agent.AgentEvent
+import com.flexsentlabs.koncerto.agent.OpencodeRuntime
+import com.flexsentlabs.koncerto.logging.LogSink
+import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking

@@ -15,7 +15,7 @@ projects:
     tracker:
       kind: linear
       api_key: $LINEAR_API_KEY
-      project_slug: EXAMPLE
+      project_slug: d3c2ba0a66a6
       active_states:
         - Todo
         - "In Review"
