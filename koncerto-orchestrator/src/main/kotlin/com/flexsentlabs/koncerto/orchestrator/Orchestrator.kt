@@ -36,7 +36,8 @@ class Orchestrator(
     private val notifier: CompositeNotifier? = null,
     private val subtaskOrchestrator: SubtaskOrchestrator? = null,
     private val workplanParser: WorkplanParser? = null,
-    private val auditLogger: AuditLogger? = null
+    private val auditLogger: AuditLogger? = null,
+    private val autoReviewOrchestratorFactory: ((ProjectConfig, RuntimeState) -> AutoReviewOrchestrator)? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -62,6 +63,7 @@ class Orchestrator(
             }
             val linear = linearClientFactory(pc)
             val ws = workspaceManagerFactory(pc)
+            val autoReview = autoReviewOrchestratorFactory?.invoke(pc, state)
             val dispatch = DispatchService(
                 projectConfig = pc,
                 state = state,
@@ -77,7 +79,8 @@ class Orchestrator(
                 notificationsConfig = pc.notifications,
                 subtaskOrchestrator = subtaskOrchestrator,
                 workplanParser = workplanParser,
-                auditLogger = auditLogger
+                auditLogger = auditLogger,
+                autoReviewOrchestrator = autoReview
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }

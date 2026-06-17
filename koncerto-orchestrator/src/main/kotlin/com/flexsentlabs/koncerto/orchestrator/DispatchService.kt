@@ -74,7 +74,8 @@ class DispatchService(
     private val quotaEnforcer: QuotaEnforcer? = null,
     private val quotaConfig: QuotaConfig? = null,
     private val crossProjectChainer: CrossProjectChainer? = null,
-    private val auditLogger: AuditLogger? = null
+    private val auditLogger: AuditLogger? = null,
+    private val autoReviewOrchestrator: AutoReviewOrchestrator? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -268,25 +269,49 @@ class DispatchService(
         val clarificationContent = readClarification(issue.identifier)
         if (clarificationContent != null) {
             handleClarification(issue.id, clarificationContent)
-        } else {
-            state.completed[issue.id] = true
-            state.removeOutput(issue.id)
-            logger.info(
-                "dispatch_completed",
-                mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
-            )
-            transitionOnComplete(issue, stageConfig)
-            if (notificationsConfig?.onCompleted == true && notifier != null) {
-                notifier.send(NotificationEvent.AgentCompleted(
-                    projectSlug = projectSlug,
-                    issueId = issue.id,
-                    issueIdentifier = issue.identifier,
-                    title = issue.title,
-                    tokenUsage = entry?.let {
-                        TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+            return
+        }
+        if (autoReviewOrchestrator != null) {
+            val decision = autoReviewOrchestrator.onCodingComplete(issue)
+            when (decision) {
+                is AutoReviewOrchestrator.ReviewDecision.Pass -> {
+                    val reviewStageConfig = projectConfig.agent.stages["review"]
+                    val effectiveStageConfig = reviewStageConfig ?: stageConfig
+                    completeIssue(issue, effectiveStageConfig, entry)
+                }
+                is AutoReviewOrchestrator.ReviewDecision.RetryWithCoding -> {
+                    if (decision.rerouteToState != null) {
+                        try {
+                            val stateId = linear.resolveStateId(projectSlug, decision.rerouteToState)
+                            if (stateId != null) linear.updateIssueState(issue.id, stateId)
+                        } catch (e: Exception) {
+                            logger.warn("review_reroute_state_update_failed", mapOf("issue_id" to issue.id))
+                        }
                     }
-                ))
+                }
+                is AutoReviewOrchestrator.ReviewDecision.Blocked -> Unit
+                is AutoReviewOrchestrator.ReviewDecision.NoReview -> completeIssue(issue, stageConfig, entry)
             }
+        } else {
+            completeIssue(issue, stageConfig, entry)
+        }
+    }
+
+    private suspend fun completeIssue(issue: Issue, stageConfig: StageAgentConfig?, entry: RunningEntry?) {
+        state.completed[issue.id] = true
+        state.removeOutput(issue.id)
+        logger.info("dispatch_completed", mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier))
+        transitionOnComplete(issue, stageConfig)
+        if (notificationsConfig?.onCompleted == true && notifier != null) {
+            notifier.send(NotificationEvent.AgentCompleted(
+                projectSlug = projectSlug,
+                issueId = issue.id,
+                issueIdentifier = issue.identifier,
+                title = issue.title,
+                tokenUsage = entry?.let {
+                    TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+                }
+            ))
         }
     }
 

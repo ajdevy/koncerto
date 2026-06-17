@@ -25,9 +25,6 @@ opencode.json
 # BMAD
 .bmad-opencode/
 
-# Generated test artifacts
-hello_world.py
-
 # Logs
 *.log
 log/

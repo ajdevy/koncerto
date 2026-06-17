@@ -44,6 +44,7 @@ import com.flexsentlabs.koncerto.metrics.SqliteMetricsRepository
 import io.micrometer.core.instrument.binder.MeterBinder
 import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.agent.ModelRetryHandler
+import com.flexsentlabs.koncerto.orchestrator.AutoReviewOrchestrator
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import com.flexsentlabs.koncerto.orchestrator.RuntimeState
 import com.flexsentlabs.koncerto.orchestrator.SubtaskFrontier
@@ -343,19 +344,36 @@ class Beans {
         subtaskOrchestrator: SubtaskOrchestrator?,
         workplanParser: WorkplanParser?,
         auditLogger: AuditLogger?
-    ): Orchestrator = Orchestrator(
-        config = config,
-        linearClientFactory = linearClientFactory,
-        workspaceManagerFactory = workspaceManagerFactory,
-        agentRunner = runner,
-        workflowCache = cache,
-        logger = logger,
-        scope = scope,
-        runtimeStates = runtimeStates,
-        metricsRepository = metricsRepository,
-        notifier = compositeNotifier,
-        subtaskOrchestrator = subtaskOrchestrator,
-        workplanParser = workplanParser,
-        auditLogger = auditLogger
-    )
+    ): Orchestrator {
+        val notifier = compositeNotifier ?: CompositeNotifier(emptyList())
+        return Orchestrator(
+            config = config,
+            linearClientFactory = linearClientFactory,
+            workspaceManagerFactory = workspaceManagerFactory,
+            agentRunner = runner,
+            workflowCache = cache,
+            logger = logger,
+            scope = scope,
+            runtimeStates = runtimeStates,
+            metricsRepository = metricsRepository,
+            notifier = compositeNotifier,
+            subtaskOrchestrator = subtaskOrchestrator,
+            workplanParser = workplanParser,
+            auditLogger = auditLogger,
+            autoReviewOrchestratorFactory = if (config.projects.values.any { it.agent.stages.containsKey("review") }) {
+                { pc, state ->
+                    AutoReviewOrchestrator(
+                        agentRunner = runner,
+                        workspaceManager = workspaceManagerFactory(pc),
+                        linearClient = linearClientFactory(pc),
+                        projectConfig = pc,
+                        projectSlug = pc.tracker.projectSlug ?: "default",
+                        runtimeState = state,
+                        notifier = compositeNotifier,
+                        logger = logger
+                    )
+                }
+            } else null
+        )
+    }
 }
