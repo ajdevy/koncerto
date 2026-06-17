@@ -33,4 +33,30 @@ subprojects {
             csv.required.set(true)
         }
     }
+
+    // Coverage verification - fails if line coverage < 75%
+    val hasTests = tasks.matching { it.name == "test" }.isNotEmpty()
+
+    if (hasTests && jacocoEnabled) {
+        tasks.register<JacocoCoverageVerification>("jacocoCoverageVerification") {
+            group = "verification"
+            description = "Verifies code coverage meets minimum thresholds"
+
+            executionData(tasks.named("test"))
+
+            violationRules {
+                rule {
+                    limit {
+                        counter = "LINE"
+                        value = "COVEREDRATIO"
+                        minimum = 0.75.toBigDecimal()
+                    }
+                }
+            }
+        }
+
+        tasks.matching { it.name == "test" }.configureEach {
+            finalizedBy("jacocoCoverageVerification")
+        }
+    }
 }
