@@ -85,15 +85,51 @@ class NotificationEventTest {
     }
 
     @Test
+    fun `limit detected is constructed with all fields`() {
+        val event = NotificationEvent.LimitDetected(
+            projectSlug = "my-project",
+            issueId = "789",
+            issueIdentifier = "PROJ-789",
+            title = "Rate limited",
+            errorType = "rate_limit_exceeded",
+            summary = "API rate limit exceeded. Retry after 60s.",
+            retryAfterMs = 60_000L
+        )
+        assertThat(event.projectSlug).isEqualTo("my-project")
+        assertThat(event.issueId).isEqualTo("789")
+        assertThat(event.issueIdentifier).isEqualTo("PROJ-789")
+        assertThat(event.title).isEqualTo("Rate limited")
+        assertThat(event.errorType).isEqualTo("rate_limit_exceeded")
+        assertThat(event.summary).isEqualTo("API rate limit exceeded. Retry after 60s.")
+        assertThat(event.retryAfterMs).isEqualTo(60_000L)
+    }
+
+    @Test
+    fun `limit detected allows null retryAfterMs`() {
+        val event = NotificationEvent.LimitDetected(
+            projectSlug = "p",
+            issueId = "1",
+            issueIdentifier = "P-1",
+            title = "t",
+            errorType = "rate_limit",
+            summary = "s",
+            retryAfterMs = null
+        )
+        assertThat(event.retryAfterMs).isNull()
+    }
+
+    @Test
     fun `all event types are subclasses of NotificationEvent`() {
         val completed: NotificationEvent = NotificationEvent.AgentCompleted("p", "1", "P-1", "t", null)
         val failed: NotificationEvent = NotificationEvent.AgentFailed("p", "2", "P-2", "t", "err")
         val stalled: NotificationEvent = NotificationEvent.AgentStalled("p", "3", "P-3", "t", 1000L)
         val clarification: NotificationEvent = NotificationEvent.ClarificationRequested("p", "4", "P-4", "t")
+        val limit: NotificationEvent = NotificationEvent.LimitDetected("p", "5", "P-5", "t", "rate", "s", null)
 
         assertThat(completed).isInstanceOf(NotificationEvent.AgentCompleted::class)
         assertThat(failed).isInstanceOf(NotificationEvent.AgentFailed::class)
         assertThat(stalled).isInstanceOf(NotificationEvent.AgentStalled::class)
         assertThat(clarification).isInstanceOf(NotificationEvent.ClarificationRequested::class)
+        assertThat(limit).isInstanceOf(NotificationEvent.LimitDetected::class)
     }
 }

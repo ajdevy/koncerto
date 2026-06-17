@@ -4,17 +4,30 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
+import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
+import com.flexsentlabs.koncerto.core.config.ProjectConfig
+import com.flexsentlabs.koncerto.core.config.ServiceConfig
+import com.flexsentlabs.koncerto.core.config.TrackerConfig
+import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.result.EmptyResult
 import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
+import com.flexsentlabs.koncerto.orchestrator.RunningEntry
+import com.flexsentlabs.koncerto.orchestrator.RuntimeState
+import com.flexsentlabs.koncerto.orchestrator.TokenTotals
+import com.flexsentlabs.koncerto.workspace.HookExecutor
+import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
+import java.nio.file.Files
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,7 +40,6 @@ class CliRunnerTest {
     private fun createOrchestrator(): Orchestrator {
         val fakeRunner = object : AgentRunner {
             override fun events(): Flow<AgentEvent> = MutableSharedFlow()
-
             override suspend fun run(
                 issue: Issue,
                 attempt: Int?,
@@ -40,13 +52,65 @@ class CliRunnerTest {
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         }
         return Orchestrator(
-            config = com.flexsentlabs.koncerto.core.config.ServiceConfig(),
+            config = ServiceConfig(),
             linearClientFactory = { throw UnsupportedOperationException() },
             workspaceManagerFactory = { throw UnsupportedOperationException() },
             agentRunner = fakeRunner,
             workflowCache = WorkflowCache(),
             logger = StructuredLogger(emptyList<LogSink>()),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+        )
+    }
+
+    private fun createOrchestratorWithProject(): Orchestrator {
+        val fakeRunner = object : AgentRunner {
+            override fun events(): Flow<AgentEvent> = MutableSharedFlow()
+            override suspend fun run(
+                issue: Issue,
+                attempt: Int?,
+                prompt: String,
+                agentKindOverride: String?,
+                commandOverride: String?,
+                modelOverride: String?,
+                turnTimeoutMs: Long?,
+                stallTimeoutMs: Long?
+            ): EmptyResult<IllegalStateException> = Result.Success(Unit)
+        }
+        val root = Files.createTempDirectory("cli-test-")
+        val state = RuntimeState().apply { maxConcurrentAgents = 5 }
+        state.running["id-1"] = RunningEntry(
+            issue = Issue(
+                id = "id-1", identifier = "ABC-1", title = "Test issue",
+                description = null, priority = 5, state = "Todo",
+                branchName = null, url = null, labels = emptyList(),
+                blockedBy = emptyList(), createdAt = null, updatedAt = null
+            ),
+            threadId = "thread-1", turnId = "turn-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null,
+            turnCount = 3
+        )
+        return Orchestrator(
+            config = ServiceConfig(
+                projects = mapOf("proj" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(kind = "opencode")
+                ))
+            ),
+            linearClientFactory = {
+                com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                    com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                    "p"
+                )
+            },
+            workspaceManagerFactory = {
+                WorkspaceManager(root, HookExecutor { _, _ -> })
+            },
+            agentRunner = fakeRunner,
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList<LogSink>()),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            runtimeStates = mapOf("proj" to state)
         )
     }
 
@@ -86,6 +150,20 @@ class CliRunnerTest {
     }
 
     @Test
+    fun `status prints token info when available`() {
+        val runner = CliRunner(createOrchestratorWithProject())
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            runner.run("status")
+            val output = out.toString()
+            assertThat(output).contains("[koncerto]")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
     fun `agents prints agent info`() {
         val runner = CliRunner(createOrchestrator())
         val out = ByteArrayOutputStream()
@@ -93,6 +171,22 @@ class CliRunnerTest {
         try {
             runner.run("agents")
             assertThat(out.toString()).isEqualTo("")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
+    fun `agents prints running agent details`() {
+        val runner = CliRunner(createOrchestratorWithProject())
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            runner.run("agents")
+            val output = out.toString()
+            assertThat(output).contains("Project: proj")
+            assertThat(output).contains("ABC-1")
+            assertThat(output).contains("turns=3")
         } finally {
             System.setOut(System.out)
         }

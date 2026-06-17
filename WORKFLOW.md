@@ -47,18 +47,22 @@ projects:
         Todo:
           prompt: prompts/implement.md
           agent_kind: codex
-          command: codex --model $KONCERTO_IMPLEMENTATION_MODEL
+          command: codex
+          model: codex
           on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
           agent_kind: claude
           command: claude --print
+          model: claude-sonnet-4-6
           on_complete_state: "Done"
           on_failure_state: "Needs Fix"
           max_review_attempts: 3
         "Needs Fix":
           prompt: prompts/fix-review.md
-          agent_kind: opencode
+          agent_kind: codex
+          command: codex
+          model: codex
           on_complete_state: "In Review"
 ---
 

@@ -7,7 +7,17 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.core.circuitbreaker.CircuitBreakerConfig
+import com.flexsentlabs.koncerto.core.circuitbreaker.ProviderCircuitBreaker
+import com.flexsentlabs.koncerto.core.config.RateLimitConfig
 import com.flexsentlabs.koncerto.core.model.UserRef
+import com.flexsentlabs.koncerto.core.ratelimit.RateLimitProvider
+import com.sun.net.httpserver.HttpExchange
+import com.sun.net.httpserver.HttpServer
+import java.net.InetSocketAddress
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -881,6 +891,39 @@ class LinearClientTest {
             assertThat(sut.updateIssueAssigneeMutation).contains("issueUpdate")
             assertThat(sut.updateIssueAssigneeMutation).contains("\$assigneeId")
         }
+
+        @Test
+        fun `teamStatesQuery contains project and team state fields`() {
+            assertThat(sut.teamStatesQuery).contains("team")
+            assertThat(sut.teamStatesQuery).contains("states")
+            assertThat(sut.teamStatesQuery).contains("\$projectSlug")
+        }
+
+        @Test
+        fun `updateIssueStateMutation contains required fields`() {
+            assertThat(sut.updateIssueStateMutation).contains("IssueUpdate")
+            assertThat(sut.updateIssueStateMutation).contains("\$stateId")
+        }
+
+        @Test
+        fun `teamIdQuery contains project and team id fields`() {
+            assertThat(sut.teamIdQuery).contains("TeamId")
+            assertThat(sut.teamIdQuery).contains("\$projectSlug")
+        }
+
+        @Test
+        fun `createIssueMutation contains required fields`() {
+            assertThat(sut.createIssueMutation).contains("IssueCreate")
+            assertThat(sut.createIssueMutation).contains("\$teamId")
+            assertThat(sut.createIssueMutation).contains("\$title")
+        }
+
+        @Test
+        fun `createLinkMutation contains required fields`() {
+            assertThat(sut.createLinkMutation).contains("RelationCreate")
+            assertThat(sut.createLinkMutation).contains("\$relatedIssueId")
+            assertThat(sut.createLinkMutation).contains("\$type")
+        }
     }
 
     // ── DefaultLinearClient early returns ─────────────────────────
@@ -928,6 +971,159 @@ class LinearClientTest {
             val client = LinearGraphQLClient("http://localhost:1", "  ")
             assertThrows<LinearError.MissingApiKey> {
                 client.execute("query {}", buildJsonObject {})
+            }
+        }
+    }
+
+    // ── LinearGraphQLClient real HTTP execute ────────────────────
+
+    @Nested
+    inner class LinearGraphQLClientRealHttpTests {
+
+        private fun withServer(
+            handler: (HttpExchange) -> Unit,
+            test: suspend (LinearGraphQLClient) -> Unit
+        ) = runTest {
+            val server = HttpServer.create(InetSocketAddress(0), 0)
+            server.createContext("/") { exchange ->
+                handler(exchange)
+            }
+            server.start()
+            try {
+                val port = (server.address as InetSocketAddress).port
+                val client = LinearGraphQLClient("http://localhost:$port", "test-key", timeoutMs = 5000)
+                test(client)
+            } finally {
+                server.stop(0)
+            }
+        }
+
+        @Test
+        fun `execute returns data on success`() = withServer({ exchange ->
+            exchange.requestBody.readAllBytes()
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            val body = """{"data":{"result":"ok"}}"""
+            exchange.sendResponseHeaders(200, body.toByteArray(Charsets.UTF_8).size.toLong())
+            exchange.responseBody.write(body.toByteArray(Charsets.UTF_8))
+            exchange.close()
+        }) { client ->
+            val result = client.execute("query {}", buildJsonObject {})
+            val data = result["data"] as? JsonObject
+            assertThat(data).isNotNull()
+            assertThat(data?.get("result")).isEqualTo(JsonPrimitive("ok"))
+        }
+
+        @Test
+        fun `execute throws CircuitOpen when circuit breaker blocks`() = runTest {
+            val cb = ProviderCircuitBreaker(CircuitBreakerConfig(failureThreshold = 1, resetTimeoutMs = 60000))
+            cb.recordFailure()
+            val client = LinearGraphQLClient("http://localhost:1", "key", circuitBreaker = cb)
+            assertThrows<LinearError.CircuitOpen> {
+                client.execute("query {}", buildJsonObject {})
+            }
+        }
+
+        @Test
+        fun `execute throws GraphQlErrors when response has errors`() = withServer({ exchange ->
+            exchange.requestBody.readAllBytes()
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            val body = """{"data":null,"errors":[{"message":"field not found"}]}"""
+            exchange.sendResponseHeaders(200, body.toByteArray(Charsets.UTF_8).size.toLong())
+            exchange.responseBody.write(body.toByteArray(Charsets.UTF_8))
+            exchange.close()
+        }) { client ->
+            assertThrows<LinearError.GraphQlErrors> {
+                client.execute("query {}", buildJsonObject {})
+            }
+        }
+
+        @Test
+        fun `execute with rate limit provider succeeds`() = runTest {
+            val server = HttpServer.create(InetSocketAddress(0), 0)
+            server.createContext("/") { exchange ->
+                exchange.requestBody.readAllBytes()
+                exchange.responseHeaders.add("Content-Type", "application/json")
+                val body = """{"data":{}}"""
+                exchange.sendResponseHeaders(200, body.toByteArray(Charsets.UTF_8).size.toLong())
+                exchange.responseBody.write(body.toByteArray(Charsets.UTF_8))
+                exchange.close()
+            }
+            server.start()
+            try {
+                val port = (server.address as InetSocketAddress).port
+                val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+                val rlp = RateLimitProvider(RateLimitConfig(), scope)
+                val client = LinearGraphQLClient("http://localhost:$port", "test-key", timeoutMs = 5000, rateLimitProvider = rlp)
+                val result = client.execute("query {}", buildJsonObject {})
+                assertThat(result).isNotNull()
+            } finally {
+                server.stop(0)
+            }
+        }
+
+        @Test
+        fun `execute uses constructor default params`() = runTest {
+            val client = LinearGraphQLClient("http://localhost:1", "key")
+            assertThat(client).isNotNull()
+        }
+
+        @Test
+        fun `execute throws Request when connection fails`() = runTest {
+            val client = LinearGraphQLClient("http://localhost:1", "key", timeoutMs = 100)
+            assertThrows<LinearError.Request> {
+                client.execute("query {}", buildJsonObject {})
+            }
+        }
+
+        @Test
+        fun `execute with circuit breaker records failure on transport error`() = runTest {
+            val cb = ProviderCircuitBreaker(CircuitBreakerConfig(failureThreshold = 1, resetTimeoutMs = 60000))
+            val client = LinearGraphQLClient("http://localhost:1", "key", timeoutMs = 100, circuitBreaker = cb)
+            assertThrows<LinearError.Request> {
+                client.execute("query {}", buildJsonObject {})
+            }
+            assertThat(cb.allowRequest()).isFalse()
+        }
+
+        @Test
+        fun `execute with null response throws Request`() = runTest {
+            val server = HttpServer.create(InetSocketAddress(0), 0)
+            server.createContext("/") { exchange ->
+                exchange.requestBody.readAllBytes()
+                exchange.sendResponseHeaders(204, -1)
+                exchange.close()
+            }
+            server.start()
+            try {
+                val port = (server.address as InetSocketAddress).port
+                val client = LinearGraphQLClient("http://localhost:$port", "key", timeoutMs = 5000)
+                assertThrows<LinearError.Request> {
+                    client.execute("query {}", buildJsonObject {})
+                }
+            } finally {
+                server.stop(0)
+            }
+        }
+
+        @Test
+        fun `execute with null response and circuit breaker records failure`() = runTest {
+            val cb = ProviderCircuitBreaker(CircuitBreakerConfig(failureThreshold = 1, resetTimeoutMs = 60000))
+            val server = HttpServer.create(InetSocketAddress(0), 0)
+            server.createContext("/") { exchange ->
+                exchange.requestBody.readAllBytes()
+                exchange.sendResponseHeaders(204, -1)
+                exchange.close()
+            }
+            server.start()
+            try {
+                val port = (server.address as InetSocketAddress).port
+                val client = LinearGraphQLClient("http://localhost:$port", "key", timeoutMs = 5000, circuitBreaker = cb)
+                assertThrows<LinearError.Request> {
+                    client.execute("query {}", buildJsonObject {})
+                }
+                assertThat(cb.allowRequest()).isFalse()
+            } finally {
+                server.stop(0)
             }
         }
     }
@@ -1715,48 +1911,54 @@ class LinearClientTest {
             projectSlug = "test-project"
         )
 
-        @Test
-        fun `createIssue returns issue on success`() = runTest {
-            val responses = mutableListOf(
-                buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("id", JsonPrimitive("team-1"))
-                            })
-                        })
+        private fun teamResponse() = buildJsonObject {
+            put("data", buildJsonObject {
+                put("project", buildJsonObject {
+                    put("team", buildJsonObject {
+                        put("id", JsonPrimitive("team-1"))
                     })
-                },
-                buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("Todo"))
-                                        })
-                                    })
+                })
+            })
+        }
+
+        private fun statesResponse(stateName: String = "Todo", stateId: String = "state-1") = buildJsonObject {
+            put("data", buildJsonObject {
+                put("project", buildJsonObject {
+                    put("team", buildJsonObject {
+                        put("states", buildJsonObject {
+                            put("nodes", buildJsonArray {
+                                add(buildJsonObject {
+                                    put("id", JsonPrimitive(stateId))
+                                    put("name", JsonPrimitive(stateName))
                                 })
                             })
                         })
                     })
-                },
-                buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("issueCreate", buildJsonObject {
-                            put("success", JsonPrimitive(true))
-                            put("issue", buildJsonObject {
-                                put("id", JsonPrimitive("new-1"))
-                                put("identifier", JsonPrimitive("ENG-100"))
-                                put("title", JsonPrimitive("Test Issue"))
-                                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
-                            })
-                        })
+                })
+            })
+        }
+
+        private fun createSuccessResponse(
+            id: String = "new-1",
+            identifier: String = "ENG-100",
+            title: String = "Test Issue"
+        ) = buildJsonObject {
+            put("data", buildJsonObject {
+                put("issueCreate", buildJsonObject {
+                    put("success", JsonPrimitive(true))
+                    put("issue", buildJsonObject {
+                        put("id", JsonPrimitive(id))
+                        put("identifier", JsonPrimitive(identifier))
+                        put("title", JsonPrimitive(title))
+                        put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
                     })
-                }
-            )
+                })
+            })
+        }
+
+        @Test
+        fun `createIssue returns issue on success`() = runTest {
+            val responses = mutableListOf(teamResponse(), statesResponse(), createSuccessResponse())
             val client = createClient(responses = responses)
             val result = client.createIssue("test-project", "Test Issue", "Todo")
             assertThat(result).isNotNull()
@@ -1776,6 +1978,95 @@ class LinearClientTest {
             val responses = mutableListOf(buildJsonObject {
                 put("data", buildJsonObject {})
             })
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `createIssue with non-null description`() = runTest {
+            val responses = mutableListOf(teamResponse(), statesResponse(), createSuccessResponse())
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo", description = "detailed desc")
+            assertThat(result).isNotNull()
+        }
+
+        @Test
+        fun `createIssue succeeds when state not found (null stateId)`() = runTest {
+            val responses = mutableListOf(
+                teamResponse(),
+                buildJsonObject { // no matching state
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("states", buildJsonObject {
+                                    put("nodes", buildJsonArray {
+                                        add(buildJsonObject {
+                                            put("id", JsonPrimitive("state-1"))
+                                            put("name", JsonPrimitive("Todo"))
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                },
+                createSuccessResponse()
+            )
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Blocked")
+            assertThat(result).isNotNull()
+        }
+
+        @Test
+        fun `createIssue returns null when issueCreate missing from response`() = runTest {
+            val responses = mutableListOf(
+                teamResponse(),
+                statesResponse(),
+                buildJsonObject { put("data", buildJsonObject { }) } // no issueCreate
+            )
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `createIssue returns null when issue missing from issueCreate`() = runTest {
+            val responses = mutableListOf(
+                teamResponse(),
+                statesResponse(),
+                buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issueCreate", buildJsonObject {
+                            put("success", JsonPrimitive(true))
+                        }) // no issue key
+                    })
+                }
+            )
+            val client = createClient(responses = responses)
+            val result = client.createIssue("test-project", "Test Issue", "Todo")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `createIssue returns null when success is false`() = runTest {
+            val responses = mutableListOf(
+                teamResponse(),
+                statesResponse(),
+                buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("issueCreate", buildJsonObject {
+                            put("success", JsonPrimitive(false))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("new-1"))
+                                put("identifier", JsonPrimitive("ENG-100"))
+                                put("title", JsonPrimitive("Test Issue"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                            })
+                        })
+                    })
+                }
+            )
             val client = createClient(responses = responses)
             val result = client.createIssue("test-project", "Test Issue", "Todo")
             assertThat(result).isNull()
@@ -1828,6 +2119,67 @@ class LinearClientTest {
             assertThat(vars["issueId"]).isEqualTo(JsonPrimitive("src-1"))
             assertThat(vars["relatedIssueId"]).isEqualTo(JsonPrimitive("tgt-1"))
             assertThat(vars["type"]).isEqualTo(JsonPrimitive("blocks"))
+        }
+
+        @Test
+        fun `createLink returns false when issueRelationCreate missing`() = runTest {
+            val responses = mutableListOf(buildJsonObject {
+                put("data", buildJsonObject { })
+            })
+            val fake = FakeGraphqlClient(responses = responses)
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.createLink("src-1", "tgt-1", "blocks")
+            assertThat(result).isFalse()
+        }
+    }
+
+    // ── DefaultLinearClient resolveTeamId ─────────────────────────
+
+    @Nested
+    inner class DefaultLinearClientResolveTeamIdTests {
+
+        @Test
+        fun `resolveTeamId returns team id when found`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("team", buildJsonObject {
+                                put("id", JsonPrimitive("team-1"))
+                            })
+                        })
+                    })
+                })
+            )
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveTeamId("proj")
+            assertThat(result).isEqualTo("team-1")
+        }
+
+        @Test
+        fun `resolveTeamId returns null when project missing`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject { })
+                })
+            )
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveTeamId("proj")
+            assertThat(result).isNull()
+        }
+
+        @Test
+        fun `resolveTeamId returns null when team missing`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject { })
+                    })
+                })
+            )
+            val sut = DefaultLinearClient(fake, "proj")
+            val result = sut.resolveTeamId("proj")
+            assertThat(result).isNull()
         }
     }
 }

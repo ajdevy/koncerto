@@ -13,6 +13,7 @@ import java.util.concurrent.Executors
 import assertk.assertThat
 import assertk.assertions.*
 
+
 class WebhookNotifierTest {
 
     @Test
@@ -129,6 +130,37 @@ class WebhookNotifierTest {
             notifier.send(event)
 
             assertThat(authHeader).isEqualTo("Bearer secret-123")
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `sends limit detected fields`() = runTest {
+        val server = HttpServer.create(InetSocketAddress(0), 0)
+        var requestBody = ""
+        server.createContext("/hook") { exchange ->
+            requestBody = exchange.requestBody.reader().readText()
+            exchange.sendResponseHeaders(200, 0)
+            exchange.close()
+        }
+        server.executor = Executors.newSingleThreadExecutor()
+        server.start()
+        try {
+            val port = server.address.port
+            val notifier = WebhookNotifier("http://localhost:$port/hook")
+            val event = NotificationEvent.LimitDetected(
+                "p", "1", "P-1", "Limit", "rate_limit", "Too many requests", 30_000L
+            )
+            notifier.send(event)
+
+            val json = Json.parseToJsonElement(requestBody).jsonObject
+            assertThat(json["event"]!!.jsonPrimitive.content).isEqualTo("LimitDetected")
+            assertThat(json["errorType"]!!.jsonPrimitive.content).isEqualTo("rate_limit")
+            assertThat(json["summary"]!!.jsonPrimitive.content).isEqualTo("Too many requests")
+            assertThat(json["retryAfterMs"]!!.jsonPrimitive.content).isEqualTo("30000")
+            assertThat(json.containsKey("error")).isFalse()
+            assertThat(json.containsKey("stallDurationMs")).isFalse()
         } finally {
             server.stop(0)
         }

@@ -85,6 +85,44 @@ class StructuredLoggerTest {
         val output = sink.lines.single()
         assertThat(output).contains("msg=\"hello world\"")
     }
+
+    @Test
+    fun `values with quotes are escaped`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.info("test", mapOf("msg" to """say "hello""""))
+        val output = sink.lines.single()
+        assertThat(output).contains("""msg="say \"hello\"""")
+    }
+
+    @Test
+    fun `sink that throws does not propagate`() {
+        val bad = object : LogSink {
+            override fun write(line: String) { throw RuntimeException("kaboom") }
+        }
+        val logger = StructuredLogger(listOf(bad))
+        logger.info("test", emptyMap())
+    }
+
+    @Test
+    fun `empty context and kvs still logs`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.info("ping", emptyMap())
+        val output = sink.lines.single()
+        assertThat(output).contains("action=ping")
+        assertThat(output).contains("level=info")
+        assertThat(output).contains("outcome=completed")
+    }
+
+    @Test
+    fun `failure with null message logs class name`() {
+        val sink = StringListSink()
+        val logger = StructuredLogger(listOf(sink))
+        logger.failure("crash", emptyMap(), NullPointerException())
+        val output = sink.lines.single()
+        assertThat(output).contains("error=NullPointerException")
+    }
 }
 
 class StringListSink : LogSink {

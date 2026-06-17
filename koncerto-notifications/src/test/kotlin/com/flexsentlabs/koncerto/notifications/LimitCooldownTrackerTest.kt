@@ -43,6 +43,12 @@ class LimitCooldownTrackerTest {
     }
 
     @Test
+    fun `constructs with default cooldown`() {
+        val tracker = LimitCooldownTracker()
+        assertThat(tracker.shouldSend("RateLimitError", "issue-1")).isTrue()
+    }
+
+    @Test
     fun `reset clears all cooldowns`() {
         val tracker = LimitCooldownTracker(cooldownMs = 60_000)
         tracker.shouldSend("RateLimitError", "issue-1")

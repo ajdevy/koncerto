@@ -48,4 +48,26 @@ class FrontMatterParserTest {
         val msg = thrown.message ?: ""
         assertThat(msg).contains("workflow_front_matter_not_a_map")
     }
+
+    @Test
+    fun `invalid YAML syntax throws with cause`() {
+        val content = "---\n[[invalid\n---\nbody"
+        val thrown = Assertions.assertThrows(IllegalStateException::class.java) { FrontMatterParser.parse(content) }
+        assertThat(thrown.message ?: "").contains("workflow_front_matter_not_a_map")
+    }
+
+    @Test
+    fun `empty YAML front matter throws`() {
+        val content = "---\n---\nbody"
+        val thrown = Assertions.assertThrows(IllegalStateException::class.java) { FrontMatterParser.parse(content) }
+        assertThat(thrown.message ?: "").contains("workflow_front_matter_not_a_map")
+        assertThat(thrown.message ?: "").contains("empty YAML")
+    }
+
+    @Test
+    fun `opening delimiter without closing throws`() {
+        val content = "---\ntracker:\n  kind: linear"
+        val thrown = Assertions.assertThrows(IllegalStateException::class.java) { FrontMatterParser.parse(content) }
+        assertThat(thrown.message ?: "").contains("workflow_parse_error")
+    }
 }

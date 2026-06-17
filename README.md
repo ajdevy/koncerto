@@ -88,6 +88,28 @@ Then reference them in WORKFLOW.md as `$TELEGRAM_BOT_TOKEN`, `$LINEAR_API_KEY`, 
 
 ## Running
 
+### Convenience script
+
+`scripts/koncerto-run.sh` builds the JAR, builds the agent Docker image, then starts the stack with Docker Compose:
+
+```bash
+# Build everything and run (attached)
+./scripts/koncerto-run.sh
+
+# Dev mode — skip JAR rebuild, use existing JAR
+./scripts/koncerto-run.sh --dev
+
+# Run in background and wait for health check
+./scripts/koncerto-run.sh --detach
+
+# Set workflow and model via env vars
+WORKFLOW_FILE=my-workflow.md KONCERTO_IMPLEMENTATION_MODEL=opencode ./scripts/koncerto-run.sh
+```
+
+See `scripts/koncerto-run.sh --help` for all options.
+
+### Manual
+
 ```bash
 # Headless
 ./gradlew :koncerto-app:bootRun --args="WORKFLOW.md"

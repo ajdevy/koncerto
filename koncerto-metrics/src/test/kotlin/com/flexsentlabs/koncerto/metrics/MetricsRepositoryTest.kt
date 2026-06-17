@@ -137,6 +137,14 @@ class MetricsRepositoryTest {
     }
 
     @Test
+    fun `tokenHistory uses default days parameter`() = runBlocking {
+        repo.updateAfterRun("1", "PROJ-1", "proj-a", "success", 100, 50, 150)
+
+        val history = repo.tokenHistory()
+        assertThat(history.size).isEqualTo(1)
+    }
+
+    @Test
     fun `findAll returns all records sorted by updated_at`() = runBlocking {
         repo.updateAfterRun("1", "PROJ-1", "proj-a", "success", 10, 5, 15)
         repo.updateAfterRun("2", "PROJ-2", "proj-b", "success", 20, 10, 30)
@@ -144,5 +152,23 @@ class MetricsRepositoryTest {
         val all = repo.findAll()
         assertThat(all.size).isEqualTo(2)
         assertThat(all.map { it.issueId }).containsExactly("2", "1")
+    }
+
+    @Test
+    fun `record exposes lastRunAt field`() = runBlocking {
+        repo.updateAfterRun("1", "PROJ-1", "proj-a", "success", 10, 5, 15)
+
+        val record = repo.findById("1")
+        assertThat(record).isNotNull()
+        assertThat(record!!.lastRunAt).isNotNull()
+    }
+
+    @Test
+    fun `tokenDaySummary exposes date field`() = runBlocking {
+        repo.updateAfterRun("1", "PROJ-1", "proj-a", "success", 100, 50, 150)
+
+        val history = repo.tokenHistory(days = 30)
+        assertThat(history.size).isEqualTo(1)
+        assertThat(history[0].date).isNotNull()
     }
 }

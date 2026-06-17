@@ -4,6 +4,9 @@ import assertk.assertThat
 import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import assertk.assertions.isEmpty
+import assertk.assertions.isFalse
+import assertk.assertions.isNull
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.config.HooksConfig
@@ -187,6 +190,52 @@ class AdminControllerTest {
     }
 
     @Test
+    fun `listTenants returns 401 without key`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = runBlocking { controller.listTenants(null) }
+        assertThat(response.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
+    fun `listTenants returns 401 with wrong key`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = runBlocking { controller.listTenants("wrong-key") }
+        assertThat(response.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
+    fun `listQuotas returns 401 without key`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = runBlocking { controller.listQuotas(null) }
+        assertThat(response.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
+    fun `listQuotas returns 401 with wrong key`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = runBlocking { controller.listQuotas("wrong-key") }
+        assertThat(response.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
+    fun `all admin endpoints return 401 when adminApiKey is null`() {
+        val config = createConfig(adminKey = null)
+        val controller = AdminController(config, projectRegistry = null)
+        val projectsResponse = runBlocking { controller.listProjects("any-key") }
+        assertThat(projectsResponse.statusCodeValue).isEqualTo(401)
+        val tenantsResponse = runBlocking { controller.listTenants("any-key") }
+        assertThat(tenantsResponse.statusCodeValue).isEqualTo(401)
+        val quotasResponse = runBlocking { controller.listQuotas("any-key") }
+        assertThat(quotasResponse.statusCodeValue).isEqualTo(401)
+        val detailResponse = controller.getProjectDetail("project-alpha", "any-key").block()
+        assertThat(detailResponse!!.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
     fun `listQuotas returns quota usage from metrics`() {
         val metrics = listOf(
             IssueMetrics("1", "ABC-1", "alpha", 5, 100, 50, 150, "SUCCESS", "2024-01-01", "2024-01-01", "2024-01-10"),
@@ -203,5 +252,72 @@ class AdminControllerTest {
         assertThat(body.find { it.projectSlug == "alpha" }!!.totalRuns).isEqualTo(1)
         assertThat(body.find { it.projectSlug == "beta" }!!.totalTokens).isEqualTo(300)
         assertThat(body.find { it.projectSlug == "beta" }!!.totalRuns).isEqualTo(1)
+    }
+
+    @Test
+    fun `getProjectDetail returns all tracker fields including projectSlug and projectAdmin`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = controller.getProjectDetail("project-alpha", "test-admin-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(200)
+        val detail = response.body!!
+        assertThat(detail.tracker.projectSlug).isEqualTo("alpha")
+        assertThat(detail.tracker.projectAdmin).isEqualTo("admin@example.com")
+        assertThat(detail.tracker.kind).isEqualTo("linear")
+    }
+
+    @Test
+    fun `getProjectDetail returns all agent fields including kind`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = controller.getProjectDetail("project-alpha", "test-admin-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(200)
+        val detail = response.body!!
+        assertThat(detail.agent.kind).isEqualTo("opencode")
+        assertThat(detail.agent.maxConcurrentAgents).isEqualTo(2)
+        assertThat(detail.agent.maxTurns).isEqualTo(20)
+        assertThat(detail.agent.stages).isEmpty()
+    }
+
+    @Test
+    fun `getProjectDetail returns all workspace fields`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = controller.getProjectDetail("project-alpha", "test-admin-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(200)
+        val detail = response.body!!
+        assertThat(detail.workspace.root).isEqualTo("/tmp/alpha")
+    }
+
+    @Test
+    fun `getProjectDetail returns all notifications fields`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = controller.getProjectDetail("project-alpha", "test-admin-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(200)
+        val detail = response.body!!
+        assertThat(detail.notifications.onCompleted).isFalse()
+        assertThat(detail.notifications.onFailed).isFalse()
+        assertThat(detail.notifications.onStalled).isFalse()
+    }
+
+    @Test
+    fun `listProjects returns projectSlug and projectAdmin in summary`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = runBlocking { controller.listProjects("test-admin-key") }
+
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        val body = response.body!!
+        val alpha = body.find { it.slug == "project-alpha" }!!
+        assertThat(alpha.projectSlug).isEqualTo("alpha")
+        assertThat(alpha.projectAdmin).isEqualTo("admin@example.com")
+        val beta = body.find { it.slug == "project-beta" }!!
+        assertThat(beta.projectSlug).isEqualTo("beta")
+        assertThat(beta.projectAdmin).isNull()
     }
 }

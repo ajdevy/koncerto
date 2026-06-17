@@ -248,7 +248,10 @@ class DispatchService(
         val labelModel = issue.labels.firstNotNullOfOrNull { label ->
             if (label.startsWith(MODEL_LABEL_PREFIX)) label.removePrefix(MODEL_LABEL_PREFIX) else null
         }
-        return if (labelModel != null) result.copy(model = labelModel) else result
+        val resolvedResult = if (labelModel != null) result.copy(model = labelModel) else result
+        if (resolvedResult.model != null) return resolvedResult
+        val defaultModel = System.getenv("KONCERTO_DEFAULT_MODEL")
+        return if (defaultModel != null) resolvedResult.copy(model = defaultModel) else resolvedResult
     }
 
     private suspend fun handleNormalCompletion(
@@ -372,6 +375,7 @@ class DispatchService(
 
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
+            modelOverride = data.resolved.model,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
             stallTimeoutMs = projectConfig.agent.stallTimeoutMs
         )

@@ -52,4 +52,14 @@ class WorkflowLoaderTest {
         assertThat(def.promptTemplate).isEqualTo("body v1")
         assertThat(cache.current().promptTemplate).isEqualTo("body v1")
     }
+
+    @Test
+    fun `file with unexpected content wraps exception`() {
+        val tmp = Files.createTempFile("workflow-unexpected", ".md")
+        Files.writeString(tmp, "---\n[[invalid\n---\nbody")
+        val ex = assertThrows<IllegalStateException> {
+            WorkflowLoader.loadFromPath(tmp)
+        }
+        assertThat(ex.message ?: "").contains("workflow_front_matter_not_a_map")
+    }
 }

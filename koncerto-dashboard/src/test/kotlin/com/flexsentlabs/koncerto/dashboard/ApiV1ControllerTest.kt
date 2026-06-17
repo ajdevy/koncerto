@@ -4,11 +4,17 @@ import assertk.assertThat
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNotEmpty
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import assertk.assertions.hasSize
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
+import com.flexsentlabs.koncerto.core.config.RateLimitConfig
+import com.flexsentlabs.koncerto.core.model.BlockerRef
+import com.flexsentlabs.koncerto.core.ratelimit.RateLimitRegistry
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.config.HooksConfig
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
@@ -46,10 +52,11 @@ import org.junit.jupiter.api.Test
 private fun createOrchestrator(
     config: ServiceConfig,
     state: RuntimeState,
-    slug: String = "default"
+    slug: String = "default",
+    candidateIssues: List<Issue> = emptyList()
 ): Orchestrator {
     val fakeClient = object : LinearClient {
-        override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+        override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = candidateIssues
         override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
         override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
         override suspend fun fetchIssueById(issueId: String) = null
@@ -324,6 +331,325 @@ class ApiV1ControllerTest {
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.pauseAgent("UNKNOWN")
         assertThat(response.statusCodeValue).isEqualTo(404)
+    }
+
+    @Test
+    fun `resumeAgent returns 404 for unknown identifier`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val response = controller.resumeAgent("UNKNOWN")
+        assertThat(response.statusCodeValue).isEqualTo(404)
+    }
+
+    @Test
+    fun `cancelAgent returns 404 for unknown identifier`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val response = controller.cancelAgent("UNKNOWN")
+        assertThat(response.statusCodeValue).isEqualTo(404)
+    }
+
+    @Test
+    fun `streamOutput returns flux with output lines`() {
+        val state = RuntimeState()
+        state.maxConcurrentAgents = 5
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        runBlocking { state.appendOutput("1", "hello world") }
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val flux = controller.streamOutput("ABC-1", "")
+        val result = flux.next().block()
+        assertThat(result).isNotNull()
+        assertThat(result!!.data()).isEqualTo("hello world")
+        assertThat(result.event()).isEqualTo("output")
+    }
+
+    @Test
+    fun `streamOutput returns empty when identifier not found`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val flux = controller.streamOutput("MISSING", "")
+        assertThat(flux.next().block()).isNull()
+    }
+
+    @Test
+    fun `streamOutput returns empty when no project exists`() {
+        val config = minimalConfig().copy(projects = emptyMap())
+        val state = RuntimeState()
+        val orchestrator = createOrchestrator(config, state)
+        val controller = ApiV1Controller(config, orchestrator)
+        val flux = controller.streamOutput("ABC-1", "")
+        assertThat(flux.next().block()).isNull()
+    }
+
+    @Test
+    fun `streamOutput uses specific project when provided`() {
+        val state = RuntimeState()
+        state.maxConcurrentAgents = 5
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        runBlocking { state.appendOutput("1", "output") }
+        val config = minimalConfig()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state))
+        val flux = controller.streamOutput("ABC-1", "default")
+        val result = flux.next().block()
+        assertThat(result).isNotNull()
+    }
+
+    @Test
+    fun `state returns blocked entries`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test Issue", null, 1, "Todo", null, "http://url", emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        state.addBlocked("1")
+
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.blocked.size).isEqualTo(1)
+        assertThat(snapshot.blocked[0].issueId).isEqualTo("1")
+        assertThat(snapshot.blocked[0].issueIdentifier).isEqualTo("ABC-1")
+        assertThat(snapshot.blocked[0].title).isEqualTo("Test Issue")
+        assertThat(snapshot.blocked[0].url).isEqualTo("http://url")
+    }
+
+    @Test
+    fun `state returns blocked entries with identifier from retry when not in running`() {
+        val state = RuntimeState()
+        state.retryAttempts["2"] = RetryEntry("2", "BLOCKED-2", 1, System.currentTimeMillis() + 60000, "error")
+        state.addBlocked("2")
+
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.blocked.size).isEqualTo(1)
+        assertThat(snapshot.blocked[0].issueIdentifier).isEqualTo("BLOCKED-2")
+    }
+
+    @Test
+    fun `state returns blocked entries with running blockers`() {
+        val state = RuntimeState()
+        val blockerRef = BlockerRef("2", "XYZ-2", "Todo")
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), listOf(blockerRef), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        state.addBlocked("1")
+
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.blocked.size).isEqualTo(1)
+        assertThat(snapshot.blocked[0].blockedBy).isEqualTo(listOf("XYZ-2"))
+    }
+
+    @Test
+    fun `dependencies returns empty when no project configured`() {
+        val config = minimalConfig().copy(projects = emptyMap())
+        val state = RuntimeState()
+        val orchestrator = createOrchestrator(config, state)
+        val controller = ApiV1Controller(config, orchestrator)
+        val result = controller.dependencies("").block()
+        assertThat(result!!.nodes).isEmpty()
+        assertThat(result.edges).isEmpty()
+    }
+
+    @Test
+    fun `dependencies returns graph for configured project`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Issue 1", null, 1, "Todo", null, "http://url", emptyList(), emptyList(), null, null, null)
+        val config = minimalConfig()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state, candidateIssues = listOf(issue)))
+        val result = controller.dependencies("").block()
+        assertThat(result!!.nodes).isNotEmpty()
+        assertThat(result.nodes[0].id).isEqualTo("1")
+        assertThat(result.nodes[0].label).isEqualTo("ABC-1")
+        assertThat(result.nodes[0].state).isEqualTo("Todo")
+        assertThat(result.nodes[0].url).isEqualTo("http://url")
+    }
+
+    @Test
+    fun `dependencies returns graph with edges and blockedBy`() {
+        val state = RuntimeState()
+        val blockerRef = BlockerRef("2", "XYZ-2", "Todo")
+        val issue1 = Issue("1", "ABC-1", "Issue 1", null, 2, "Todo", null, null, emptyList(), listOf(blockerRef), null, null, null)
+        val issue2 = Issue("2", "XYZ-2", "Issue 2", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        val config = minimalConfig()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state, candidateIssues = listOf(issue1, issue2)))
+        val result = controller.dependencies("").block()
+        assertThat(result!!.nodes).hasSize(2)
+        assertThat(result.edges).isNotEmpty()
+        assertThat(result.edges[0].from).isEqualTo("ABC-1")
+        assertThat(result.edges[0].to).isEqualTo("XYZ-2")
+        val node = result.nodes.find { it.id == "1" }
+        assertThat(node).isNotNull()
+        assertThat(node!!.blockedBy).isEqualTo(listOf("XYZ-2"))
+    }
+
+    @Test
+    fun `dependencies handles fetch error gracefully`() {
+        val state = RuntimeState()
+        val failingClient = object : LinearClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue> =
+                throw RuntimeException("API error")
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String) = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) = null
+            override suspend fun updateIssueState(issueId: String, stateId: String) {}
+            override suspend fun createComment(issueId: String, body: String) {}
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String) = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>): Issue? = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
+        }
+        val config = minimalConfig()
+        val orchestrator = Orchestrator(
+            config = config,
+            linearClientFactory = { failingClient },
+            workspaceManagerFactory = { WorkspaceManager(Paths.get("/tmp"), HookExecutor { _, _ -> }) },
+            agentRunner = object : AgentRunner {
+                override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
+                override suspend fun run(issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?, commandOverride: String?, modelOverride: String?, turnTimeoutMs: Long?, stallTimeoutMs: Long?): EmptyResult<IllegalStateException> = Result.Success(Unit)
+            },
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Job() + Dispatchers.Unconfined),
+            runtimeStates = mapOf("default" to state),
+            metricsRepository = null
+        )
+        val controller = ApiV1Controller(config, orchestrator)
+        val result = controller.dependencies("").block()
+        assertThat(result!!.nodes).isEmpty()
+        assertThat(result.edges).isEmpty()
+    }
+
+    @Test
+    fun `dependencies returns empty when project slug not found`() {
+        val state = RuntimeState()
+        val config = minimalConfig()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state))
+        val result = controller.dependencies("nonexistent").block()
+        assertThat(result!!.nodes).isEmpty()
+        assertThat(result.edges).isEmpty()
+    }
+
+    @Test
+    fun `history returns empty when repository is null`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val result = runBlocking { controller.history(null, 50) }
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `history returns empty when repository is null with project filter`() {
+        val state = RuntimeState()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val result = runBlocking { controller.history("some-project", 50) }
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `rateLimitStats returns empty inner maps when no providers`() {
+        val state = RuntimeState()
+        val registry = RateLimitRegistry
+        val field = RateLimitRegistry::class.java.getDeclaredField("providers")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val providers = field.get(registry) as MutableMap<String, Any>
+        providers.clear()
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val result = controller.rateLimitStats()
+        assertThat(result).isNotEmpty()
+        assertThat(result["default"]).isNotNull()
+        assertThat(result["default"]!!).isEmpty()
+    }
+
+    @Test
+    fun `models returns empty list when project has no agent config`() {
+        val state = RuntimeState()
+        val config = minimalConfig()
+        val controller = ApiV1Controller(config, createOrchestrator(config, state))
+        val result = controller.models("nonexistent").block()
+        assertThat(result!!.totalStages).isEqualTo(0)
+        assertThat(result.configuredStages).isEmpty()
+    }
+
+    @Test
+    fun `rateLimitStats returns stats for matched providers`() {
+        val state = RuntimeState()
+        val config = minimalConfig()
+        val registry = RateLimitRegistry
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+        val rateLimitConfig = RateLimitConfig(
+            requestsPerMinute = 60, requestsPerHour = 1000, burstCapacity = 20, backoffMs = 1000
+        )
+        registry.getOrCreate("test-default", rateLimitConfig, scope)
+        try {
+            val controller = ApiV1Controller(config, createOrchestrator(config, state))
+            val result = controller.rateLimitStats()
+            assertThat(result).isNotEmpty()
+            assertThat(result["default"]).isNotNull()
+        } finally {
+            val field = RateLimitRegistry::class.java.getDeclaredField("providers")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val providers = field.get(registry) as MutableMap<String, Any>
+            providers.clear()
+        }
+    }
+
+    @Test
+    fun `rateLimitStats returns stats for prefix matched providers`() {
+        val state = RuntimeState()
+        val config = minimalConfig()
+        val registry = RateLimitRegistry
+        val scope = CoroutineScope(Dispatchers.Unconfined)
+        val rateLimitConfig = RateLimitConfig(
+            requestsPerMinute = 60, requestsPerHour = 1000, burstCapacity = 20, backoffMs = 1000
+        )
+        registry.getOrCreate("default:test", rateLimitConfig, scope)
+        try {
+            val controller = ApiV1Controller(config, createOrchestrator(config, state))
+            val result = controller.rateLimitStats()
+            assertThat(result).isNotEmpty()
+            assertThat(result["default"]).isNotNull()
+        } finally {
+            val field = RateLimitRegistry::class.java.getDeclaredField("providers")
+            field.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val providers = field.get(registry) as MutableMap<String, Any>
+            providers.clear()
+        }
+    }
+
+    @Test
+    fun `state includes codex rate limits`() {
+        val state = RuntimeState()
+        state.maxConcurrentAgents = 5
+        state.updateCodexRateLimits(mapOf("gpt-4" to "active"))
+        state.addTokenTotals(100, 50, 150)
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null,
+            inputTokens = 100, outputTokens = 50, totalTokens = 150
+        )
+
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.rateLimits["gpt-4"]).isEqualTo("active")
+        assertThat(snapshot.tokenTotals.inputTokens).isEqualTo(100)
+        assertThat(snapshot.tokenTotals.outputTokens).isEqualTo(50)
+        assertThat(snapshot.tokenTotals.totalTokens).isEqualTo(150)
     }
 }
 

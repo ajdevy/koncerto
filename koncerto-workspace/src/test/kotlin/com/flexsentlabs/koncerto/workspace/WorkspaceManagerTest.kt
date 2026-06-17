@@ -4,6 +4,8 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.core.tenant.TenantContext
+import com.flexsentlabs.koncerto.core.tenant.TenantId
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
@@ -25,6 +27,7 @@ class WorkspaceManagerTest {
         val ws = mgr.ensureWorkspace("ABC-1")
         assertThat(ws.path).isEqualTo(root.resolve("ABC-1"))
         assertThat(ws.createdNow).isTrue()
+        assertThat(ws.workspaceKey).isEqualTo("ABC-1")
         assertThat(Files.isDirectory(ws.path)).isTrue()
     }
 
@@ -160,6 +163,34 @@ class WorkspaceManagerTest {
         val ws = mgr.ensureWorkspace("../../../etc/passwd")
         assertThat(Files.isDirectory(ws.path)).isTrue()
         assertThat(ws.path.startsWith(root)).isTrue()
+    }
+
+    @Test
+    fun `ensureWorkspace with tenant context resolves under tenant path`() = runTest {
+        val root = Files.createTempDirectory("ws-root-tenant")
+        val mgr = WorkspaceManager(root, noopExecutor())
+        val tc = TenantContext(
+            tenantId = TenantId("tenant-1"),
+            projectSlug = "proj-a"
+        )
+        val ws = mgr.ensureWorkspace("ABC-1", tc)
+        assertThat(Files.isDirectory(ws.path)).isTrue()
+        assertThat(ws.path.startsWith(root.resolve("tenant-1").resolve("proj-a"))).isTrue()
+    }
+
+    @Test
+    fun `removeWorkspace with tenant context deletes workspace`() = runTest {
+        val root = Files.createTempDirectory("ws-root-rm-tenant")
+        val mgr = WorkspaceManager(root, noopExecutor())
+        val tc = TenantContext(
+            tenantId = TenantId("t1"),
+            projectSlug = "p1"
+        )
+        val ws = mgr.ensureWorkspace("ABC-1", tc)
+        Files.createFile(ws.path.resolve("data.txt"))
+        assertThat(Files.exists(ws.path)).isTrue()
+        mgr.removeWorkspace("ABC-1", tc)
+        assertThat(Files.exists(ws.path)).isFalse()
     }
 
     private fun noopExecutor() = HookExecutor { _, _ -> }

@@ -59,7 +59,9 @@ class ConfigService(
 
     fun saveRawYaml(yamlText: String): Result<Unit, IllegalStateException> {
         val parsed: Any? = try {
-            Yaml().load(yamlText)
+            @Suppress("UNUSED_PARAMETER")
+            val yaml = Yaml()
+            yaml.load<Any>(yamlText)
         } catch (e: Exception) {
             return Result.Failure(IllegalStateException("Invalid YAML: ${e.message}", e))
         }

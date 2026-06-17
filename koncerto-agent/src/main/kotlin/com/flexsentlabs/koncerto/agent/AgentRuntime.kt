@@ -31,12 +31,12 @@ class AgentRuntimeFactory(private val logger: StructuredLogger) {
     ): AgentRuntime {
         val useDocker = dockerConfig?.enabled == true && dockerContainerId != null
         if (useDocker) {
-            return DockerRuntime(command, workspacePath, logger, dockerContainerId)
+            return DockerRuntime(command, workspacePath, logger, dockerContainerId, model)
         }
         return when (agentKind.lowercase()) {
-            "codex" -> CodexRuntime(command, workspacePath, logger)
+            "codex" -> CodexRuntime(command, workspacePath, logger, model)
             "opencode" -> OpencodeRuntime(command, workspacePath, logger, model, freeModelCycler)
-            "claude" -> ClaudeReviewRuntime(command, workspacePath, logger)
+            "claude" -> ClaudeReviewRuntime(command, workspacePath, logger, model)
             else -> throw IllegalArgumentException("Unknown agent.kind: $agentKind")
         }
     }

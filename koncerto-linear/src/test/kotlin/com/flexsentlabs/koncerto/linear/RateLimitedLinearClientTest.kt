@@ -89,6 +89,59 @@ class RateLimitedLinearClientTest {
         assertThrows<RuntimeException> { client.fetchCandidateIssues("s", listOf("a")) }
     }
 
+    @Test
+    fun `all delegate methods pass through successfully`() = runBlocking {
+        val fake = FakeLinearClient(issues = listOf(sampleIssue("1", "A-1")))
+        val client = RateLimitedLinearClient(fake, null, null, StructuredLogger(emptyList()))
+
+        client.fetchIssuesByStates("s", listOf("a"))
+        assertThat(fake.callCount["fetchIssuesByStates"]).isEqualTo(1)
+
+        client.fetchIssueStatesByIds(listOf("a"))
+        assertThat(fake.callCount["fetchIssueStatesByIds"]).isEqualTo(1)
+
+        client.fetchIssueById("a")
+        assertThat(fake.callCount["fetchIssueById"]).isEqualTo(1)
+
+        client.resolveStateId("s", "a")
+        assertThat(fake.callCount["resolveStateId"]).isEqualTo(1)
+
+        client.updateIssueState("a", "b")
+        assertThat(fake.callCount["updateIssueState"]).isEqualTo(1)
+
+        client.createComment("a", "body")
+        assertThat(fake.callCount["createComment"]).isEqualTo(1)
+
+        client.updateIssueAssignee("a", "b")
+        assertThat(fake.callCount["updateIssueAssignee"]).isEqualTo(1)
+
+        client.fetchIssueCreator("a")
+        assertThat(fake.callCount["fetchIssueCreator"]).isEqualTo(1)
+
+        client.createIssue("s", "t", "Todo")
+        assertThat(fake.callCount["createIssue"]).isEqualTo(1)
+
+        client.createLink("a", "b", "blocks")
+        assertThat(fake.callCount["createLink"]).isEqualTo(1)
+    }
+
+    @Test
+    fun `all delegate methods propagate errors through circuit breaker`() = runBlocking {
+        val fake = FakeLinearClient(succeed = false)
+        val client = { RateLimitedLinearClient(fake, null, CircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60000), StructuredLogger(emptyList())) }
+
+        assertThrows<RuntimeException> { client().fetchIssuesByStates("s", listOf("a")) }
+        assertThrows<RuntimeException> { client().fetchIssueStatesByIds(listOf("a")) }
+        assertThrows<RuntimeException> { client().fetchIssueById("a") }
+        assertThrows<RuntimeException> { client().resolveStateId("s", "a") }
+        assertThrows<RuntimeException> { client().updateIssueState("a", "b") }
+        assertThrows<RuntimeException> { client().createComment("a", "b") }
+        assertThrows<RuntimeException> { client().updateIssueAssignee("a", "b") }
+        assertThrows<RuntimeException> { client().fetchIssueCreator("a") }
+        assertThrows<RuntimeException> { client().createIssue("s", "t", "Todo") }
+        assertThrows<RuntimeException> { client().createLink("a", "b", "blocks") }
+    }
+
     private fun sampleIssue(id: String, identifier: String, state: String = "Todo") = Issue(
         id = id, identifier = identifier, title = "t", description = null,
         priority = 1, state = state, branchName = null, url = null,

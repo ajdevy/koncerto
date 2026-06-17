@@ -25,4 +25,11 @@ class LoggingNotifierTest {
         notifier.send(NotificationEvent.AgentStalled("p", "3", "P-3", "t", 1000L))
         notifier.send(NotificationEvent.ClarificationRequested("p", "4", "P-4", "t"))
     }
+
+    @Test
+    fun `send handles limit detected event without error`() = runTest {
+        val logger = StructuredLogger(emptyList())
+        val notifier = LoggingNotifier(logger)
+        notifier.send(NotificationEvent.LimitDetected("p", "5", "P-5", "t", "rate", "summary", null))
+    }
 }
