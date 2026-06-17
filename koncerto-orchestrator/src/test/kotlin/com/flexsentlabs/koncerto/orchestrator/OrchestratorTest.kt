@@ -1241,6 +1241,7 @@ class FakeAgentRunner : AgentRunner {
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
@@ -1260,6 +1261,7 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {

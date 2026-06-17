@@ -180,16 +180,17 @@ data class ServiceConfig(
             return rawStages.mapNotNull { (k, v) ->
                 val stageName = (k as? String)?.lowercase() ?: return@mapNotNull null
                 val stageMap = v as? Map<*, *> ?: return@mapNotNull null
-                stageName to StageAgentConfig(
-                    prompt = resolveInlineEnvRefs(stageMap["prompt"] as? String),
-                    model = resolveInlineEnvRefs(stageMap["model"] as? String),
-                    maxConcurrent = (stageMap["max_concurrent"] as? Number)?.toInt(),
-                    agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
-                    command = resolveInlineEnvRefs(stageMap["command"] as? String),
-                    onCompleteState = stageMap["on_complete_state"] as? String,
-                    onFailureState = stageMap["on_failure_state"] as? String,
-                    maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
-                    agent = stageMap["agent"] as? String,
+            stageName to StageAgentConfig(
+                prompt = resolveInlineEnvRefs(stageMap["prompt"] as? String),
+                model = resolveInlineEnvRefs(stageMap["model"] as? String),
+                effort = stageMap["effort"] as? String,
+                maxConcurrent = (stageMap["max_concurrent"] as? Number)?.toInt(),
+                agentKind = (stageMap["agent_kind"] as? String)?.lowercase(),
+                command = resolveInlineEnvRefs(stageMap["command"] as? String),
+                onCompleteState = stageMap["on_complete_state"] as? String,
+                onFailureState = stageMap["on_failure_state"] as? String,
+                maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
+                agent = stageMap["agent"] as? String,
                     followUp = (stageMap["follow_up"] as? Map<*, *>)?.let { f ->
                         FollowUpConfig(
                             titleTemplate = (f["title_template"] as? String) ?: return@let null,
@@ -232,6 +233,7 @@ data class ServiceConfig(
                     kind = kind,
                     command = agentMap["command"] as? String,
                     model = agentMap["model"] as? String,
+                    effort = agentMap["effort"] as? String,
                     maxConcurrent = (agentMap["max_concurrent"] as? Number)?.toInt()
                 )
             }.toMap()
@@ -384,6 +386,7 @@ data class AgentProviderConfig(
     val kind: String,
     val command: String? = null,
     val model: String? = null,
+    val effort: String? = null,
     val maxConcurrent: Int? = null
 )
 
@@ -391,6 +394,7 @@ data class AgentProviderConfig(
 data class StageAgentConfig(
     val prompt: String?,
     val model: String?,
+    val effort: String?,
     val maxConcurrent: Int?,
     val agentKind: String?,
     val command: String?,

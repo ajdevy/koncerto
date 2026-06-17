@@ -81,6 +81,7 @@ private fun createOrchestrator(
                 issue: Issue, attempt: Int?, prompt: String,
                 agentKindOverride: String?, commandOverride: String?,
                 modelOverride: String?,
+                effortOverride: String?,
                 turnTimeoutMs: Long?, stallTimeoutMs: Long?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         },
@@ -191,7 +192,7 @@ class ApiV1ControllerTest {
         val state = RuntimeState()
         val stages = mapOf(
             "todo" to StageAgentConfig(
-                prompt = "impl.md", model = "claude-sonnet", maxConcurrent = null,
+                prompt = "impl.md", model = "claude-sonnet", effort = null, maxConcurrent = null,
                 agentKind = "opencode", command = null, onCompleteState = null
             )
         )
@@ -256,7 +257,7 @@ class ApiV1ControllerTest {
         val state = RuntimeState()
         val stages = mapOf(
             "todo" to StageAgentConfig(
-                prompt = "impl.md", model = "claude-sonnet", maxConcurrent = 3,
+                prompt = "impl.md", model = "claude-sonnet", effort = null, maxConcurrent = 3,
                 agentKind = "opencode", command = null, onCompleteState = "In Progress"
             )
         )
@@ -517,7 +518,7 @@ class ApiV1ControllerTest {
             workspaceManagerFactory = { WorkspaceManager(Paths.get("/tmp"), HookExecutor { _, _ -> }) },
             agentRunner = object : AgentRunner {
                 override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
-                override suspend fun run(issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?, commandOverride: String?, modelOverride: String?, turnTimeoutMs: Long?, stallTimeoutMs: Long?): EmptyResult<IllegalStateException> = Result.Success(Unit)
+                override suspend fun run(issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?, commandOverride: String?, modelOverride: String?, effortOverride: String?, turnTimeoutMs: Long?, stallTimeoutMs: Long?): EmptyResult<IllegalStateException> = Result.Success(Unit)
             },
             workflowCache = WorkflowCache(),
             logger = StructuredLogger(emptyList()),

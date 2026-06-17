@@ -343,7 +343,7 @@ class DispatchServiceTest {
         val runner = CollectingAgentRunner()
         val stages = mapOf(
             "todo" to StageAgentConfig(
-                prompt = "stage-prompt-todo", model = null, maxConcurrent = null,
+                prompt = "stage-prompt-todo", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null
             )
         )
@@ -363,7 +363,7 @@ class DispatchServiceTest {
         val runner = CollectingAgentRunner()
         val stages = mapOf(
             "in review" to StageAgentConfig(
-                prompt = "review-prompt", model = null, maxConcurrent = null,
+                prompt = "review-prompt", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null
             )
         )
@@ -383,7 +383,7 @@ class DispatchServiceTest {
         val runner = CollectingAgentRunner()
         val stages = mapOf(
             "todo" to StageAgentConfig(
-                prompt = null, model = null, maxConcurrent = null,
+                prompt = null, model = null, effort = null, maxConcurrent = null,
                 agentKind = "opencode", command = "opencode-custom", onCompleteState = null
             )
         )
@@ -404,7 +404,7 @@ class DispatchServiceTest {
         trackingLinear.addIssue(issue("1", "A-1", "Todo"))
         val stages = mapOf(
             "todo" to StageAgentConfig(
-                prompt = null, model = null, maxConcurrent = null,
+                prompt = null, model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = "Done"
             )
         )
@@ -442,7 +442,7 @@ class DispatchServiceTest {
         trackingLinear.createIssueResult = issue("b", "ENG-2", "Todo")
         val stages = mapOf(
             "in progress" to StageAgentConfig(
-                prompt = null, model = null, maxConcurrent = null,
+                prompt = null, model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = "Done",
                 followUp = FollowUpConfig(
                     titleTemplate = "PR Review: {{ issue.identifier }}",
@@ -477,7 +477,7 @@ class DispatchServiceTest {
         trackingLinear.createIssueResult = issue("b", "ENG-2", "Todo")
         val stages = mapOf(
             "in progress" to StageAgentConfig(
-                prompt = null, model = null, maxConcurrent = null,
+                prompt = null, model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = "Done"
             )
         )
@@ -590,7 +590,7 @@ class DispatchServiceTest {
             val state = RuntimeState()
             val runner = CollectingAgentRunner()
             val stages = mapOf("todo" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = "In Review"
             ))
             val projectConfig = config(stages = stages).copy(tracker = config().tracker.copy(blockedState = "Blocked"))
@@ -667,7 +667,7 @@ class DispatchServiceTest {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = "fast"
             ))
@@ -683,7 +683,7 @@ class DispatchServiceTest {
     fun `resolveAgent falls back to agentKind when no agents map`() {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = "codex", command = null, onCompleteState = null,
                 agent = null
             ))
@@ -710,7 +710,7 @@ class DispatchServiceTest {
                 "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
             ),
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = "slow"
             ))
@@ -727,7 +727,7 @@ class DispatchServiceTest {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = mapOf("fast" to AgentProviderConfig("codex", model = "claude-sonnet-4")),
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = "fast"
             ))
@@ -747,7 +747,7 @@ class DispatchServiceTest {
                 "slow" to AgentProviderConfig("opencode", model = "claude-opus-4")
             ),
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = "slow"
             ))
@@ -763,7 +763,7 @@ class DispatchServiceTest {
     fun `resolveAgent handles non-existent provider label gracefully`() {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = null
             ))
@@ -778,7 +778,7 @@ class DispatchServiceTest {
     fun `resolveAgent backward compat with agentKind and model labels`() {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = "codex", command = null, onCompleteState = null,
                 agent = null
             ))
@@ -794,7 +794,7 @@ class DispatchServiceTest {
     fun `resolveAgent uses project default kind when no stage config uses no agent`() {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             stages = mapOf("unknown" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = null
             ))
@@ -810,7 +810,7 @@ class DispatchServiceTest {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = emptyMap(),
             stages = mapOf("in progress" to StageAgentConfig(
-                prompt = "test", model = null, maxConcurrent = null,
+                prompt = "test", model = null, effort = null, maxConcurrent = null,
                 agentKind = null, command = null, onCompleteState = null,
                 agent = "nonexistent"
             ))
@@ -866,7 +866,7 @@ class DispatchServiceTest {
         )
         val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "routed", priority = 10))
         val stages = mapOf("todo" to StageAgentConfig(
-            prompt = null, model = null, maxConcurrent = null,
+            prompt = null, model = null, effort = null, maxConcurrent = null,
             agentKind = null, command = null, onCompleteState = null,
             agent = "staged"
         ))
@@ -1011,11 +1011,12 @@ private class CollectingAgentRunner : AgentRunner {
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
-        runArgs += RunArgs(issue, prompt, agentKindOverride, commandOverride)
+        runArgs += RunArgs(issue, prompt, agentKindOverride, commandOverride, modelOverride, effortOverride)
         return Result.Success(Unit)
     }
 }
@@ -1024,7 +1025,9 @@ private data class RunArgs(
     val issue: Issue,
     val prompt: String,
     val agentKindOverride: String?,
-    val commandOverride: String?
+    val commandOverride: String?,
+    val modelOverride: String? = null,
+    val effortOverride: String? = null
 )
 
 private class FailingRunner(private val errorMsg: String) : AgentRunner {
@@ -1037,6 +1040,7 @@ private class FailingRunner(private val errorMsg: String) : AgentRunner {
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {

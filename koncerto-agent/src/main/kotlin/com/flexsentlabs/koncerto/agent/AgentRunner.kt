@@ -54,6 +54,7 @@ interface AgentRunner {
         agentKindOverride: String? = null,
         commandOverride: String? = null,
         modelOverride: String? = null,
+        effortOverride: String? = null,
         turnTimeoutMs: Long? = null,
         stallTimeoutMs: Long? = null
     ): EmptyResult<IllegalStateException>
@@ -90,6 +91,7 @@ class DefaultAgentRunner(
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> = runCatchingResult {
@@ -112,6 +114,7 @@ class DefaultAgentRunner(
                         agentKindOverride = agentKindOverride,
                         commandOverride = commandOverride,
                         modelOverride = selectedModel,
+                        effortOverride = effortOverride,
                         turnTimeoutMs = turnTimeoutMs,
                         stallTimeoutMs = stallTimeoutMs,
                         retryAttempt = 1,
@@ -136,6 +139,7 @@ class DefaultAgentRunner(
                     agentKindOverride = agentKindOverride,
                     commandOverride = commandOverride,
                     modelOverride = modelOverride,
+                    effortOverride = effortOverride,
                     turnTimeoutMs = turnTimeoutMs,
                     stallTimeoutMs = stallTimeoutMs,
                     retryAttempt = retryAttempt,
@@ -208,6 +212,7 @@ class DefaultAgentRunner(
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?,
         retryAttempt: Int,
@@ -232,8 +237,9 @@ class DefaultAgentRunner(
         val effectiveKind = agentKindOverride ?: "opencode"
         val command = commandOverride ?: effectiveKind
         val model = modelOverride
+        val effort = effortOverride
         val cycler = if (effectiveKind.lowercase() == "opencode" && model?.lowercase() == "free") freeModelCycler else null
-        val runtime = factory.create(effectiveKind, command, workspace.path, dockerConfig, containerId, model, cycler)
+        val runtime = factory.create(effectiveKind, command, workspace.path, dockerConfig, containerId, model, effort, cycler)
         if (!runtime.start()) {
             containerManager?.removeContainer(containerId ?: "")
             throw IllegalStateException("startup_failed")

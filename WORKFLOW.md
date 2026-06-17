@@ -48,13 +48,15 @@ projects:
           prompt: prompts/implement.md
           agent_kind: codex
           command: codex
-          model: codex
+          model: codex-5.4-mini
+          effort: max
           on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
           agent_kind: claude
           command: claude --print
           model: claude-sonnet-4-6
+          effort: max
           on_complete_state: "Done"
           on_failure_state: "Needs Fix"
           max_review_attempts: 3
@@ -62,7 +64,8 @@ projects:
           prompt: prompts/fix-review.md
           agent_kind: codex
           command: codex
-          model: codex
+          model: codex-5.4-mini
+          effort: max
           on_complete_state: "In Review"
 ---
 

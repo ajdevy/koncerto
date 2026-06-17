@@ -47,6 +47,7 @@ class CliRunnerTest {
                 agentKindOverride: String?,
                 commandOverride: String?,
                 modelOverride: String?,
+                effortOverride: String?,
                 turnTimeoutMs: Long?,
                 stallTimeoutMs: Long?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
@@ -72,6 +73,7 @@ class CliRunnerTest {
                 agentKindOverride: String?,
                 commandOverride: String?,
                 modelOverride: String?,
+                effortOverride: String?,
                 turnTimeoutMs: Long?,
                 stallTimeoutMs: Long?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)

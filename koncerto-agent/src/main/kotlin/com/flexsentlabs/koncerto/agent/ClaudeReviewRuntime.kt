@@ -25,11 +25,9 @@ import com.flexsentlabs.koncerto.core.tenant.TenantContext
 class ClaudeReviewRuntime(
     private val command: String,
     private val workspacePath: Path,
-    private val logger: StructuredLogger,
-    model: String? = null
+    private val logger: StructuredLogger
 ) : AgentRuntime {
 
-    private val effectiveCommand: String = if (model != null) "$command --model $model" else command
     private var process: Process? = null
     private var workerJob: Job? = null
     private val events = Channel<AgentEvent>(Channel.BUFFERED)
@@ -57,7 +55,7 @@ class ClaudeReviewRuntime(
 
     private suspend fun runReview(prompt: String) = withContext(Dispatchers.IO) {
         try {
-            val pb = ProcessBuilder("bash", "-lc", effectiveCommand)
+            val pb = ProcessBuilder("bash", "-lc", command)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
             val p = pb.start()

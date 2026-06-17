@@ -50,7 +50,8 @@ private val DEFAULT_CREATED_AT = Instant.MAX // Sort null createdAt LAST (newest
 data class ResolvedAgent(
     val kind: String,
     val command: String?,
-    val model: String?
+    val model: String?,
+    val effort: String?
 )
 
 class DispatchService(
@@ -200,7 +201,8 @@ class DispatchService(
             return ResolvedAgent(
                 kind = provider.kind,
                 command = provider.command,
-                model = provider.model
+                model = provider.model,
+                effort = provider.effort
             )
         }
         return null
@@ -222,10 +224,13 @@ class DispatchService(
                 ?: projectConfig.agent.command
             val baseModel = stageProvider?.model
                 ?: stageConfig?.model
+            val baseEffort = stageProvider?.effort
+                ?: stageConfig?.effort
 
             val finalKind = labelProvider?.kind ?: baseKind
             val finalCommand = labelProvider?.command ?: baseCommand
             val finalModel = labelProvider?.model ?: baseModel
+            val finalEffort = labelProvider?.effort ?: baseEffort
 
             if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
                 logger.warn("agent_provider_not_found", mapOf(
@@ -234,14 +239,15 @@ class DispatchService(
                 ))
             }
 
-            ResolvedAgent(finalKind, finalCommand, finalModel)
+            ResolvedAgent(finalKind, finalCommand, finalModel, finalEffort)
         } else {
             val routed = evaluateRoutingRules(issue)
             if (routed != null) routed
             else ResolvedAgent(
                 kind = stageConfig?.agentKind ?: projectConfig.agent.kind,
                 command = stageConfig?.command ?: projectConfig.agent.command,
-                model = stageConfig?.model
+                model = stageConfig?.model,
+                effort = stageConfig?.effort
             )
         }
 
@@ -376,6 +382,7 @@ class DispatchService(
         val result = agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
             modelOverride = data.resolved.model,
+            effortOverride = data.resolved.effort,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
             stallTimeoutMs = projectConfig.agent.stallTimeoutMs
         )

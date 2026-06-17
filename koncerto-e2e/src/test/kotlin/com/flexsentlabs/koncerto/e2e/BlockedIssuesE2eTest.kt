@@ -168,6 +168,7 @@ private class CollectingE2eRunner : AgentRunner {
         issue: Issue, attempt: Int?, prompt: String,
         agentKindOverride: String?, commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?, stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue

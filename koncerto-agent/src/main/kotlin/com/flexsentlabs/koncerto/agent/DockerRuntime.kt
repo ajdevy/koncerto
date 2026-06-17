@@ -29,11 +29,8 @@ class DockerRuntime(
     private val command: String,
     private val workspacePath: Path,
     private val logger: StructuredLogger,
-    private val containerId: String,
-    model: String? = null
+    private val containerId: String
 ) : AgentRuntime {
-
-    private val effectiveCommand: String = if (model != null) "$command --model $model" else command
     private val requestId = AtomicLong(1)
     private var execProcess: Process? = null
     private var writer: BufferedWriter? = null
@@ -51,7 +48,7 @@ class DockerRuntime(
             return@withContext false
         }
         try {
-            val execCmd = "docker exec -i $containerId bash -lc '$effectiveCommand'"
+            val execCmd = "docker exec -i $containerId bash -lc '$command'"
             val pb = ProcessBuilder("bash", "-lc", execCmd)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(false)

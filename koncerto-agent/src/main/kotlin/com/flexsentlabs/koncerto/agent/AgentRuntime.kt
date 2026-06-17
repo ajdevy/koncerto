@@ -27,17 +27,35 @@ class AgentRuntimeFactory(private val logger: StructuredLogger) {
         dockerConfig: DockerConfig? = null,
         dockerContainerId: String? = null,
         model: String? = null,
+        effort: String? = null,
         freeModelCycler: FreeModelCycler? = null
     ): AgentRuntime {
+        val fullCommand = buildFullCommand(agentKind, command, model, effort)
         val useDocker = dockerConfig?.enabled == true && dockerContainerId != null
         if (useDocker) {
-            return DockerRuntime(command, workspacePath, logger, dockerContainerId, model)
+            return DockerRuntime(fullCommand, workspacePath, logger, dockerContainerId)
         }
         return when (agentKind.lowercase()) {
-            "codex" -> CodexRuntime(command, workspacePath, logger, model)
-            "opencode" -> OpencodeRuntime(command, workspacePath, logger, model, freeModelCycler)
-            "claude" -> ClaudeReviewRuntime(command, workspacePath, logger, model)
+            "codex" -> CodexRuntime(fullCommand, workspacePath, logger)
+            "opencode" -> OpencodeRuntime(fullCommand, workspacePath, logger, model, freeModelCycler)
+            "claude" -> ClaudeReviewRuntime(fullCommand, workspacePath, logger)
             else -> throw IllegalArgumentException("Unknown agent.kind: $agentKind")
         }
+    }
+
+    private fun buildFullCommand(agentKind: String, command: String, model: String?, effort: String?): String {
+        var cmd = command
+        if (model != null) {
+            cmd += " --model $model"
+        }
+        if (effort != null) {
+            cmd += when (agentKind.lowercase()) {
+                "codex" -> " -c model_reasoning_effort=$effort"
+                "claude" -> " --effort $effort"
+                "opencode" -> " --variant $effort"
+                else -> ""
+            }
+        }
+        return cmd
     }
 }

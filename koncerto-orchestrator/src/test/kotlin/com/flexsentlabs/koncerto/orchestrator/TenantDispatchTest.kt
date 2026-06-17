@@ -168,6 +168,7 @@ private class TenantTestAgentRunner : AgentRunner {
         agentKindOverride: String?,
         commandOverride: String?,
         modelOverride: String?,
+        effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
     ): com.flexsentlabs.koncerto.core.result.EmptyResult<IllegalStateException> {
