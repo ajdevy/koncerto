@@ -1,7 +1,7 @@
 # Koncerto
 
 [![CI](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml/badge.svg)](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml)
-[![code coverage](.badges/jacoco.svg)](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml)
+[![code coverage](https://raw.githubusercontent.com/ajdevy/koncerto/main/.badges/jacoco.svg)](https://github.com/ajdevy/koncerto/actions/workflows/ci.yml)
 
 A Kotlin/Spring Boot orchestrator that polls Linear for issues, dispatches them to AI agents (opencode, Codex, Claude), and manages the full lifecycle — retries, state transitions, and notifications.
 
