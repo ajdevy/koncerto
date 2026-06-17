@@ -1,5 +1,6 @@
 package com.flexsentlabs.koncerto.app
 
+import com.flexsentlabs.koncerto.agent.DockerContainerManager
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
@@ -36,6 +37,7 @@ fun main(args: Array<String>) {
     val config = ctx.getBean(ServiceConfig::class.java)
     val logger = ctx.getBean(StructuredLogger::class.java)
     buildDockerAgentImage(config, logger, ctx)
+    DockerContainerManager.pruneOldContainers(logger)
     val orchestrator = ctx.getBean(Orchestrator::class.java)
     Runtime.getRuntime().addShutdownHook(Thread {
         val count = orchestrator.runningAgentsCount()

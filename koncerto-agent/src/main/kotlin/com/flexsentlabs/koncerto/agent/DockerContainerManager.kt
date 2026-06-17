@@ -3,6 +3,8 @@ package com.flexsentlabs.koncerto.agent
 import com.flexsentlabs.koncerto.core.config.DockerConfig
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Path
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 
 class DockerContainerManager(
@@ -119,12 +121,72 @@ class DockerContainerManager(
         }
     }
 
+    fun pruneOldContainers(olderThanHours: Int = 24) {
+        Companion.pruneOldContainers(logger, olderThanHours)
+    }
+
     companion object {
         private var counter = 0L
+        private val dockerDateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")
 
         fun generateContainerId(): String {
             val id = "koncerto-agent-${System.currentTimeMillis()}-${counter++}"
             return id.replace(Regex("[^a-zA-Z0-9_.-]"), "_")
+        }
+
+        fun pruneOldContainers(logger: StructuredLogger, olderThanHours: Int = 24) {
+            try {
+                val cutoff = System.currentTimeMillis() - olderThanHours * 60 * 60 * 1000L
+                val pb = ProcessBuilder(
+                    "bash", "-lc",
+                    "docker ps -a --filter name=koncerto-agent- --format '{{.ID}}|{{.CreatedAt}}' 2>/dev/null"
+                )
+                val p = pb.start()
+                val output = p.inputStream.bufferedReader().readText().trim()
+                p.waitFor(10, TimeUnit.SECONDS)
+
+                if (output.isBlank()) {
+                    logger.debug("container_prune_no_candidates", emptyMap())
+                    return
+                }
+
+                var pruned = 0
+                output.lines().forEach { line ->
+                    val parts = line.split("|")
+                    if (parts.size < 2) return@forEach
+                    val id = parts[0].trim()
+                    val createdAt = parts[1].trim()
+                    val cleaned = createdAt.replace(" UTC", "").trim()
+
+                    try {
+                        val parsed = OffsetDateTime.parse(cleaned, dockerDateFormat)
+                        val epoch = parsed.toInstant().toEpochMilli()
+                        if (epoch < cutoff) {
+                            logger.info("container_pruning_old", mapOf(
+                                "container_id" to id,
+                                "created_at" to createdAt,
+                                "age_hours" to String.format("%.1f", (System.currentTimeMillis() - epoch) / 3600000.0)
+                            ))
+                            val rm = ProcessBuilder("bash", "-lc", "docker rm -f $id 2>/dev/null")
+                            rm.start().waitFor(10, TimeUnit.SECONDS)
+                            pruned++
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("container_prune_date_parse_failed", mapOf(
+                            "container_id" to id,
+                            "created_at" to createdAt
+                        ))
+                    }
+                }
+
+                if (pruned > 0) {
+                    logger.info("container_prune_completed", mapOf("pruned_count" to pruned.toString()))
+                } else {
+                    logger.debug("container_prune_none_old_enough", emptyMap())
+                }
+            } catch (e: Exception) {
+                logger.warn("container_prune_failed", emptyMap(), "error" to (e.message ?: "unknown"))
+            }
         }
     }
 }
