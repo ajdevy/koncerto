@@ -11,6 +11,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  story-integrity:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check story file integrity
+        run: |
+          scripts/story-integrity-check.sh --base "origin/${{ github.base_ref }}"
+
   build:
     permissions:
       contents: write
@@ -80,5 +92,4 @@ print(f'Badge generated: {line_pct:.1f}%')
             git add .badges/
             git commit -m "chore: update coverage badges [skip ci]"
             git push
-          fi
           fi
