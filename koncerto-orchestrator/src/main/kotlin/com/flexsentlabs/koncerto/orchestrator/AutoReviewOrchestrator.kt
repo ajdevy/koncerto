@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 
 class AutoReviewOrchestrator(
@@ -118,9 +119,15 @@ class AutoReviewOrchestrator(
     private fun readReviewStatus(workspacePath: Path): Boolean {
         val statusFile = workspacePath.resolve(".review-status")
         return try {
-            if (Files.exists(statusFile)) {
+            if (!Files.exists(statusFile)) return false
+            // Retry once on empty content to tolerate slow filesystem flushes
+            val content = Files.readString(statusFile).trim()
+            if (content.isEmpty()) {
+                Thread.sleep(100)
                 Files.readString(statusFile).trim().lowercase() == "pass"
-            } else false
+            } else {
+                content.lowercase() == "pass"
+            }
         } catch (_: Exception) {
             false
         }
@@ -129,6 +136,7 @@ class AutoReviewOrchestrator(
     private fun writeReviewExhaustionFile(issue: Issue, totalAttempts: Int) {
         val workspace = runCatching { workspaceManager.ensureWorkspace(issue.identifier) }.getOrNull() ?: return
         val statusFile = workspace.path.resolve(".review-exhausted")
+        val tmpFile = workspace.path.resolve(".review-exhausted.tmp")
         val json = buildJsonObject {
             put("issue_id", issue.id)
             put("issue_identifier", issue.identifier)
@@ -137,7 +145,8 @@ class AutoReviewOrchestrator(
             put("reason", "Review gate failed after $totalAttempts attempts")
         }
         try {
-            Files.writeString(statusFile, json.toString())
+            Files.writeString(tmpFile, json.toString())
+            Files.move(tmpFile, statusFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         } catch (e: Exception) {
             logger.warn("review_exhaustion_file_write_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
         }

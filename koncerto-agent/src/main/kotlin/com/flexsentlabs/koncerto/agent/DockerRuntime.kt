@@ -54,9 +54,9 @@ class DockerRuntime(
             return@withContext false
         }
         try {
-            val socatCmd = command.replace("'", "'\\''")
-            val execCmd = "docker exec -i $containerId bash -lc 'socat EXEC:\"$socatCmd\",pty,raw,echo=0 STDIO'"
-            val pb = ProcessBuilder("bash", "-lc", execCmd)
+            val socatEscaped = command.replace("\\", "\\\\").replace("\"", "\\\"")
+            val pb = ProcessBuilder("docker", "exec", "-i", containerId, "bash", "-lc",
+                "socat EXEC:\"$socatEscaped\",pty,raw,echo=0 STDIO")
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(false)
             val p = pb.start()
@@ -219,7 +219,7 @@ class DockerRuntime(
 
     private fun checkContainerRunning(): Boolean {
         return try {
-            val pb = ProcessBuilder("bash", "-lc", "docker inspect $containerId --format='{{.State.Status}}'")
+            val pb = ProcessBuilder("docker", "inspect", containerId, "--format={{.State.Status}}")
             val p = pb.start()
             val output = p.inputStream.bufferedReader().readText().trim()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -334,13 +334,15 @@ class DockerRuntime(
         try { execProcess?.destroy() } catch (_: Exception) {}
         try { execProcess?.waitFor(5, TimeUnit.SECONDS) } catch (_: Exception) {}
         readerJob?.cancel()
+        scope.cancel()
         removeContainer()
         events.close()
     }
 
     private fun captureContainerStats() {
         try {
-            val pb = ProcessBuilder("bash", "-lc", "docker stats --no-stream $containerId 2>&1")
+            val pb = ProcessBuilder("docker", "stats", "--no-stream", containerId)
+                .redirectErrorStream(true)
             val p = pb.start()
             val stats = p.inputStream.bufferedReader().readText()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -361,7 +363,8 @@ class DockerRuntime(
 
     private fun captureContainerLogs() {
         try {
-            val pb = ProcessBuilder("bash", "-lc", "docker logs $containerId 2>&1")
+            val pb = ProcessBuilder("docker", "logs", containerId)
+                .redirectErrorStream(true)
             val p = pb.start()
             val logs = p.inputStream.bufferedReader().readText()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -382,7 +385,7 @@ class DockerRuntime(
 
     private fun removeContainer() {
         try {
-            val pb = ProcessBuilder("bash", "-lc", "docker rm -f $containerId 2>/dev/null")
+            val pb = ProcessBuilder("docker", "rm", "-f", containerId)
             val p = pb.start()
             p.waitFor(10, TimeUnit.SECONDS)
         } catch (e: Exception) {

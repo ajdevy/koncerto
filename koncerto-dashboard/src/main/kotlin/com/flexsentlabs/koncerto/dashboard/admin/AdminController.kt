@@ -80,7 +80,7 @@ class AdminController @Autowired constructor(
     )
 
     private fun authorized(adminKey: String?): Boolean {
-        val expected = config.adminApiKey ?: return false
+        val expected = config.adminApiKey?.takeIf { it.isNotBlank() } ?: return false
         return adminKey == expected
     }
 

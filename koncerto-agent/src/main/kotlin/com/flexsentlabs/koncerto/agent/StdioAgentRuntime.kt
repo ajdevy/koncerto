@@ -303,6 +303,7 @@ abstract class StdioAgentRuntime(
         try { process?.destroy() } catch (_: Exception) {}
         try { process?.waitFor(5, TimeUnit.SECONDS) } catch (_: Exception) {}
         readerJob?.cancel()
+        scope.cancel()
         events.close()
     }
 }

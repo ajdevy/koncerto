@@ -76,6 +76,7 @@ class WorkspaceManager(
     fun removeWorkspace(identifier: String, tenantContext: TenantContext) {
         val key = WorkspaceKey.sanitize(identifier)
         val path = resolvePath(key, tenantContext)
+        assertInsideRoot(path)
         if (Files.exists(path)) {
             Files.walk(path)
                 .sorted(Comparator.reverseOrder())

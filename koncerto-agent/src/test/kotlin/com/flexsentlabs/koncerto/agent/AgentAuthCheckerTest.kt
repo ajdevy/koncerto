@@ -4,6 +4,9 @@ import assertk.assertThat
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 class AgentAuthCheckerTest {
 
@@ -60,5 +63,31 @@ class AgentAuthCheckerTest {
     @Test
     fun `isAuthenticated is case insensitive`() {
         assertThat(AgentAuthChecker.isAuthenticated("Opencode")).isTrue()
+    }
+
+    @Test
+    fun `concurrent isAuthenticated calls do not throw ConcurrentModificationException`() {
+        val threadCount = 20
+        val pool = Executors.newFixedThreadPool(threadCount)
+        val latch = CountDownLatch(1)
+        val errors = AtomicInteger(0)
+        val tasks = (1..threadCount).map {
+            pool.submit {
+                try {
+                    latch.await()
+                    // markAuthenticated touches overrideAuth; isAuthenticated reads cache — must not race
+                    AgentAuthChecker.markAuthenticated("opencode")
+                    AgentAuthChecker.isAuthenticated("opencode")
+                    AgentAuthChecker.reset()
+                    AgentAuthChecker.isAuthenticated("claude")
+                } catch (_: Exception) {
+                    errors.incrementAndGet()
+                }
+            }
+        }
+        latch.countDown()
+        tasks.forEach { it.get() }
+        pool.shutdown()
+        assertThat(errors.get() == 0).isTrue()
     }
 }

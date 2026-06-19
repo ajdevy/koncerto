@@ -4,6 +4,8 @@ import com.flexsentlabs.koncerto.core.config.RateLimitConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class RateLimitProvider(
@@ -18,8 +20,9 @@ class RateLimitProvider(
 
     private val requestTimes = mutableListOf<Long>()
     private val hourlyRequestTimes = mutableListOf<Long>()
+    private val mutex = Mutex()
 
-    suspend fun acquire(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun acquire(): Boolean = mutex.withLock {
         refillIfNeeded()
         val now = System.currentTimeMillis()
 
@@ -34,7 +37,7 @@ class RateLimitProvider(
 
         if (currentMinuteRate >= config.requestsPerMinute ||
             currentHourRate >= config.requestsPerHour) {
-            return@withContext false
+            return@withLock false
         }
 
         requestTimes.add(now)
@@ -64,12 +67,12 @@ class RateLimitProvider(
         }
     }
 
-    fun getStats(): RateLimitStats {
+    suspend fun getStats(): RateLimitStats = mutex.withLock {
         val now = System.currentTimeMillis()
         val minuteAgo = now - 60_000
         val hourAgo = now - 3_600_000
 
-        return RateLimitStats(
+        RateLimitStats(
             availableTokens = _availableTokens.value.toInt(),
             requestsLastMinute = requestTimes.count { it > minuteAgo },
             requestsLastHour = hourlyRequestTimes.count { it > hourAgo },

@@ -79,4 +79,12 @@ class ShellHookExecutorTest {
         }
         assertThat(ex).messageContains("errormsg")
     }
+
+    @Test
+    fun `script producing large output does not deadlock`() = runTest {
+        // Generates ~200KB of output — well above the typical 64KB OS pipe buffer.
+        // Before the fix, waitFor() would deadlock here; now we drain on a background thread.
+        val executor = ShellHookExecutor(timeoutMs = 10_000, logger = logger)
+        executor.run(tmpDir, "yes x | head -c 200000")
+    }
 }

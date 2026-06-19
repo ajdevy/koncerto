@@ -9,7 +9,6 @@ import com.flexsentlabs.koncerto.metrics.MetricsRepository
 import com.flexsentlabs.koncerto.orchestrator.DependencyGraph
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import kotlinx.coroutines.reactive.asPublisher
-import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
@@ -231,19 +230,17 @@ class ApiV1Controller @Autowired constructor(
     )
 
     @GetMapping("/dependencies", produces = ["application/json"])
-    fun dependencies(@RequestParam(defaultValue = "") project: String): Mono<DependencyGraphResponse> {
+    suspend fun dependencies(@RequestParam(defaultValue = "") project: String): DependencyGraphResponse {
         val pr = if (project.isNotBlank()) projects[project]
                  else projects.values.firstOrNull()
-        val dispatch = pr?.dispatch ?: return Mono.just(DependencyGraphResponse(emptyList(), emptyList()))
+        val dispatch = pr?.dispatch ?: return DependencyGraphResponse(emptyList(), emptyList())
         val candidates = try {
-            runBlocking {
-                dispatch.linear.fetchCandidateIssues(
-                    pr.config.tracker.projectSlug,
-                    pr.config.tracker.activeStates
-                )
-            }
+            dispatch.linear.fetchCandidateIssues(
+                pr.config.tracker.projectSlug,
+                pr.config.tracker.activeStates
+            )
         } catch (e: Exception) {
-            return Mono.just(DependencyGraphResponse(emptyList(), emptyList()))
+            return DependencyGraphResponse(emptyList(), emptyList())
         }
         val graph = DependencyGraph.build(candidates, pr.config.tracker.terminalStates)
         
@@ -268,7 +265,7 @@ class ApiV1Controller @Autowired constructor(
             }
         }.toList()
 
-        return Mono.just(DependencyGraphResponse(nodes, edges))
+        return DependencyGraphResponse(nodes, edges)
     }
 
     @GetMapping("/history", produces = ["application/json"])
@@ -309,7 +306,7 @@ class ApiV1Controller @Autowired constructor(
     )
 
     @GetMapping("/ratelimit/stats", produces = ["application/json"])
-    fun rateLimitStats(): Map<String, Map<String, RateLimitStatsEntry>> {
+    suspend fun rateLimitStats(): Map<String, Map<String, RateLimitStatsEntry>> {
         val allProviders = RateLimitRegistry.getAll()
         return config.projects.keys.associate { slug ->
             val matched = allProviders.filterKeys { key ->
@@ -349,10 +346,14 @@ class ApiV1Controller @Autowired constructor(
     }
 
     @PutMapping("/running/{identifier}/cancel")
-    fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
-        val found = projects.values.any { pr ->
+    suspend fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+        var found = false
+        for (pr in projects.values) {
             val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
-            id != null && runBlocking { pr.state.cancelAgent(id) }
+            if (id != null && pr.state.cancelAgent(id)) {
+                found = true
+                break
+            }
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
     }
@@ -394,21 +395,24 @@ class ApiV1Controller @Autowired constructor(
     )
 
     companion object {
-        private var loginProcess: Process? = null
-        private var loginUrl: String? = null
-        private var loginCode: String? = null
+        @Volatile private var loginProcess: Process? = null
+        @Volatile private var loginUrl: String? = null
+        @Volatile private var loginCode: String? = null
+        private val loginLock = Any()
     }
 
     @PostMapping("/codex-login")
     fun startCodexLogin(): Mono<ResponseEntity<CodexLoginStatus>> {
-        loginProcess?.let { if (it.isAlive) {
-            return Mono.just(
-                if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
-                else ResponseEntity.status(409).build()
-            )
-        } }
-        loginUrl = null
-        loginCode = null
+        synchronized(loginLock) {
+            loginProcess?.let { if (it.isAlive) {
+                return Mono.just(
+                    if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+                    else ResponseEntity.status(409).build()
+                )
+            } }
+            loginUrl = null
+            loginCode = null
+        }
         return Mono.fromCallable {
             val pb = ProcessBuilder("bash", "-lc", "codex login --device-auth")
             pb.redirectErrorStream(true)

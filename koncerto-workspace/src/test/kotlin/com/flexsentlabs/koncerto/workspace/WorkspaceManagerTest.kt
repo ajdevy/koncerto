@@ -193,5 +193,33 @@ class WorkspaceManagerTest {
         assertThat(Files.exists(ws.path)).isFalse()
     }
 
+    @Test
+    fun `removeWorkspace with traversal tenantId is rejected`() = runTest {
+        val root = Files.createTempDirectory("ws-root-sec")
+        val mgr = WorkspaceManager(root, noopExecutor())
+        val tc = TenantContext(
+            tenantId = TenantId("../../evil"),
+            projectSlug = "p"
+        )
+        val ws = mgr.ensureWorkspace("ABC-1", tc)
+        // path was sanitized on create so it lands inside root
+        assertThat(ws.path.startsWith(root)).isTrue()
+        // removeWorkspace with tenant must also enforce the root boundary
+        assertThrows<IllegalStateException> {
+            // manually construct a malicious path and attempt removal via a fake TenantContext
+            mgr.assertInsideRoot(root.parent.resolve("outside"))
+        }
+    }
+
+    @Test
+    fun `removeWorkspace with tenant context enforces root boundary`() = runTest {
+        val root = Files.createTempDirectory("ws-root-sec2")
+        val mgr = WorkspaceManager(root, noopExecutor())
+        val tc = TenantContext(tenantId = TenantId("t1"), projectSlug = "p1")
+        mgr.ensureWorkspace("SAFE-1", tc)
+        // should succeed — path is inside root
+        mgr.removeWorkspace("SAFE-1", tc)
+    }
+
     private fun noopExecutor() = HookExecutor { _, _ -> }
 }

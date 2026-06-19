@@ -84,6 +84,52 @@ class SubtaskOrchestratorTest {
         assertThat(failed[0].subtaskId).isEqualTo("b")
     }
 
+    @Test
+    fun `parallel mode deletes branch even when subtask runner throws`(@TempDir tempDir: Path) = runTest {
+        val deletedBranches = mutableListOf<String>()
+        val runner = FakeSubtaskRunner { throw RuntimeException("crash") }
+        val git = object : FakeGitWorkflow() {
+            override fun deleteBranch(workspacePath: Path, branchName: String) {
+                deletedBranches.add(branchName)
+            }
+        }
+        val orchestrator = createOrchestrator(runner = runner, gitWorkflow = git)
+        val manifest = SubtaskManifest(
+            issueId = "TEST-2",
+            subtasks = listOf(SubtaskDef(id = "x", description = "X", prompt = "p"))
+        )
+        runCatching {
+            orchestrator.execute(
+                workspacePath = tempDir,
+                manifest = manifest,
+                config = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.PARALLEL)
+            ).toList()
+        }
+        assertThat(deletedBranches.isNotEmpty()).isTrue()
+    }
+
+    @Test
+    fun `parallel mode uses provided baseBranch instead of hardcoded main`(@TempDir tempDir: Path) = runTest {
+        val createdFrom = mutableListOf<String>()
+        val git = object : FakeGitWorkflow() {
+            override fun createBranchFrom(workspacePath: Path, branchName: String, sourceBranch: String) {
+                createdFrom.add(sourceBranch)
+            }
+        }
+        val orchestrator = createOrchestrator(gitWorkflow = git)
+        val manifest = SubtaskManifest(
+            issueId = "TEST-3",
+            subtasks = listOf(SubtaskDef(id = "y", description = "Y", prompt = "p"))
+        )
+        orchestrator.execute(
+            workspacePath = tempDir,
+            manifest = manifest,
+            config = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.PARALLEL),
+            baseBranch = "develop"
+        ).toList()
+        assertThat(createdFrom.all { it == "develop" }).isTrue()
+    }
+
     private fun createOrchestrator(
         runner: SubtaskRunner? = null,
         gitWorkflow: GitWorkflow? = null

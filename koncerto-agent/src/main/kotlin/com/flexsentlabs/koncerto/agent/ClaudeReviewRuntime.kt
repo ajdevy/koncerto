@@ -119,15 +119,10 @@ class ClaudeReviewRuntime(
     }
 
     internal fun hasNonZeroCritical(output: String): Boolean {
-        val lines = output.lines()
-        var inCritical = false
-        for (line in lines) {
-            if (line.contains("**Critical:**")) {
-                val count = line.filter { it.isDigit() }.takeIf { it.isNotEmpty() }?.toIntOrNull()
-                if (count != null && count > 0) return true
-            }
+        val countRegex = Regex("""\*\*Critical:\*\*\s*(\d+)""")
+        return output.lines().any { line ->
+            countRegex.find(line)?.groupValues?.get(1)?.toIntOrNull()?.let { it > 0 } == true
         }
-        return false
     }
 
     override fun isAlive(): Boolean = process?.isAlive == true
@@ -138,6 +133,7 @@ class ClaudeReviewRuntime(
         try { process?.destroy() } catch (_: Exception) {}
         try { process?.waitFor(5, TimeUnit.SECONDS) } catch (_: Exception) {}
         workerJob?.cancel()
+        scope.cancel()
         events.close()
     }
 }

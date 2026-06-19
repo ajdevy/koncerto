@@ -6,6 +6,7 @@ import java.nio.file.Path
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 class DockerContainerManager(
     private val config: DockerConfig,
@@ -127,11 +128,11 @@ class DockerContainerManager(
     }
 
     companion object {
-        private var counter = 0L
+        private val counter = AtomicLong(0)
         private val dockerDateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")
 
         fun generateContainerId(): String {
-            val id = "koncerto-agent-${System.currentTimeMillis()}-${counter++}"
+            val id = "koncerto-agent-${System.currentTimeMillis()}-${counter.getAndIncrement()}"
             return id.replace(Regex("[^a-zA-Z0-9_.-]"), "_")
         }
 
