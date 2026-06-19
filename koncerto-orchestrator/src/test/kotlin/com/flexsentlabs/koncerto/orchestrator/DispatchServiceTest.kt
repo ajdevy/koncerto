@@ -7,6 +7,7 @@ import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.agent.SubtaskRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
@@ -45,6 +46,10 @@ import org.junit.jupiter.api.io.TempDir
 class DispatchServiceTest {
 
     companion object {
+        init {
+            AgentAuthChecker.markAuthenticated("codex")
+        }
+
         @JvmStatic
         fun issue(
             id: String, identifier: String, state: String,
