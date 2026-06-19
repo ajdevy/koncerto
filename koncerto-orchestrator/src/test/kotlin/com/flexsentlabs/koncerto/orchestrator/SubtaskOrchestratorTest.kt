@@ -162,7 +162,7 @@ class FakeSubtaskRunner(
     }
 }
 
-class FakeGitWorkflow(
+open class FakeGitWorkflow(
     config: com.flexsentlabs.koncerto.core.config.GitConfig = com.flexsentlabs.koncerto.core.config.GitConfig(enabled = false, branchPrefix = "feature/"),
     logger: StructuredLogger = StructuredLogger(emptyList<LogSink>())
 ) : GitWorkflow(config, logger) {
