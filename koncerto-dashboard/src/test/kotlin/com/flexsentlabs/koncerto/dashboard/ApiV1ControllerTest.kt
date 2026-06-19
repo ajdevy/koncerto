@@ -320,7 +320,7 @@ class ApiV1ControllerTest {
         )
         state.claimed["1"] = true
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
-        val response = controller.cancelAgent("ABC-1")
+        val response = runBlocking { controller.cancelAgent("ABC-1") }
         assertThat(response.statusCodeValue).isEqualTo(200)
         assertThat(state.running.containsKey("1")).isFalse()
         assertThat(state.claimed.contains("1")).isFalse()
@@ -346,7 +346,7 @@ class ApiV1ControllerTest {
     fun `cancelAgent returns 404 for unknown identifier`() {
         val state = RuntimeState()
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
-        val response = controller.cancelAgent("UNKNOWN")
+        val response = runBlocking { controller.cancelAgent("UNKNOWN") }
         assertThat(response.statusCodeValue).isEqualTo(404)
     }
 
@@ -457,8 +457,8 @@ class ApiV1ControllerTest {
         val state = RuntimeState()
         val orchestrator = createOrchestrator(config, state)
         val controller = ApiV1Controller(config, orchestrator)
-        val result = controller.dependencies("").block()
-        assertThat(result!!.nodes).isEmpty()
+        val result = runBlocking { controller.dependencies("") }
+        assertThat(result.nodes).isEmpty()
         assertThat(result.edges).isEmpty()
     }
 
@@ -468,8 +468,8 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Issue 1", null, 1, "Todo", null, "http://url", emptyList(), emptyList(), null, null, null)
         val config = minimalConfig()
         val controller = ApiV1Controller(config, createOrchestrator(config, state, candidateIssues = listOf(issue)))
-        val result = controller.dependencies("").block()
-        assertThat(result!!.nodes).isNotEmpty()
+        val result = runBlocking { controller.dependencies("") }
+        assertThat(result.nodes).isNotEmpty()
         assertThat(result.nodes[0].id).isEqualTo("1")
         assertThat(result.nodes[0].label).isEqualTo("ABC-1")
         assertThat(result.nodes[0].state).isEqualTo("Todo")
@@ -484,8 +484,8 @@ class ApiV1ControllerTest {
         val issue2 = Issue("2", "XYZ-2", "Issue 2", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         val config = minimalConfig()
         val controller = ApiV1Controller(config, createOrchestrator(config, state, candidateIssues = listOf(issue1, issue2)))
-        val result = controller.dependencies("").block()
-        assertThat(result!!.nodes).hasSize(2)
+        val result = runBlocking { controller.dependencies("") }
+        assertThat(result.nodes).hasSize(2)
         assertThat(result.edges).isNotEmpty()
         assertThat(result.edges[0].from).isEqualTo("ABC-1")
         assertThat(result.edges[0].to).isEqualTo("XYZ-2")
@@ -527,8 +527,8 @@ class ApiV1ControllerTest {
             metricsRepository = null
         )
         val controller = ApiV1Controller(config, orchestrator)
-        val result = controller.dependencies("").block()
-        assertThat(result!!.nodes).isEmpty()
+        val result = runBlocking { controller.dependencies("") }
+        assertThat(result.nodes).isEmpty()
         assertThat(result.edges).isEmpty()
     }
 
@@ -537,8 +537,8 @@ class ApiV1ControllerTest {
         val state = RuntimeState()
         val config = minimalConfig()
         val controller = ApiV1Controller(config, createOrchestrator(config, state))
-        val result = controller.dependencies("nonexistent").block()
-        assertThat(result!!.nodes).isEmpty()
+        val result = runBlocking { controller.dependencies("nonexistent") }
+        assertThat(result.nodes).isEmpty()
         assertThat(result.edges).isEmpty()
     }
 
@@ -568,7 +568,7 @@ class ApiV1ControllerTest {
         val providers = field.get(registry) as MutableMap<String, Any>
         providers.clear()
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
-        val result = controller.rateLimitStats()
+        val result = runBlocking { controller.rateLimitStats() }
         assertThat(result).isNotEmpty()
         assertThat(result["default"]).isNotNull()
         assertThat(result["default"]!!).isEmpty()
@@ -596,7 +596,7 @@ class ApiV1ControllerTest {
         registry.getOrCreate("test-default", rateLimitConfig, scope)
         try {
             val controller = ApiV1Controller(config, createOrchestrator(config, state))
-            val result = controller.rateLimitStats()
+            val result = runBlocking { controller.rateLimitStats() }
             assertThat(result).isNotEmpty()
             assertThat(result["default"]).isNotNull()
         } finally {
@@ -620,7 +620,7 @@ class ApiV1ControllerTest {
         registry.getOrCreate("default:test", rateLimitConfig, scope)
         try {
             val controller = ApiV1Controller(config, createOrchestrator(config, state))
-            val result = controller.rateLimitStats()
+            val result = runBlocking { controller.rateLimitStats() }
             assertThat(result).isNotEmpty()
             assertThat(result["default"]).isNotNull()
         } finally {
