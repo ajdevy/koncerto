@@ -17,6 +17,7 @@ class WorkspaceManager(
     fun ensureWorkspace(identifier: String, tenantContext: TenantContext? = null): Workspace {
         val key = WorkspaceKey.sanitize(identifier)
         val path = resolvePath(key, tenantContext)
+        assertInsideRoot(path)
         val createdNow = !Files.exists(path)
         if (createdNow) Files.createDirectories(path)
         return Workspace(path, key, createdNow)
