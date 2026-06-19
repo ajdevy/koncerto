@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.atomic.AtomicReference
 import java.util.function.Supplier
 
@@ -21,10 +22,13 @@ class PrometheusMetricsBinder(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
+        // Load once synchronously so gauge snapshots in bindTo() see real data on startup.
+        // Constructor runs on a regular JVM thread (not a reactive dispatcher), so runBlocking is safe here.
+        try { cache.set(runBlocking { metricsRepository.findAll() }) } catch (_: Exception) {}
         scope.launch {
             while (true) {
-                try { cache.set(metricsRepository.findAll()) } catch (_: Exception) {}
                 delay(refreshIntervalMs)
+                try { cache.set(metricsRepository.findAll()) } catch (_: Exception) {}
             }
         }
     }
