@@ -10,10 +10,11 @@ RUN apk add --no-cache \
     docker-cli \
     github-cli \
     nodejs \
-    npm
+    npm \
+    socat
 
 RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
 WORKDIR /workspace
 
-ENTRYPOINT ["sleep", "infinity"]
+CMD ["sleep", "infinity"]

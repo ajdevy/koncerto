@@ -17,7 +17,6 @@ class CliRunner(
             "agents" -> printAgents()
             "restart" -> orchestrator.restart()
             "help" -> printHelp()
-            else -> orchestrator.start()
         }
     }
 

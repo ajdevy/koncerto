@@ -60,6 +60,7 @@ data class AgentProjectConfig(
     val sequentialMode: Boolean = false,
     val maxConcurrentAgents: Int = 2,
     val maxTurns: Int = 20,
+    val maxRetries: Int = 3,
     val maxRetryBackoffMs: Long = 300000,
     val maxConcurrentAgentsByState: Map<String, Int> = emptyMap(),
     val turnTimeoutMs: Long = 3600000,

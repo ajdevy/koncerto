@@ -4,7 +4,14 @@ RUN apk add --no-cache \
     bash \
     wget \
     docker-cli \
-    git
+    git \
+    nodejs \
+    npm \
+    github-cli
+
+RUN npm install -g \
+    @openai/codex \
+    @anthropic-ai/claude-code
 
 WORKDIR /app
 

@@ -49,12 +49,25 @@ open class GitWorkflow(
     fun createBranch(workspacePath: Path, issueIdentifier: String) {
         if (!config.enabled) return
         if (!isGitRepo(workspacePath)) {
-            logger.warn("git_not_a_repository", mapOf("path" to workspacePath.toString()))
-            return
+            logger.info("git_init", mapOf("path" to workspacePath.toString()))
+            runGitSafe(workspacePath, "init", "--initial-branch=main")
+            runGitSafe(workspacePath, "config", "user.email", "agent@koncerto.dev")
+            runGitSafe(workspacePath, "config", "user.name", "Koncerto Agent")
+            val readme = workspacePath.resolve("README.md")
+            if (!readme.toFile().exists()) {
+                readme.toFile().writeText("# ${workspacePath.fileName}\n")
+            }
+            runGitSafe(workspacePath, "add", "-A")
+            runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "initial")
         }
         val branch = branchName(issueIdentifier)
-        val created = runGitSafe(workspacePath, "checkout", "-b", branch)
-        if (created == null) {
+        val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
+        val created = if (branchExists) {
+            runGitSafe(workspacePath, "checkout", branch)
+        } else {
+            runGitSafe(workspacePath, "checkout", "-b", branch)
+        }
+        if (created == null && !branchExists) {
             runGitSafe(workspacePath, "checkout", branch)
         }
     }

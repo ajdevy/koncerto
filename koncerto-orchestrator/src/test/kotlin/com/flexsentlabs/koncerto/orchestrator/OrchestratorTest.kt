@@ -716,7 +716,7 @@ class OrchestratorTest {
     fun `scheduleRetry caps backoff at maxRetryBackoffMs`() = runBlocking {
         val root = Files.createTempDirectory("orch-test-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
-        val pc = sampleProjectConfig().copy(agent = sampleProjectConfig().agent.copy(maxRetryBackoffMs = 60_000))
+        val pc = sampleProjectConfig().copy(agent = sampleProjectConfig().agent.copy(maxRetryBackoffMs = 60_000, maxRetries = 10))
         val config = ServiceConfig(projects = mapOf(defaultProjectSlug to pc))
         val state = RuntimeState()
         val linear = FakeLinearClient(emptyList())

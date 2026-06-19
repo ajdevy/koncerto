@@ -43,8 +43,19 @@
     <div class="totals">
         <strong>Tokens:</strong> <span id="totals">loading...</span>
     </div>
+    <div id="auth-banner" style="display:none; background:#330; color:#fc0; padding:0.5rem; margin-bottom:1rem; border:1px solid #963;">
+        Agent login required: <span id="auth-agents"></span>
+        <button onclick="document.getElementById('auth-banner').style.display='none'" style="float:right; background:#333; color:#fc0; border:1px solid #963;">Dismiss</button>
+    </div>
     <div class="totals" id="tunnel-info" style="display:none;">
         <strong>Tunnel:</strong> <span id="tunnel-url">inactive</span>
+    </div>
+    <div class="totals" id="codex-login-section" style="display:block;">
+        <strong>Codex:</strong>
+        <span id="codex-login-status">checking...</span>
+        <button id="codex-login-btn" style="display:none;" onclick="startCodexLogin()">Login</button>
+        <button id="codex-login-cancel-btn" style="display:none;" onclick="cancelCodexLogin()">Cancel</button>
+        <div id="codex-login-url" style="display:none; margin-top:0.5rem;"></div>
     </div>
 
     <section id="running">
@@ -337,9 +348,102 @@
         loadTokenChart();
         loadDependencies();
         loadTunnel();
+        checkCodexLoginStatus();
+        loadAgentAuthStatus();
+        setInterval(checkCodexLoginStatus, 5000);
+        setInterval(loadAgentAuthStatus, 15000);
         setInterval(refresh, 5000);
         setInterval(loadDependencies, 30000);
         setInterval(loadTunnel, 15000);
+
+        async function loadAgentAuthStatus() {
+            try {
+                const r = await fetch('/api/v1/agent-auth-status');
+                const agents = await r.json();
+                const needing = agents.filter(a => a.needsAuth && !a.authenticated);
+                const banner = document.getElementById('auth-banner');
+                const span = document.getElementById('auth-agents');
+                if (needing.length > 0) {
+                    span.textContent = needing.map(a => a.agent).join(', ');
+                    banner.style.display = 'block';
+                } else {
+                    banner.style.display = 'none';
+                }
+            } catch (e) {}
+        }
+
+        async function startCodexLogin() {
+            const statusEl = document.getElementById('codex-login-status');
+            const urlEl = document.getElementById('codex-login-url');
+            const btn = document.getElementById('codex-login-btn');
+            const cancelBtn = document.getElementById('codex-login-cancel-btn');
+            statusEl.textContent = 'starting...';
+            btn.style.display = 'none';
+            try {
+                const r = await fetch('/api/v1/codex-login', { method: 'POST' });
+                const data = await r.json();
+                if (data.state === 'pending' && data.url) {
+                    statusEl.textContent = 'open URL in browser:';
+                    urlEl.style.display = 'block';
+                    urlEl.innerHTML = '<a href="' + data.url + '" target="_blank" style="color:#6fc;">' + data.url + '</a>' +
+                        (data.code ? '<br><b>Code: ' + data.code + '</b>' : '');
+                    cancelBtn.style.display = 'inline';
+                } else {
+                    statusEl.textContent = 'error: ' + data.state;
+                    btn.style.display = 'inline';
+                }
+            } catch (e) {
+                statusEl.textContent = 'error';
+                btn.style.display = 'inline';
+            }
+        }
+
+        async function checkCodexLoginStatus() {
+            const statusEl = document.getElementById('codex-login-status');
+            const urlEl = document.getElementById('codex-login-url');
+            const btn = document.getElementById('codex-login-btn');
+            const cancelBtn = document.getElementById('codex-login-cancel-btn');
+            try {
+                const r = await fetch('/api/v1/codex-login-status');
+                const data = await r.json();
+                if (data.state === 'completed') {
+                    statusEl.textContent = 'logged in';
+                    urlEl.style.display = 'none';
+                    btn.style.display = 'none';
+                    cancelBtn.style.display = 'none';
+                } else if (data.state === 'pending') {
+                    statusEl.textContent = 'open URL in browser:';
+                    urlEl.style.display = 'block';
+                    urlEl.innerHTML = '<a href="' + data.url + '" target="_blank" style="color:#6fc;">' + data.url + '</a>' +
+                        (data.code ? '<br><b>Code: ' + data.code + '</b>' : '');
+                    btn.style.display = 'none';
+                    cancelBtn.style.display = 'inline';
+                } else if (data.state === 'idle') {
+                    statusEl.textContent = 'not logged in';
+                    btn.style.display = 'inline';
+                    urlEl.style.display = 'none';
+                    cancelBtn.style.display = 'none';
+                } else {
+                    statusEl.textContent = data.state;
+                    btn.style.display = 'none';
+                    cancelBtn.style.display = 'none';
+                }
+            } catch (e) {
+                statusEl.textContent = 'offline';
+                btn.style.display = 'none';
+                cancelBtn.style.display = 'none';
+            }
+        }
+
+        async function cancelCodexLogin() {
+            try {
+                await fetch('/api/v1/cancel-codex-login', { method: 'POST' });
+            } catch (e) {}
+            document.getElementById('codex-login-status').textContent = 'cancelled';
+            document.getElementById('codex-login-url').style.display = 'none';
+            document.getElementById('codex-login-btn').style.display = 'inline';
+            document.getElementById('codex-login-cancel-btn').style.display = 'none';
+        }
     </script>
 </body>
 </html>

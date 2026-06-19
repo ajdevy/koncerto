@@ -1,5 +1,6 @@
 package com.flexsentlabs.koncerto.dashboard
 
+import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
 import com.flexsentlabs.koncerto.core.ratelimit.RateLimitRegistry
 import com.flexsentlabs.koncerto.core.result.Result
@@ -25,6 +26,7 @@ import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
 import org.springframework.beans.factory.annotation.Autowired
 import java.util.LinkedHashMap
+import java.util.concurrent.TimeUnit
 
 @RestController
 @RequestMapping("/api/v1")
@@ -353,5 +355,112 @@ class ApiV1Controller @Autowired constructor(
             id != null && runBlocking { pr.state.cancelAgent(id) }
         }
         return if (found) ResponseEntity.ok().build() else ResponseEntity.notFound().build()
+    }
+
+    @Serializable
+    data class AgentAuthStatus(
+        val agent: String,
+        val authenticated: Boolean,
+        val needsAuth: Boolean
+    )
+
+    @GetMapping("/agent-auth-status", produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun getAgentAuthStatus(): ResponseEntity<List<AgentAuthStatus>> {
+        val configuredKinds = projects.values
+            .flatMap { pr -> pr.config.agent.stages.values.mapNotNull { it.agentKind } }
+            .distinct()
+            .ifEmpty { listOf("codex", "opencode", "claude") }
+        val statuses = configuredKinds.map { kind ->
+            AgentAuthStatus(
+                agent = kind,
+                authenticated = AgentAuthChecker.isAuthenticated(kind),
+                needsAuth = AgentAuthChecker.needsAuth(kind)
+            )
+        }
+        return ResponseEntity.ok(statuses)
+    }
+
+    @Serializable
+    data class DeviceAuthResponse(
+        val url: String,
+        val code: String
+    )
+
+    @Serializable
+    data class CodexLoginStatus(
+        val state: String,
+        val url: String? = null,
+        val code: String? = null
+    )
+
+    companion object {
+        private var loginProcess: Process? = null
+        private var loginUrl: String? = null
+        private var loginCode: String? = null
+    }
+
+    @PostMapping("/codex-login")
+    fun startCodexLogin(): Mono<ResponseEntity<CodexLoginStatus>> {
+        loginProcess?.let { if (it.isAlive) {
+            return Mono.just(
+                if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+                else ResponseEntity.status(409).build()
+            )
+        } }
+        loginUrl = null
+        loginCode = null
+        return Mono.fromCallable {
+            val pb = ProcessBuilder("bash", "-lc", "codex login --device-auth")
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            loginProcess = p
+            val output = p.inputStream
+            val text = withTimeout(output, 5000)
+            val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
+            loginUrl = Regex("https?://[^\\s]+").find(clean)?.value
+            loginCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
+            ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        }.onErrorResume {
+            Mono.just(ResponseEntity.status(500).body(CodexLoginStatus("error")))
+        }
+    }
+
+    private fun withTimeout(input: java.io.InputStream, ms: Long): String {
+        val deadline = System.currentTimeMillis() + ms
+        val sb = StringBuilder()
+        val buf = ByteArray(1024)
+        while (System.currentTimeMillis() < deadline) {
+            while (input.available() > 0) {
+                val n = input.read(buf, 0, minOf(buf.size, input.available()))
+                if (n < 0) return sb.toString()
+                sb.append(String(buf, 0, n, Charsets.UTF_8))
+            }
+            if (sb.contains("https://") || sb.contains("one-time code")) break
+            Thread.sleep(100)
+        }
+        return sb.toString()
+    }
+
+    @GetMapping("/codex-login-status")
+    fun getCodexLoginStatus(): ResponseEntity<CodexLoginStatus> {
+        val alive = loginProcess?.isAlive == true
+        if (!alive && loginProcess != null) {
+            loginProcess = null
+            return ResponseEntity.ok(CodexLoginStatus("completed"))
+        }
+        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        return ResponseEntity.ok(CodexLoginStatus("idle"))
+    }
+
+    @PostMapping("/cancel-codex-login")
+    fun cancelCodexLogin(): ResponseEntity<Unit> {
+        loginProcess?.let {
+            it.destroyForcibly()
+            try { it.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+        }
+        loginProcess = null
+        loginUrl = null
+        loginCode = null
+        return ResponseEntity.ok().build()
     }
 }

@@ -71,7 +71,6 @@ class Orchestrator(
                 agentRunner = agentRunner,
                 workflowCache = workflowCache,
                 logger = logger,
-                projectSlug = slug,
                 workspaces = ws,
                 issueProjectMap = issueProjectMap,
                 metricsRepository = metricsRepository,
@@ -104,13 +103,14 @@ class Orchestrator(
     }
 
     fun restart() {
+        loopJob?.cancel()
         shutdownRequested = false
         scope.launch {
             for ((_, pr) in projects) {
                 pr.state.clearAll()
             }
         }
-        scope.launch { tickLoop() }
+        loopJob = scope.launch { tickLoop() }
     }
 
     fun requestShutdown(): Boolean {
@@ -178,7 +178,7 @@ class Orchestrator(
                     val nc = pr.config.notifications
                     if (nc.onStalled && pr.dispatch.notifier != null) {
                         pr.dispatch.notifier.send(NotificationEvent.AgentStalled(
-                            projectSlug = slug,
+                            projectSlug = pr.config.tracker.projectSlug,
                             issueId = id,
                             issueIdentifier = entry.issue.identifier,
                             title = entry.issue.title,
@@ -247,7 +247,7 @@ class Orchestrator(
                     val errorTypeName = event.agentError.type::class.simpleName ?: "Unknown"
                     if (!pr.limitCooldown.shouldSend(errorTypeName, event.issueId)) return
                     pr.dispatch.notifier!!.send(NotificationEvent.LimitDetected(
-                        projectSlug = slug,
+                        projectSlug = pr.config.tracker.projectSlug,
                         issueId = event.issueId,
                         issueIdentifier = entry.issue.identifier,
                         title = entry.issue.title,

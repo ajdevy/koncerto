@@ -22,8 +22,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import com.flexsentlabs.koncerto.core.tenant.TenantContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 class DockerRuntime(
     private val command: String,
@@ -41,6 +43,10 @@ class DockerRuntime(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile
     private var pid: Long? = null
+    @Volatile
+    private var jsonlMode: Boolean = false
+    @Volatile
+    private var turnCompletedEmitted: Boolean = false
 
     override suspend fun start(tenantContext: TenantContext?): Boolean = withContext(Dispatchers.IO) {
         if (!isDockerDaemonAvailable()) {
@@ -48,7 +54,8 @@ class DockerRuntime(
             return@withContext false
         }
         try {
-            val execCmd = "docker exec -i $containerId bash -lc '$command'"
+            val socatCmd = command.replace("'", "'\\''")
+            val execCmd = "docker exec -i $containerId bash -lc 'socat EXEC:\"$socatCmd\",pty,raw,echo=0 STDIO'"
             val pb = ProcessBuilder("bash", "-lc", execCmd)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(false)
@@ -85,15 +92,21 @@ class DockerRuntime(
             reader.lineSequence().forEach { line ->
                 if (line.isBlank()) return@forEach
                 _output.tryEmit("[stdout] $line")
-                try {
-                    val msgs = JsonRpcFraming.decodeAll(line)
-                    msgs.forEach { dispatchMessage(it) }
-                } catch (e: Exception) {
-                    events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
-                }
+                    try {
+                        val msgs = JsonRpcFraming.decodeAll(line)
+                        msgs.forEach { dispatchMessage(it) }
+                    } catch (e: Exception) {
+                        if (!tryHandleAsJsonl(line)) {
+                            events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
+                        }
+                    }
             }
         } catch (e: Exception) {
             logger.warn("docker_stdout_read_failed", emptyMap(), "error" to (e.message ?: "unknown"))
+        }
+        if (jsonlMode && !turnCompletedEmitted) {
+            _output.tryEmit("[jsonl] stream ended")
+            events.trySend(AgentEvent.TurnCompleted("?", "?", null, pid))
         }
     }
 
@@ -217,6 +230,74 @@ class DockerRuntime(
     }
 
     override fun events(): Flow<AgentEvent> = events.receiveAsFlow()
+
+    private fun tryHandleAsJsonl(line: String): Boolean {
+        if (!line.trimStart().startsWith("{")) return false
+        return try {
+            val element = Json.parseToJsonElement(line)
+            val obj = element.jsonObject
+            val type = (obj["type"] as? JsonPrimitive)?.content
+            jsonlMode = true
+            when (type) {
+                "thread.started" -> {
+                    val threadId = obj["thread_id"]?.toString()?.trim('"') ?: UUID.randomUUID().toString()
+                    events.trySend(AgentEvent.SessionStarted(threadId, "0", pid))
+                    true
+                }
+                "turn.started", "item.started" -> {
+                    _output.tryEmit("[jsonl] $type")
+                    true
+                }
+                "item.completed", "item.created" -> {
+                    _output.tryEmit("[jsonl] $type")
+                    true
+                }
+                "turn.completed" -> {
+                    turnCompletedEmitted = true
+                    val usage = extractUsageFromJsonl(obj)
+                    events.trySend(AgentEvent.TurnCompleted("?", "?", usage, pid))
+                    true
+                }
+                "error" -> {
+                    val message = obj["message"]?.toString()?.trim('"') ?: "unknown error"
+                    events.trySend(AgentEvent.TurnFailed("?", "?", message, pid))
+                    true
+                }
+                else -> {
+                    _output.tryEmit("[jsonl] $type")
+                    true
+                }
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun extractUsageFromJsonl(obj: JsonObject): TokenUsage? {
+        val usage = obj["usage"] as? JsonObject ?: return null
+        val input = (usage["input_tokens"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
+        val output = (usage["output_tokens"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
+        val total = (usage["total_tokens"] as? JsonPrimitive)?.content?.toLongOrNull()
+            ?: (input + output)
+        return TokenUsage(input, output, total)
+    }
+
+    override fun writeRaw(data: String) {
+        synchronized(this) {
+            writer?.let {
+                it.write(data)
+                it.newLine()
+                it.flush()
+            }
+        }
+    }
+
+    override fun closeStdin() {
+        synchronized(this) {
+            try { writer?.close() } catch (_: Exception) {}
+            writer = null
+        }
+    }
 
     override fun send(method: String, params: JsonElement?): String {
         val id = requestId.getAndIncrement().toString()

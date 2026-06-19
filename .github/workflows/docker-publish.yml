@@ -4,8 +4,16 @@ on:
   push:
     branches: [main]
     tags: ['v*']
+    paths:
+      - koncerto-app/Dockerfile
+      - docker-compose.yml
+      - .github/workflows/docker-publish.yml
   pull_request:
     branches: [main]
+    paths:
+      - koncerto-app/Dockerfile
+      - docker-compose.yml
+      - .github/workflows/docker-publish.yml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

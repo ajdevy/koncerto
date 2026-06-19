@@ -26,7 +26,7 @@ class AutoReviewOrchestrator(
     private val logger: StructuredLogger
 ) {
     private val reviewStage: StageAgentConfig?
-        get() = projectConfig.agent.stages["review"]
+        get() = projectConfig.agent.stages["in review"]
 
     suspend fun onCodingComplete(issue: Issue): ReviewDecision {
         val stage = reviewStage ?: return ReviewDecision.NoReview

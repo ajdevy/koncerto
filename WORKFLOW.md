@@ -7,8 +7,8 @@ git:
   enabled: true
   branch_prefix: "feature/"
   auto_commit: true
-  auto_push: true
-  create_pr: true
+  auto_push: false
+  create_pr: false
   pr_base: main
 projects:
   default:
@@ -40,25 +40,21 @@ projects:
       kind: opencode
       max_concurrent_agents: 2
       docker:
-        enabled: true
-        image: koncerto-agent:latest
-        dockerfile: Dockerfile.agent
+        enabled: false
       max_turns: 5
       max_review_attempts: 3
       stages:
         Todo:
           prompt: prompts/implement.md
           agent_kind: codex
-          command: codex
-          model: codex-5.4-mini
-          effort: max
+          command: codex exec --json --skip-git-repo-check
           on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
           agent_kind: claude
           command: claude --print
           model: claude-sonnet-4-6
-          effort: max
+          effort: high
           on_complete_state: "Done"
           max_review_attempts: 3
 ---

@@ -360,7 +360,7 @@ class Beans {
             subtaskOrchestrator = subtaskOrchestrator,
             workplanParser = workplanParser,
             auditLogger = auditLogger,
-            autoReviewOrchestratorFactory = if (config.projects.values.any { it.agent.stages.containsKey("review") }) {
+            autoReviewOrchestratorFactory = if (config.projects.values.any { it.agent.stages.containsKey("in review") }) {
                 { pc, state ->
                     AutoReviewOrchestrator(
                         agentRunner = runner,

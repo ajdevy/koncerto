@@ -42,7 +42,6 @@ class TenantDispatchTest {
             agentRunner = runner,
             workflowCache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) },
             logger = StructuredLogger(emptyList()),
-            projectSlug = "my-project",
             tenantResolver = tenantResolver
         )
         runBlocking {
@@ -69,7 +68,6 @@ class TenantDispatchTest {
             agentRunner = runner,
             workflowCache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) },
             logger = StructuredLogger(emptyList()),
-            projectSlug = "my-project",
             tenantResolver = null
         )
         runBlocking {
@@ -114,7 +112,7 @@ class TenantDispatchTest {
 
     private fun configWithTenant() = ProjectConfig(
         tracker = TrackerConfig(
-            kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p"
+            kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "my-project"
         ),
         workspace = WorkspaceConfig(root = "/tmp"),
         agent = AgentProjectConfig(maxConcurrentAgents = 10),

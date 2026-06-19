@@ -137,6 +137,7 @@ data class ServiceConfig(
             if (maxTurns <= 0) {
                 throw IllegalStateException("agent.max_turns must be positive")
             }
+            val maxRetries = (map?.get("max_retries") as? Number)?.toInt() ?: 3
             val maxRetryBackoffMs = (map?.get("max_retry_backoff_ms") as? Number)?.toLong() ?: 300_000L
             val perState = (map?.get("max_concurrent_agents_by_state") as? Map<*, *>)
                 ?.mapNotNull { (k, v) ->
@@ -161,6 +162,7 @@ data class ServiceConfig(
                 command = command,
                 maxConcurrentAgents = maxConcurrentAgents,
                 maxTurns = maxTurns,
+                maxRetries = maxRetries,
                 maxRetryBackoffMs = maxRetryBackoffMs,
                 maxConcurrentAgentsByState = perState,
                 turnTimeoutMs = turnTimeoutMs,

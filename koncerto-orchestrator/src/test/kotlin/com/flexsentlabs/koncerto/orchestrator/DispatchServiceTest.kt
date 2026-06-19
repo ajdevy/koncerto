@@ -190,7 +190,7 @@ class DispatchServiceTest {
 
     @Test
     fun `scheduleRetry caps backoff at maxRetryBackoffMs`() {
-        val projectConfig = config().copy(agent = config().agent.copy(maxRetryBackoffMs = 60_000))
+        val projectConfig = config().copy(agent = config().agent.copy(maxRetryBackoffMs = 60_000, maxRetries = 10))
         val (svc, state) = createServiceWithState(projectConfig = projectConfig)
         repeat(10) { svc.scheduleRetry(issue("1", "A-1", "Todo"), "err") }
         val entry = state.retryAttempts["1"]
@@ -651,7 +651,7 @@ class DispatchServiceTest {
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val logger = StructuredLogger(emptyList())
         val client = linear ?: candidates?.let { SimpleLinear(it) } ?: SimpleLinear(emptyList())
-        return DispatchService(cfg, state, client, runner, wc, logger, "proj", workspaces)
+        return DispatchService(cfg, state, client, runner, wc, logger, workspaces)
     }
 
     private fun createServiceWithState(

@@ -44,6 +44,16 @@ class LinearClientTest {
         override suspend fun execute(query: String, variables: JsonObject): JsonObject {
             calls.add(query to variables)
             error?.let { throw it }
+            if (query.contains("ProjectSlugId")) {
+                val slug = (variables["projectId"] as? JsonPrimitive)?.content ?: "proj"
+                return buildJsonObject {
+                    put("data", buildJsonObject {
+                        put("project", buildJsonObject {
+                            put("slugId", JsonPrimitive(slug))
+                        })
+                    })
+                }
+            }
             return responses.removeFirst()
         }
     }
@@ -1221,7 +1231,7 @@ class LinearClientTest {
             assertThat(result.size).isEqualTo(2)
             assertThat(result[0].id).isEqualTo("i1")
             assertThat(result[1].id).isEqualTo("i2")
-            assertThat(fake.calls.size).isEqualTo(3)
+            assertThat(fake.calls.size).isEqualTo(4)
         }
 
         @Test
@@ -1493,8 +1503,8 @@ class LinearClientTest {
             val sut = DefaultLinearClient(fake, "my-proj")
             sut.fetchCandidateIssues("my-proj", listOf("Todo", "In Progress"))
 
-            assertThat(fake.calls.size).isEqualTo(1)
-            val (query, vars) = fake.calls[0]
+            assertThat(fake.calls.size).isEqualTo(2)
+            val (query, vars) = fake.calls[1]
             assertThat(query).contains("Candidates")
             assertThat(vars["projectSlug"] == JsonPrimitive("my-proj")).isTrue()
             assertThat(vars["first"] == JsonPrimitive(50)).isTrue()
@@ -1518,8 +1528,8 @@ class LinearClientTest {
             val sut = DefaultLinearClient(fake, "my-proj")
             sut.fetchIssuesByStates("my-proj", listOf("Done"))
 
-            assertThat(fake.calls.size).isEqualTo(1)
-            val (query, vars) = fake.calls[0]
+            assertThat(fake.calls.size).isEqualTo(2)
+            val (query, vars) = fake.calls[1]
             assertThat(query).contains("IssuesByStates")
             assertThat(vars["projectSlug"] == JsonPrimitive("my-proj")).isTrue()
             assertThat(vars["first"] == JsonPrimitive(50)).isTrue()
@@ -1595,16 +1605,20 @@ class LinearClientTest {
                 responses = mutableListOf(buildJsonObject {
                     put("data", buildJsonObject {
                         put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("Todo"))
-                                        })
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-2"))
-                                            put("name", JsonPrimitive("Done"))
+                            put("teams", buildJsonObject {
+                                put("nodes", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("states", buildJsonObject {
+                                            put("nodes", buildJsonArray {
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-1"))
+                                                    put("name", JsonPrimitive("Todo"))
+                                                })
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-2"))
+                                                    put("name", JsonPrimitive("Done"))
+                                                })
+                                            })
                                         })
                                     })
                                 })
@@ -1625,16 +1639,20 @@ class LinearClientTest {
                 responses = mutableListOf(buildJsonObject {
                     put("data", buildJsonObject {
                         put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("todo"))
-                                        })
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-2"))
-                                            put("name", JsonPrimitive("In Progress"))
+                            put("teams", buildJsonObject {
+                                put("nodes", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("states", buildJsonObject {
+                                            put("nodes", buildJsonArray {
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-1"))
+                                                    put("name", JsonPrimitive("todo"))
+                                                })
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-2"))
+                                                    put("name", JsonPrimitive("In Progress"))
+                                                })
+                                            })
                                         })
                                     })
                                 })
@@ -1700,12 +1718,16 @@ class LinearClientTest {
                 responses = mutableListOf(buildJsonObject {
                     put("data", buildJsonObject {
                         put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("Todo"))
+                            put("teams", buildJsonObject {
+                                put("nodes", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("states", buildJsonObject {
+                                            put("nodes", buildJsonArray {
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-1"))
+                                                    put("name", JsonPrimitive("Todo"))
+                                                })
+                                            })
                                         })
                                     })
                                 })
@@ -1726,13 +1748,17 @@ class LinearClientTest {
                 responses = mutableListOf(buildJsonObject {
                     put("data", buildJsonObject {
                         put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(JsonPrimitive("not-an-object"))
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("Todo"))
+                            put("teams", buildJsonObject {
+                                put("nodes", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("states", buildJsonObject {
+                                            put("nodes", buildJsonArray {
+                                                add(JsonPrimitive("not-an-object"))
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-1"))
+                                                    put("name", JsonPrimitive("Todo"))
+                                                })
+                                            })
                                         })
                                     })
                                 })
@@ -1753,15 +1779,19 @@ class LinearClientTest {
                 responses = mutableListOf(buildJsonObject {
                     put("data", buildJsonObject {
                         put("project", buildJsonObject {
-                            put("team", buildJsonObject {
-                                put("states", buildJsonObject {
-                                    put("nodes", buildJsonArray {
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-0"))
-                                        })
-                                        add(buildJsonObject {
-                                            put("id", JsonPrimitive("state-1"))
-                                            put("name", JsonPrimitive("Todo"))
+                            put("teams", buildJsonObject {
+                                put("nodes", buildJsonArray {
+                                    add(buildJsonObject {
+                                        put("states", buildJsonObject {
+                                            put("nodes", buildJsonArray {
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-0"))
+                                                })
+                                                add(buildJsonObject {
+                                                    put("id", JsonPrimitive("state-1"))
+                                                    put("name", JsonPrimitive("Todo"))
+                                                })
+                                            })
                                         })
                                     })
                                 })

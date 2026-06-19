@@ -20,6 +20,11 @@ services:
       - koncerto-data:/data
       - koncerto-workspace:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
+      - koncerto-codex:/root/.codex
+    cap_add:
+      - SYS_ADMIN
+      - SYS_RESOURCE
+    privileged: true
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:17348/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 10s
@@ -54,3 +59,5 @@ networks:
 volumes:
   koncerto-logs:
   koncerto-data:
+  koncerto-workspace:
+  koncerto-codex:

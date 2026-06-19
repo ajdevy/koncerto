@@ -134,15 +134,17 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `not a git repo logs warning and skips`() {
+    fun `not a git repo auto-inits in createBranch`() {
         val nonRepoDir = Files.createTempDirectory("not-a-repo-")
         val config = GitConfig(enabled = true)
         val workflow = GitWorkflow(config, noopLogger())
 
         workflow.createBranch(nonRepoDir, "ABC-1")
 
+        val isRepo = nonRepoDir.resolve(".git").toFile().exists()
+        assertThat(isRepo).isEqualTo(true)
         val hasWarning = logs.any { it.contains("git_not_a_repository") }
-        assertThat(hasWarning).isEqualTo(true)
+        assertThat(hasWarning).isEqualTo(false)
     }
 
     @Test
@@ -208,13 +210,15 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `not a git repo logs warning and skips in createBranch`() {
+    fun `not a git repo auto-inits on createBranch call`() {
         val nonRepoDir = Files.createTempDirectory("not-a-repo-")
         val config = GitConfig(enabled = true)
         val workflow = GitWorkflow(config, noopLogger())
         workflow.createBranch(nonRepoDir, "ABC-1")
+        val isRepo = nonRepoDir.resolve(".git").toFile().exists()
+        assertThat(isRepo).isEqualTo(true)
         val hasWarning = logs.any { it.contains("git_not_a_repository") }
-        assertThat(hasWarning).isEqualTo(true)
+        assertThat(hasWarning).isEqualTo(false)
     }
 
     @Test

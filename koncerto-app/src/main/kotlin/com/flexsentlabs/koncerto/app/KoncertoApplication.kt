@@ -39,6 +39,7 @@ fun main(args: Array<String>) {
     buildDockerAgentImage(config, logger, ctx)
     DockerContainerManager.pruneOldContainers(logger)
     val orchestrator = ctx.getBean(Orchestrator::class.java)
+    orchestrator.start()
     Runtime.getRuntime().addShutdownHook(Thread {
         val count = orchestrator.runningAgentsCount()
         if (count > 0) {

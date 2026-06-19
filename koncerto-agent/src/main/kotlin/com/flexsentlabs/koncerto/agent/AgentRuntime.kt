@@ -13,6 +13,8 @@ interface AgentRuntime {
     suspend fun start(tenantContext: TenantContext? = null): Boolean
     fun send(method: String, params: JsonElement? = null): String
     fun sendMessage(toAgentId: String, payload: String): String
+    fun writeRaw(data: String)
+    fun closeStdin()
     fun events(): Flow<AgentEvent>
     val output: SharedFlow<String>
     fun isAlive(): Boolean = true

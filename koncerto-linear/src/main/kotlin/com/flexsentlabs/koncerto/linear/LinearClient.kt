@@ -89,6 +89,14 @@ class DefaultLinearClient(
         }
     """.trimIndent()
 
+    internal val projectSlugIdQuery = """
+        query ProjectSlugId(${'$'}projectId: String!) {
+          project(id: ${'$'}projectId) {
+            slugId
+          }
+        }
+    """.trimIndent()
+
     internal val updateIssueStateMutation = """
         mutation IssueUpdate(${'$'}id: String!, ${'$'}stateId: String!) {
           issueUpdate(id: ${'$'}id, input: { stateId: ${'$'}stateId }) { success }
@@ -132,11 +140,12 @@ class DefaultLinearClient(
 
     override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue> {
         if (activeStates.isEmpty()) return emptyList()
+        val slugId = resolveProjectSlugId() ?: return emptyList()
         val all = mutableListOf<Issue>()
         var after: String? = null
         do {
             val vars = buildJsonObject {
-                put("projectSlug", this@DefaultLinearClient.projectSlug)
+                put("projectSlug", slugId)
                 put("states", buildJsonArray { activeStates.forEach { add(it) } })
                 put("first", 50)
             }
@@ -156,8 +165,9 @@ class DefaultLinearClient(
 
     override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> {
         if (stateNames.isEmpty()) return emptyList()
+        val slugId = resolveProjectSlugId() ?: return emptyList()
         val vars = buildJsonObject {
-            put("projectSlug", projectSlug)
+            put("projectSlug", slugId)
             put("states", buildJsonArray { stateNames.forEach { add(it) } })
             put("first", 50)
         }
@@ -191,6 +201,18 @@ class DefaultLinearClient(
         val resp = graphql.execute(issueByIdQuery, vars)
         val issueNode = (resp["data"] as? JsonObject)?.get("issue") as? JsonObject ?: return null
         return IssueMapper.fromLinear(issueNode)
+    }
+
+    private var cachedProjectSlugId: String? = null
+
+    private suspend fun resolveProjectSlugId(): String? {
+        if (cachedProjectSlugId != null) return cachedProjectSlugId
+        val vars = buildJsonObject { put("projectId", projectSlug) }
+        val resp = graphql.execute(projectSlugIdQuery, vars)
+        val project = (resp["data"] as? JsonObject)?.get("project") as? JsonObject ?: return null
+        val slugId = (project["slugId"] as? JsonPrimitive)?.content
+        if (slugId != null) cachedProjectSlugId = slugId
+        return slugId
     }
 
     override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {

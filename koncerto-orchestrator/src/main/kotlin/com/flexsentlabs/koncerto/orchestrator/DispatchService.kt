@@ -1,5 +1,6 @@
 package com.flexsentlabs.koncerto.orchestrator
 
+import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.model.TokenUsage
@@ -61,7 +62,6 @@ class DispatchService(
     private val agentRunner: AgentRunner,
     private val workflowCache: WorkflowCache,
     private val logger: StructuredLogger,
-    private val projectSlug: String,
     private val workspaces: WorkspaceManager? = null,
     private val retryExecutor: RetryExecutor = RetryExecutor(projectConfig.agent.maxRetryBackoffMs),
     private val issueProjectMap: ConcurrentHashMap<String, String> = ConcurrentHashMap(),
@@ -87,7 +87,7 @@ class DispatchService(
         if (shutdownRequested) return
         val candidates = try {
             scope.coroutineContext.ensureActive()
-            linear.fetchCandidateIssues(projectSlug, projectConfig.tracker.activeStates)
+            linear.fetchCandidateIssues(projectConfig.tracker.projectSlug, projectConfig.tracker.activeStates)
         } catch (e: Exception) {
             logger.failure("fetch_candidates_failed", emptyMap(), e)
             return
@@ -139,9 +139,41 @@ class DispatchService(
         }
     }
 
-    fun scheduleRetry(issue: Issue, error: String) {
+    fun scheduleRetry(issue: Issue, error: String, onFailureState: String? = null) {
         state.running.remove(issue.id)
         val previousAttempt = state.retryAttempts[issue.id]?.attempt ?: 0
+        val nextAttempt = previousAttempt + 1
+        val maxRetries = projectConfig.agent.maxRetries
+
+        if (nextAttempt > maxRetries) {
+            state.retryAttempts.remove(issue.id)
+            logger.warn(
+                "retry_exhausted",
+                mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
+                "max_retries" to maxRetries.toString()
+            )
+            auditLogger?.log(AuditEvent(
+                timestamp = System.currentTimeMillis(),
+                type = AuditEventType.AGENT_FAILED,
+                projectSlug = projectConfig.tracker.projectSlug,
+                issueId = issue.id,
+                issueIdentifier = issue.identifier,
+                error = "retry_exhausted: $error"
+            ))
+            val failureState = onFailureState ?: projectConfig.tracker.blockedState
+            kotlinx.coroutines.runBlocking {
+                val failureStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, failureState)
+                if (failureStateId != null) {
+                    linear.updateIssueState(issue.id, failureStateId)
+                    logger.info("retry_exhausted_state_transitioned", mapOf(
+                        "issue_id" to issue.id,
+                        "state" to failureState
+                    ))
+                }
+            }
+            return
+        }
+
         val entry = retryExecutor.createEntry(issue.id, issue.identifier, previousAttempt, error)
         state.retryAttempts[issue.id] = entry
         logger.info(
@@ -152,7 +184,7 @@ class DispatchService(
         auditLogger?.log(AuditEvent(
             timestamp = System.currentTimeMillis(),
             type = AuditEventType.AGENT_RETRY_SCHEDULED,
-            projectSlug = projectSlug,
+            projectSlug = projectConfig.tracker.projectSlug,
             issueId = issue.id,
             issueIdentifier = issue.identifier,
             attempt = entry.attempt,
@@ -237,7 +269,7 @@ class DispatchService(
             if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
                 logger.warn("agent_provider_not_found", mapOf(
                     "agent_name" to stageConfig.agent,
-                    "project_slug" to projectSlug
+                    "project_slug" to projectConfig.tracker.projectSlug
                 ))
             }
 
@@ -283,7 +315,7 @@ class DispatchService(
                 is AutoReviewOrchestrator.ReviewDecision.RetryWithCoding -> {
                     if (decision.rerouteToState != null) {
                         try {
-                            val stateId = linear.resolveStateId(projectSlug, decision.rerouteToState)
+                            val stateId = linear.resolveStateId(projectConfig.tracker.projectSlug, decision.rerouteToState)
                             if (stateId != null) linear.updateIssueState(issue.id, stateId)
                         } catch (e: Exception) {
                             logger.warn("review_reroute_state_update_failed", mapOf("issue_id" to issue.id))
@@ -305,7 +337,7 @@ class DispatchService(
         transitionOnComplete(issue, stageConfig)
         if (notificationsConfig?.onCompleted == true && notifier != null) {
             notifier.send(NotificationEvent.AgentCompleted(
-                projectSlug = projectSlug,
+                projectSlug = projectConfig.tracker.projectSlug,
                 issueId = issue.id,
                 issueIdentifier = issue.identifier,
                 title = issue.title,
@@ -356,13 +388,22 @@ class DispatchService(
         val prompt = stageConfig?.prompt ?: workflowCache.current().promptTemplate
         val resolved = resolveAgent(issue, stageConfig)
 
+        if (AgentAuthChecker.needsAuth(resolved.kind) && !AgentAuthChecker.isAuthenticated(resolved.kind)) {
+            logger.warn("dispatch_skipped_not_authenticated", mapOf(
+                "issue_id" to issue.id,
+                "issue_identifier" to issue.identifier,
+                "agent_kind" to resolved.kind
+            ))
+            return null
+        }
+
         val extra = mutableMapOf("prompt_source" to if (stageConfig?.prompt != null) "stage" else "global")
         if (resolved.model != null) extra["model"] = resolved.model
         logger.info("dispatch_config", extra)
 
         val threadId = java.util.UUID.randomUUID().toString()
         val turnId = java.util.UUID.randomUUID().toString()
-        val tenantContext = tenantResolver?.resolveTenant(projectSlug, projectConfig)
+        val tenantContext = tenantResolver?.resolveTenant(projectConfig.tracker.projectSlug, projectConfig)
         val contextMap = mutableMapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         if (tenantContext != null) {
             contextMap["tenant_id"] = tenantContext.tenantId.value
@@ -373,7 +414,7 @@ class DispatchService(
         if (!state.tryClaim(issue.id)) return null
 
         // Check quota atomically with claim — null quotaConfig means no limit
-        val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectSlug, quotaConfig) == true
+        val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectConfig.tracker.projectSlug, quotaConfig) == true
         if (!quotaAcquired) {
             state.releaseClaim(issue.id)
             return null
@@ -391,7 +432,7 @@ class DispatchService(
         auditLogger?.log(AuditEvent(
             timestamp = System.currentTimeMillis(),
             type = AuditEventType.AGENT_DISPATCHED,
-            projectSlug = projectSlug,
+            projectSlug = projectConfig.tracker.projectSlug,
             issueId = issue.id,
             issueIdentifier = issue.identifier,
             agentKind = resolved.kind
@@ -402,7 +443,7 @@ class DispatchService(
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
         scope.coroutineContext.ensureActive()
-        issueProjectMap[issue.id] = projectSlug
+        issueProjectMap[issue.id] = projectConfig.tracker.projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
         val result = agentRunner.run(
@@ -435,7 +476,7 @@ class DispatchService(
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
-                    projectSlug = projectSlug,
+                    projectSlug = projectConfig.tracker.projectSlug,
                     result = "success",
                     inputTokens = finalEntry?.inputTokens ?: 0,
                     outputTokens = finalEntry?.outputTokens ?: 0,
@@ -444,7 +485,7 @@ class DispatchService(
                 auditLogger?.log(AuditEvent(
                     timestamp = System.currentTimeMillis(),
                     type = AuditEventType.AGENT_COMPLETED,
-                    projectSlug = projectSlug,
+                    projectSlug = projectConfig.tracker.projectSlug,
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
                     inputTokens = finalEntry?.inputTokens ?: 0,
@@ -455,7 +496,7 @@ class DispatchService(
                 handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
                 handleCrossProjectFollowUp(scope, issue, data.stageConfig)
                 handleNormalCompletion(issue, data.stageConfig, finalEntry)
-                quotaEnforcer?.release(projectSlug)
+                quotaEnforcer?.release(projectConfig.tracker.projectSlug)
             }.onFailure { err ->
                 scope.coroutineContext.ensureActive()
                 state.releaseClaim(issue.id)
@@ -466,7 +507,7 @@ class DispatchService(
                 metricsRepository?.updateAfterRun(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
-                    projectSlug = projectSlug,
+                    projectSlug = projectConfig.tracker.projectSlug,
                     result = "failure",
                     inputTokens = 0,
                     outputTokens = 0,
@@ -475,22 +516,22 @@ class DispatchService(
                 auditLogger?.log(AuditEvent(
                     timestamp = System.currentTimeMillis(),
                     type = AuditEventType.AGENT_FAILED,
-                    projectSlug = projectSlug,
+                    projectSlug = projectConfig.tracker.projectSlug,
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
                     error = err.message
                 ))
-                scheduleRetry(issue, err.message ?: "unknown")
+                scheduleRetry(issue, err.message ?: "unknown", data.stageConfig?.onFailureState)
                 if (notificationsConfig?.onFailed == true && notifier != null) {
                     notifier.send(NotificationEvent.AgentFailed(
-                        projectSlug = projectSlug,
+                        projectSlug = projectConfig.tracker.projectSlug,
                         issueId = issue.id,
                         issueIdentifier = issue.identifier,
                         title = issue.title,
                         error = err.message ?: "unknown"
                     ))
                 }
-                quotaEnforcer?.release(projectSlug)
+                quotaEnforcer?.release(projectConfig.tracker.projectSlug)
             }
         } finally {
             eventCollectorJob.cancel()
@@ -562,7 +603,7 @@ class DispatchService(
         val chainer = crossProjectChainer ?: return
         val job = scope.launch {
             try {
-                chainer.createFollowUp(issue, followUpConfig, projectSlug)
+                chainer.createFollowUp(issue, followUpConfig, projectConfig.tracker.projectSlug)
             } catch (e: Exception) {
                 logger.failure("followup_failed", mapOf("issue_id" to issue.id), e)
             }
@@ -656,7 +697,7 @@ class DispatchService(
         val config = stageConfig ?: return
         val targetState = resolveReviewTargetState(issue, config) ?: return
         try {
-            val stateId = linear.resolveStateId(projectSlug, targetState)
+            val stateId = linear.resolveStateId(projectConfig.tracker.projectSlug, targetState)
             if (stateId == null) {
                 logger.warn("state_not_found", mapOf(
                     "issue_id" to issue.id,
@@ -683,7 +724,7 @@ class DispatchService(
         val renderedDescription = followUp.descriptionTemplate?.let { FollowUpRenderer.render(it, issue) }
 
         val created = linear.createIssue(
-            projectSlug, renderedTitle, followUp.state,
+            projectConfig.tracker.projectSlug, renderedTitle, followUp.state,
             renderedDescription, followUp.labels
         )
         if (created == null) {
@@ -722,7 +763,7 @@ class DispatchService(
             val fetched = linear.fetchIssueById(issueId) ?: return@withContext null
             linear.createComment(issueId, clarificationContent)
 
-            val blockedStateId = linear.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
+            val blockedStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
             if (blockedStateId != null) {
                 linear.updateIssueState(issueId, blockedStateId)
                 logger.info("state_transitioned", mapOf(
@@ -759,7 +800,7 @@ class DispatchService(
 
         if (notificationsConfig?.onClarification == true && notifier != null) {
             notifier.send(NotificationEvent.ClarificationRequested(
-                projectSlug = projectSlug,
+                projectSlug = projectConfig.tracker.projectSlug,
                 issueId = issueId,
                 issueIdentifier = issue.identifier,
                 title = issue.title

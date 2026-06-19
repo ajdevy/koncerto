@@ -256,6 +256,13 @@ class DefaultAgentRunner(
                 coroutineScope {
                     val lastOutputMs = AtomicLong(System.currentTimeMillis())
 
+                    val rendered = PromptRenderer.render(prompt, mapOf(
+                        "issue" to issue.toTemplateMap(),
+                        "attempt" to attempt
+                    ))
+
+                    val isCodexExec = command.contains("codex exec")
+
                     val outputJob = launch {
                         runtime.output.collect { line ->
                             lastOutputMs.set(System.currentTimeMillis())
@@ -295,23 +302,27 @@ class DefaultAgentRunner(
                         while (true) {
                             delay(heartbeatIntervalMs)
                             if (!runtime.isAlive()) {
-                                throw IllegalStateException("agent_process_died")
+                                if (!isCodexExec) {
+                                    throw IllegalStateException("agent_process_died")
+                                }
+                                return@launch
                             }
                         }
                     }
 
-                    val rendered = PromptRenderer.render(prompt, mapOf(
-                        "issue" to issue.toTemplateMap(),
-                        "attempt" to attempt
-                    ))
-
-                    runtime.send("initialize", null)
-                    runtime.send("thread/start", buildJsonObject {
-                        put("working_directory", workspace.path.toString())
-                    })
-                    runtime.send("turn/start", buildJsonObject {
-                        put("input", rendered)
-                    })
+                    if (isCodexExec) {
+                        runtime.writeRaw(rendered)
+                        // Must close stdin for codex exec --json to start processing
+                        runtime.closeStdin()
+                    } else {
+                        runtime.send("initialize", null)
+                        runtime.send("thread/start", buildJsonObject {
+                            put("working_directory", workspace.path.toString())
+                        })
+                        runtime.send("turn/start", buildJsonObject {
+                            put("input", rendered)
+                        })
+                    }
 
                     val turnDone = CompletableDeferred<Unit>()
                     val eventWatcher = launch {
