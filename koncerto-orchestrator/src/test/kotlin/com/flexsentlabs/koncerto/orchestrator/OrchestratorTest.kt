@@ -6,6 +6,7 @@ import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.model.TokenUsage
@@ -40,6 +41,9 @@ import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Test
 
 class OrchestratorTest {
+    init {
+        AgentAuthChecker.markAuthenticated("codex")
+    }
 
     private val defaultProjectSlug = "proj"
 

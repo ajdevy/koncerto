@@ -6,15 +6,27 @@ object AgentAuthChecker {
     private val cache = mutableMapOf<String, Boolean>()
     private var lastChecked = 0L
     private const val cacheTtlMs = 30_000L
+    private val overrideAuth = mutableMapOf<String, Boolean>()
 
     fun isAuthenticated(agentKind: String): Boolean {
         val key = agentKind.lowercase().trim()
         if (!needsAuth(key)) return true
+        overrideAuth[key]?.let { return it }
         refreshCache()
         return cache[key] ?: false
     }
 
     fun needsAuth(agentKind: String): Boolean = agentKind.lowercase().trim() in AGENTS_NEEDING_AUTH
+
+    fun markAuthenticated(agentKind: String) {
+        overrideAuth[agentKind.lowercase().trim()] = true
+    }
+
+    fun reset() {
+        overrideAuth.clear()
+        cache.clear()
+        lastChecked = 0L
+    }
 
     private fun refreshCache() {
         val now = System.currentTimeMillis()
