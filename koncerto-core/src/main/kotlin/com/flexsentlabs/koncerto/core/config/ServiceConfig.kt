@@ -27,7 +27,7 @@ data class ServiceConfig(
         fun fromMapOrError(
             map: Map<String, Any?>,
             workflowFileDir: String
-        ): Result<ServiceConfig, IllegalStateException> = runCatchingResult {
+        ): Result<ServiceConfig, Exception> = runCatchingResult {
             val (pollIntervalMs, deprecations) = parsePollIntervalMs(map)
             val hooks = parseHooksConfig(map["hooks"] as? Map<*, *>)
             val git = parseGitConfig(map["git"] as? Map<*, *>)

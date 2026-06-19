@@ -7,11 +7,12 @@ RUN apk add --no-cache \
     curl \
     wget \
     openssh-client \
-    docker-cli
+    docker-cli \
+    github-cli \
+    nodejs \
+    npm
 
-RUN curl -fsSL https://opencode.ai/install.sh | sh
-
-ENV PATH="/root/.opencode/bin:${PATH}"
+RUN npm install -g @openai/codex @anthropic-ai/claude-code
 
 WORKDIR /workspace
 

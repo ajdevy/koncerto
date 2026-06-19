@@ -19,10 +19,8 @@ projects:
       active_states:
         - Todo
         - "In Review"
-        - "Needs Fix"
       terminal_states:
         - Done
-        - Cancelled
       blocked_state: "Blocked"
       project_admin: "user-1"
     workspace:
@@ -41,6 +39,10 @@ projects:
     agent:
       kind: opencode
       max_concurrent_agents: 2
+      docker:
+        enabled: true
+        image: koncerto-agent:latest
+        dockerfile: Dockerfile.agent
       max_turns: 5
       max_review_attempts: 3
       stages:
@@ -58,15 +60,7 @@ projects:
           model: claude-sonnet-4-6
           effort: max
           on_complete_state: "Done"
-          on_failure_state: "Needs Fix"
           max_review_attempts: 3
-        "Needs Fix":
-          prompt: prompts/fix-review.md
-          agent_kind: codex
-          command: codex
-          model: codex-5.4-mini
-          effort: max
-          on_complete_state: "In Review"
 ---
 
 You are working on Linear issue {{ issue.identifier }}.

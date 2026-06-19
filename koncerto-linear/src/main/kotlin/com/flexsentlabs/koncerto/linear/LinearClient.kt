@@ -83,8 +83,8 @@ class DefaultLinearClient(
 
     internal val teamStatesQuery = """
         query TeamStates(${'$'}projectSlug: String!) {
-          project(slugId: ${'$'}projectSlug) {
-            team { states { nodes { id name } } }
+          project(id: ${'$'}projectSlug) {
+            teams { nodes { states { nodes { id name } } } }
           }
         }
     """.trimIndent()
@@ -136,7 +136,7 @@ class DefaultLinearClient(
         var after: String? = null
         do {
             val vars = buildJsonObject {
-                put("projectSlug", projectSlug)
+                put("projectSlug", this@DefaultLinearClient.projectSlug)
                 put("states", buildJsonArray { activeStates.forEach { add(it) } })
                 put("first", 50)
             }
@@ -197,13 +197,17 @@ class DefaultLinearClient(
         val vars = buildJsonObject { put("projectSlug", projectSlug) }
         val resp = graphql.execute(teamStatesQuery, vars)
         val project = (resp["data"] as? JsonObject)?.get("project") as? JsonObject ?: return null
-        val team = project["team"] as? JsonObject ?: return null
-        val states = (team["states"] as? JsonObject)?.get("nodes") as? JsonArray ?: return null
-        for (node in states) {
-            val obj = node as? JsonObject ?: continue
-            val name = (obj["name"] as? JsonPrimitive)?.content ?: continue
-            if (name.equals(stateName, ignoreCase = true)) {
-                return (obj["id"] as? JsonPrimitive)?.content
+        val teams = (project["teams"] as? JsonObject)?.get("nodes") as? JsonArray ?: return null
+        for (teamNode in teams) {
+            val team = teamNode as? JsonObject ?: continue
+            val statesObj = team["states"] as? JsonObject ?: continue
+            val states = statesObj["nodes"] as? JsonArray ?: continue
+            for (node in states) {
+                val obj = node as? JsonObject ?: continue
+                val name = (obj["name"] as? JsonPrimitive)?.content ?: continue
+                if (name.equals(stateName, ignoreCase = true)) {
+                    return (obj["id"] as? JsonPrimitive)?.content
+                }
             }
         }
         return null

@@ -51,6 +51,10 @@ class ClaudeReviewRuntime(
         return "ok"
     }
 
+    override fun writeRaw(data: String) {}
+
+    override fun closeStdin() {}
+
     override fun sendMessage(toAgentId: String, payload: String): String = "ok"
 
     private suspend fun runReview(prompt: String) = withContext(Dispatchers.IO) {
@@ -114,7 +118,7 @@ class ClaudeReviewRuntime(
         }
     }
 
-    private fun hasNonZeroCritical(output: String): Boolean {
+    internal fun hasNonZeroCritical(output: String): Boolean {
         val lines = output.lines()
         var inCritical = false
         for (line in lines) {

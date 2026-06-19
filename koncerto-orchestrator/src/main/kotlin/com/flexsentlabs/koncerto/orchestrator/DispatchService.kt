@@ -92,6 +92,7 @@ class DispatchService(
             logger.failure("fetch_candidates_failed", emptyMap(), e)
             return
         }
+
         val graph = DependencyGraph.build(candidates, projectConfig.tracker.terminalStates)
         val sorted = graph.frontier
             .filter { !state.running.containsKey(it.id) && !state.isClaimed(it.id) }

@@ -31,7 +31,7 @@ class ConfigService(
 
     fun validateConfig(configMap: Map<String, Any?>): Result<Unit, IllegalStateException> {
         val workflowFileDir = Paths.get(workflowPath).parent?.toString() ?: "."
-        return runCatchingResult<Unit, IllegalStateException> {
+        return runCatchingResult {
             ServiceConfig.fromMap(configMap, workflowFileDir)
             Unit
         }

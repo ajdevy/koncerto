@@ -82,10 +82,10 @@ private fun buildDockerAgentImage(config: ServiceConfig, logger: StructuredLogge
 
     try {
         logger.info("docker_image_build_starting", mapOf("dockerfile" to dockerfile, "image" to image))
-        val pb = ProcessBuilder("bash", "-lc", "docker build -f $dockerfile -t $image .")
+        val pb = ProcessBuilder("bash", "-lc", "cd /config && docker build -f $dockerfile -t $image .")
         pb.inheritIO()
         val p = pb.start()
-        val buildCompleted = p.waitFor(120, TimeUnit.SECONDS)
+        val buildCompleted = p.waitFor(1800, TimeUnit.SECONDS)
         if (buildCompleted && p.exitValue() == 0) {
             logger.info("docker_image_build_completed", mapOf("image" to image))
         } else {

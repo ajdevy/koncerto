@@ -57,7 +57,7 @@ interface AgentRunner {
         effortOverride: String? = null,
         turnTimeoutMs: Long? = null,
         stallTimeoutMs: Long? = null
-    ): EmptyResult<IllegalStateException>
+    ): EmptyResult<Exception>
 }
 
 class DefaultAgentRunner(
@@ -94,7 +94,7 @@ class DefaultAgentRunner(
         effortOverride: String?,
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?
-    ): EmptyResult<IllegalStateException> = runCatchingResult {
+    ): EmptyResult<Exception> = runCatchingResult {
         val effectiveAttempt = attempt ?: 1
         val agentKey = "${agentKindOverride ?: "opencode"}:${commandOverride ?: agentKindOverride ?: "opencode"}:${modelOverride ?: "default"}"
 

@@ -19,13 +19,14 @@ class DockerContainerManager(
             val cpus = resolveCpus()
             val memory = resolveMemory()
 
+            val issueDir = workspacePath.fileName.toString()
             val runCmd = buildString {
                 append("docker run -d")
                 append(" --name $containerId")
                 append(" --cpus $cpus")
                 append(" --memory $memory")
-                append(" -v ${workspacePath.toAbsolutePath()}:/workspace")
-                append(" -w /workspace")
+                append(" -v koncerto-workspace:/workspace")
+                append(" -w /workspace/$issueDir")
                 if (config.network) {
                     append(" --network koncerto-network")
                 }

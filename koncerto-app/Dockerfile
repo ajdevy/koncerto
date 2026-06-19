@@ -1,6 +1,10 @@
 FROM eclipse-temurin:21-jre-alpine
 
-RUN apk add --no-cache wget
+RUN apk add --no-cache \
+    bash \
+    wget \
+    docker-cli \
+    git
 
 WORKDIR /app
 

@@ -13,11 +13,13 @@ services:
       KONCERTO_ADMIN_API_KEY: "${KONCERTO_ADMIN_API_KEY:-}"
       LINEAR_API_KEY: "${LINEAR_API_KEY:-}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
-      KONCERTO_WORKSPACE_ROOT: "${KONCERTO_WORKSPACE_ROOT:-}"
+      KONCERTO_WORKSPACE_ROOT: /workspace
     volumes:
       - .:/config
       - koncerto-logs:/logs
       - koncerto-data:/data
+      - koncerto-workspace:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:17348/actuator/health | grep -q '\"status\":\"UP\"'"]
       interval: 10s
