@@ -32,7 +32,8 @@ class SubtaskOrchestrator(
     suspend fun execute(
         workspacePath: Path,
         manifest: SubtaskManifest,
-        config: WorkplanConfig
+        config: WorkplanConfig,
+        baseBranch: String = "main"
     ): Flow<AgentEvent> = flow {
         val issueId = manifest.issueId
         val states = manifest.subtasks.map { SubtaskState(def = it) }.toMutableList()
@@ -52,7 +53,7 @@ class SubtaskOrchestrator(
             }
             WorkplanConfig.ExecutionMode.PARALLEL -> {
                 val semaphore = Semaphore(config.maxParallelSubagents)
-                val integrationBranch = "main"
+                val integrationBranch = baseBranch
                 val statesMap = ConcurrentHashMap<String, SubtaskState>()
                 states.forEach { statesMap[it.def.id] = it }
                 val runningCount = AtomicInteger(0)
@@ -84,33 +85,35 @@ class SubtaskOrchestrator(
                                         workspacePath, branchName, integrationBranch
                                     )
 
-                                    val result = runSingleSubtask(workspacePath, state, manifest)
+                                    try {
+                                        val result = runSingleSubtask(workspacePath, state, manifest)
 
-                                    val mergeResult = gitWorkflow.mergeBranch(
-                                        workspacePath, branchName, integrationBranch
-                                    )
-
-                                    gitWorkflow.deleteBranch(workspacePath, branchName)
-
-                                    if (mergeResult is MergeResult.CONFLICT) {
-                                        val failedState = state.copy(
-                                            status = SubtaskStatus.FAILED,
-                                            branchName = branchName
+                                        val mergeResult = gitWorkflow.mergeBranch(
+                                            workspacePath, branchName, integrationBranch
                                         )
-                                        statesMap[failedState.def.id] = failedState
-                                        logger.error("Subtask merge conflict", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "branch" to branchName))
-                                        Pair(
-                                            listOf(AgentEvent.MergeConflict(
-                                                subtaskId = state.def.id,
-                                                branch = branchName,
-                                                issueId = issueId
-                                            )),
-                                            true
-                                        )
-                                    } else {
-                                        statesMap[result.state.def.id] = result.state
-                                        logger.info("Subtask completed", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "status" to result.state.status.name))
-                                        Pair(result.events, false)
+
+                                        if (mergeResult is MergeResult.CONFLICT) {
+                                            val failedState = state.copy(
+                                                status = SubtaskStatus.FAILED,
+                                                branchName = branchName
+                                            )
+                                            statesMap[failedState.def.id] = failedState
+                                            logger.error("Subtask merge conflict", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "branch" to branchName))
+                                            Pair(
+                                                listOf(AgentEvent.MergeConflict(
+                                                    subtaskId = state.def.id,
+                                                    branch = branchName,
+                                                    issueId = issueId
+                                                )),
+                                                true
+                                            )
+                                        } else {
+                                            statesMap[result.state.def.id] = result.state
+                                            logger.info("Subtask completed", mapOf("issueId" to issueId, "subtaskId" to state.def.id, "status" to result.state.status.name))
+                                            Pair(result.events, false)
+                                        }
+                                    } finally {
+                                        gitWorkflow.deleteBranch(workspacePath, branchName)
                                     }
                                 } finally {
                                     runningCount.decrementAndGet()

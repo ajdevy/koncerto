@@ -171,7 +171,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `scheduleRetry creates retry entry with exponential backoff`() {
+    fun `scheduleRetry creates retry entry with exponential backoff`() = runBlocking {
         val (svc, state) = createServiceWithState()
         val beforeMs = System.currentTimeMillis()
         svc.scheduleRetry(issue("1", "A-1", "Todo"), "timeout error")
@@ -184,7 +184,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `scheduleRetry increments attempt on subsequent retries`() {
+    fun `scheduleRetry increments attempt on subsequent retries`() = runBlocking {
         val (svc, state) = createServiceWithState()
         val issue = issue("1", "A-1", "Todo")
         svc.scheduleRetry(issue, "err1")
@@ -194,7 +194,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `scheduleRetry caps backoff at maxRetryBackoffMs`() {
+    fun `scheduleRetry caps backoff at maxRetryBackoffMs`() = runBlocking {
         val projectConfig = config().copy(agent = config().agent.copy(maxRetryBackoffMs = 60_000, maxRetries = 10))
         val (svc, state) = createServiceWithState(projectConfig = projectConfig)
         repeat(10) { svc.scheduleRetry(issue("1", "A-1", "Todo"), "err") }

@@ -1,12 +1,13 @@
 package com.flexsentlabs.koncerto.agent
 
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 object AgentAuthChecker {
-    private val cache = mutableMapOf<String, Boolean>()
-    private var lastChecked = 0L
+    private val cache = ConcurrentHashMap<String, Boolean>()
+    @Volatile private var lastChecked = 0L
     private const val cacheTtlMs = 30_000L
-    private val overrideAuth = mutableMapOf<String, Boolean>()
+    private val overrideAuth = ConcurrentHashMap<String, Boolean>()
 
     fun isAuthenticated(agentKind: String): Boolean {
         val key = agentKind.lowercase().trim()

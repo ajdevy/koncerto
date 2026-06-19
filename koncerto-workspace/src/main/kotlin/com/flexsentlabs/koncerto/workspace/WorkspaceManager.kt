@@ -17,6 +17,7 @@ class WorkspaceManager(
     fun ensureWorkspace(identifier: String, tenantContext: TenantContext? = null): Workspace {
         val key = WorkspaceKey.sanitize(identifier)
         val path = resolvePath(key, tenantContext)
+        assertInsideRoot(path)
         val createdNow = !Files.exists(path)
         if (createdNow) Files.createDirectories(path)
         return Workspace(path, key, createdNow)
@@ -76,6 +77,7 @@ class WorkspaceManager(
     fun removeWorkspace(identifier: String, tenantContext: TenantContext) {
         val key = WorkspaceKey.sanitize(identifier)
         val path = resolvePath(key, tenantContext)
+        assertInsideRoot(path)
         if (Files.exists(path)) {
             Files.walk(path)
                 .sorted(Comparator.reverseOrder())

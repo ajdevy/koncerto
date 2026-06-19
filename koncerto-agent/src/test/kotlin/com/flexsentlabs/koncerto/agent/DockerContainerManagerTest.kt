@@ -43,6 +43,25 @@ class DockerContainerManagerTest {
     }
 
     @Test
+    fun `generateContainerId is unique under concurrent calls`() {
+        val threads = 20
+        val callsPerThread = 50
+        val ids = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val latch = java.util.concurrent.CountDownLatch(threads)
+        repeat(threads) {
+            Thread {
+                try {
+                    repeat(callsPerThread) { ids.add(DockerContainerManager.generateContainerId()) }
+                } finally {
+                    latch.countDown()
+                }
+            }.start()
+        }
+        latch.await()
+        assertThat(ids.size).isEqualTo(threads * callsPerThread)
+    }
+
+    @Test
     fun `DockerConfig default values are correct`() {
         val config = DockerConfig()
         assertThat(config.enabled).isEqualTo(true)

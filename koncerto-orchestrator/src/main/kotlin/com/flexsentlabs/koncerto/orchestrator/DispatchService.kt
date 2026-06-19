@@ -139,7 +139,7 @@ class DispatchService(
         }
     }
 
-    fun scheduleRetry(issue: Issue, error: String, onFailureState: String? = null) {
+    suspend fun scheduleRetry(issue: Issue, error: String, onFailureState: String? = null) {
         state.running.remove(issue.id)
         val previousAttempt = state.retryAttempts[issue.id]?.attempt ?: 0
         val nextAttempt = previousAttempt + 1
@@ -161,7 +161,7 @@ class DispatchService(
                 error = "retry_exhausted: $error"
             ))
             val failureState = onFailureState ?: projectConfig.tracker.blockedState
-            kotlinx.coroutines.runBlocking {
+            withContext(Dispatchers.IO) {
                 val failureStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, failureState)
                 if (failureStateId != null) {
                     linear.updateIssueState(issue.id, failureStateId)

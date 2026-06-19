@@ -222,6 +222,19 @@ class AdminControllerTest {
     }
 
     @Test
+    fun `all admin endpoints return 401 when adminApiKey is empty string`() {
+        val config = createConfig(adminKey = "")
+        val controller = AdminController(config, projectRegistry = null)
+        // An empty-string key must be treated as absent — any caller who sends X-Admin-Key: "" must be rejected
+        val projectsResponse = runBlocking { controller.listProjects("") }
+        assertThat(projectsResponse.statusCodeValue).isEqualTo(401)
+        val tenantsResponse = runBlocking { controller.listTenants("") }
+        assertThat(tenantsResponse.statusCodeValue).isEqualTo(401)
+        val quotasResponse = runBlocking { controller.listQuotas("") }
+        assertThat(quotasResponse.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
     fun `all admin endpoints return 401 when adminApiKey is null`() {
         val config = createConfig(adminKey = null)
         val controller = AdminController(config, projectRegistry = null)

@@ -71,4 +71,12 @@ class ClaudeReviewRuntimeTest {
         """.trimIndent()
         assertThat(runtime.hasNonZeroCritical(output)).isFalse()
     }
+
+    @Test
+    fun `hasNonZeroCritical zero critical with trailing digits does not count trailing digits`() {
+        val ws = Files.createTempDirectory("claude-test-")
+        val runtime = ClaudeReviewRuntime("echo ok", ws, noopLogger())
+        // Old .filter{isDigit()} would extract "042" = 42 > 0 → wrongly return true
+        assertThat(runtime.hasNonZeroCritical("**Critical:** 0 issues (42 hints)")).isFalse()
+    }
 }

@@ -20,13 +20,19 @@ class ShellHookExecutor(
             .directory(workspacePath.toFile())
             .redirectErrorStream(true)
         val proc = pb.start()
+        // Drain stdout on a separate thread before waitFor to prevent OS pipe-buffer deadlock
+        // when hook output exceeds ~64 KB.
+        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+            proc.inputStream.bufferedReader().readText()
+        }
         val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
         if (!finished) {
             proc.destroyForcibly()
+            outputFuture.cancel(true)
             logger.warn("hook_timeout", mapOf("workspace" to workspacePath.toString()))
             throw HookExecutionException("hook_timeout")
         }
-        val output = proc.inputStream.bufferedReader().readText()
+        val output = outputFuture.get()
         if (proc.exitValue() != 0) {
             throw HookExecutionException("hook_exit_${proc.exitValue()}: ${output.take(2000)}")
         }
