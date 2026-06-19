@@ -41,14 +41,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test
-        run: ./gradlew build jacocoTestReport -Pjacoco --no-daemon --stacktrace
+        run: ./gradlew build jacocoTestReport -Pjacoco --no-daemon --stacktrace --no-configuration-cache --no-build-cache --max-workers=4
 
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: '**/build/reports/tests/test/**'
+          path: |
+            **/build/reports/tests/test/**
+            **/build/test-results/test/**
           retention-days: 3
 
       - name: Aggregate coverage and generate badge
