@@ -77,11 +77,17 @@ abstract class StdioAgentRuntime(
                 lineCount++
                 if (line.isBlank()) return@forEach
                 _output.tryEmit("[stdout] $line")
-                val msgs = JsonRpcFraming.decodeAll(line)
-                if (msgs.isNotEmpty()) {
-                    msgs.forEach { dispatchMessage(it) }
-                } else if (!tryHandleAsJsonl(line)) {
-                    events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
+                try {
+                    val msgs = JsonRpcFraming.decodeAll(line)
+                    if (msgs.isNotEmpty()) {
+                        msgs.forEach { dispatchMessage(it) }
+                    } else if (!tryHandleAsJsonl(line)) {
+                        events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
+                    }
+                } catch (_: Exception) {
+                    if (!tryHandleAsJsonl(line)) {
+                        events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
+                    }
                 }
             }
             logger.info("${logTag}_stdout_stream_ended", mapOf("total_lines" to lineCount.toString(), "jsonlMode" to jsonlMode.toString(), "turnCompletedEmitted" to turnCompletedEmitted.toString()))

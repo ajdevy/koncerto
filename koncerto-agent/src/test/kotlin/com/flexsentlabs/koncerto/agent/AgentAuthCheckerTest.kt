@@ -31,8 +31,8 @@ class AgentAuthCheckerTest {
     }
 
     @Test
-    fun `needsAuth returns false for claude`() {
-        assertThat(AgentAuthChecker.needsAuth("claude")).isFalse()
+    fun `needsAuth returns true for claude`() {
+        assertThat(AgentAuthChecker.needsAuth("claude")).isTrue()
     }
 
     @Test
@@ -51,7 +51,8 @@ class AgentAuthCheckerTest {
     }
 
     @Test
-    fun `isAuthenticated returns true for claude without side effects`() {
+    fun `isAuthenticated returns true for claude when marked authenticated`() {
+        AgentAuthChecker.markAuthenticated("claude")
         assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
     }
 
