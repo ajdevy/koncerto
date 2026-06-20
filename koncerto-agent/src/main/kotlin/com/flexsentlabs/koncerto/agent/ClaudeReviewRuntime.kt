@@ -60,13 +60,10 @@ class ClaudeReviewRuntime(
 
     private suspend fun runReview(prompt: String) = withContext(Dispatchers.IO) {
         try {
-            val pb = ProcessBuilder("bash", "-lc", command)
+            val p = ProcessBuilder("bash", "-lc", command)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
-            AgentAuthChecker.getClaudeApiKey()?.let { key ->
-                pb.environment().put("ANTHROPIC_API_KEY", key)
-            }
-            val p = pb.start()
+                .start()
             process = p
             pid = p.pid()
             logger.info("claude_review_started", mapOf("pid" to pid.toString()))
