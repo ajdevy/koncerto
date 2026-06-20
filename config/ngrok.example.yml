@@ -1,24 +1,23 @@
-version: "2"
+version: "3"
 tunnels:
   koncerto-dashboard:
     proto: http
     addr: ${NGROK_ADDR:-localhost:17348}
-    inspect: false
+    # domain: your-subdomain.ngrok-free.dev   # optional: pin a stable domain
     # --- OAuth Authentication ---
-    # Uncomment ONE provider below and configure allowed emails/domains.
+    # Uncomment ONE provider below. allow_emails must match the primary email
+    # on the user's account for that provider.
     #
-    # Option A: Google OAuth
-    # oauth:
-    #   provider: google
-    #   allow_emails:
-    #     - admin@yourdomain.com
-    #   allow_domains:
-    #     - yourdomain.com
-    #
-    # Option B: GitHub OAuth
+    # Option A: GitHub OAuth (recommended)
     # oauth:
     #   provider: github
     #   allow_emails:
-    #     - admin@yourdomain.com
+    #     - you@example.com
+    #
+    # Option B: Google OAuth
+    # oauth:
+    #   provider: google
+    #   allow_emails:
+    #     - you@example.com
     #   allow_domains:
     #     - yourdomain.com
