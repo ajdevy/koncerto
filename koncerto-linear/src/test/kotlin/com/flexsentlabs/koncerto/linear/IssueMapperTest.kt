@@ -31,6 +31,9 @@ class IssueMapperTest {
         val blockedByNodes = buildJsonArray { add(blockedIssueObj) }
         val blockedByObj = buildJsonObject { put("nodes", blockedByNodes) }
         
+        val childrenNodes = buildJsonArray { add(buildJsonObject { put("id", "sub-1") }) }
+        val childrenObj = buildJsonObject { put("nodes", childrenNodes) }
+
         val node = buildJsonObject {
             put("id", "id-1")
             put("identifier", "ABC-1")
@@ -40,6 +43,7 @@ class IssueMapperTest {
             put("state", stateObj)
             put("url", "https://linear.app/x")
             put("labels", labelsObj)
+            put("children", childrenObj)
             put("blockedBy", blockedByObj)
             put("createdAt", "2025-01-01T00:00:00Z")
             put("updatedAt", "2025-01-02T00:00:00Z")
@@ -52,6 +56,51 @@ class IssueMapperTest {
         assertThat(issue.state).isEqualTo("Todo")
         assertThat(issue.labels).containsExactly("bug", "frontend")
         assertThat(issue.blockedBy).isNotNull()
+        assertThat(issue.children).containsExactly("sub-1")
         assertThat(issue.createdAt).isNotNull()
+    }
+
+    @Test
+    fun `maps children from Linear node`() {
+        val childrenNodes = buildJsonArray {
+            add(buildJsonObject { put("id", "sub-1") })
+            add(buildJsonObject { put("id", "sub-2") })
+        }
+        val childrenObj = buildJsonObject { put("nodes", childrenNodes) }
+        val node = buildJsonObject {
+            put("id", "id-1")
+            put("identifier", "ABC-1")
+            put("title", "Test")
+            put("description", null)
+            put("priority", JsonPrimitive(2))
+            put("state", buildJsonObject { put("name", "Todo") })
+            put("url", null)
+            put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("children", childrenObj)
+            put("blockedBy", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("createdAt", null)
+            put("updatedAt", null)
+        }
+        val issue = IssueMapper.fromLinear(node)
+        assertThat(issue.children).containsExactly("sub-1", "sub-2")
+    }
+
+    @Test
+    fun `maps empty children when children field missing`() {
+        val node = buildJsonObject {
+            put("id", "id-1")
+            put("identifier", "ABC-1")
+            put("title", "Test")
+            put("description", null)
+            put("priority", JsonPrimitive(2))
+            put("state", buildJsonObject { put("name", "Todo") })
+            put("url", null)
+            put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("blockedBy", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("createdAt", null)
+            put("updatedAt", null)
+        }
+        val issue = IssueMapper.fromLinear(node)
+        assertThat(issue.children).isEqualTo(emptyList())
     }
 }
