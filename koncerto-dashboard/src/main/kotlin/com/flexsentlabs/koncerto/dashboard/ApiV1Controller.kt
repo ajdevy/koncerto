@@ -484,21 +484,55 @@ class ApiV1Controller @Autowired constructor(
         return ResponseEntity.ok().build()
     }
 
-    data class ClaudeLoginStatus(val authenticated: Boolean, val message: String = "")
-
     @PostMapping("/claude-login")
-    fun setClaudeApiKey(@RequestBody body: Map<String, String>): ResponseEntity<ClaudeLoginStatus> {
-        val key = (body["api_key"] ?: "").trim()
-        if (key.isBlank()) {
-            return ResponseEntity.badRequest().body(ClaudeLoginStatus(false, "API key cannot be empty"))
+    fun startClaudeLogin(): Mono<ResponseEntity<CodexLoginStatus>> {
+        synchronized(loginLock) {
+            loginProcess?.let { if (it.isAlive) {
+                return Mono.just(
+                    if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+                    else ResponseEntity.status(409).build()
+                )
+            } }
+            loginUrl = null
+            loginCode = null
         }
-        AgentAuthChecker.setClaudeApiKey(key)
-        return ResponseEntity.ok(ClaudeLoginStatus(true, "API key stored"))
+        return Mono.fromCallable {
+            val pb = ProcessBuilder("bash", "-lc", "claude login --no-browser")
+            pb.redirectErrorStream(true)
+            val p = pb.start()
+            loginProcess = p
+            val output = p.inputStream
+            val text = withTimeout(output, 5000)
+            val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
+            loginUrl = Regex("https?://[^\\s]+").find(clean)?.value
+            loginCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
+            ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        }.onErrorResume {
+            Mono.just(ResponseEntity.status(500).body(CodexLoginStatus("error")))
+        }
     }
 
     @GetMapping("/claude-login-status")
-    fun getClaudeLoginStatus(): ResponseEntity<ClaudeLoginStatus> {
-        val authenticated = AgentAuthChecker.isAuthenticated("claude")
-        return ResponseEntity.ok(ClaudeLoginStatus(authenticated))
+    fun getClaudeLoginStatus(): ResponseEntity<CodexLoginStatus> {
+        val alive = loginProcess?.isAlive == true
+        if (!alive && loginProcess != null) {
+            loginProcess = null
+            AgentAuthChecker.markAuthenticated("claude")
+            return ResponseEntity.ok(CodexLoginStatus("completed"))
+        }
+        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        return ResponseEntity.ok(CodexLoginStatus("idle"))
+    }
+
+    @PostMapping("/cancel-claude-login")
+    fun cancelClaudeLogin(): ResponseEntity<Unit> {
+        loginProcess?.let {
+            it.destroyForcibly()
+            try { it.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+        }
+        loginProcess = null
+        loginUrl = null
+        loginCode = null
+        return ResponseEntity.ok().build()
     }
 }

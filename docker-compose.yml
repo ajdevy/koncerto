@@ -14,6 +14,8 @@ services:
       LINEAR_API_KEY: "${LINEAR_API_KEY:-}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
       KONCERTO_WORKSPACE_ROOT: /workspace
+      GH_TOKEN: "${GH_TOKEN:-}"
+      GIT_REMOTE_URL: "${GIT_REMOTE_URL:-}"
     volumes:
       - .:/config
       - koncerto-logs:/logs

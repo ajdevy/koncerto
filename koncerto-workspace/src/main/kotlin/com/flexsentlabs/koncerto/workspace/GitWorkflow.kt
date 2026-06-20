@@ -59,6 +59,7 @@ open class GitWorkflow(
             runGitSafe(workspacePath, "init", "--initial-branch=main")
             runGitSafe(workspacePath, "config", "user.email", "agent@koncerto.dev")
             runGitSafe(workspacePath, "config", "user.name", "Koncerto Agent")
+            setupOriginRemote(workspacePath)
             val readme = workspacePath.resolve("README.md")
             if (!readme.toFile().exists()) {
                 readme.toFile().writeText("# ${workspacePath.fileName}\n")
@@ -76,6 +77,25 @@ open class GitWorkflow(
         if (created == null && !branchExists) {
             runGitSafe(workspacePath, "checkout", branch)
         }
+    }
+
+    private fun setupOriginRemote(workspacePath: Path) {
+        val remoteUrl = config.remoteUrl
+        if (remoteUrl.isBlank()) return
+        val token = System.getenv("GH_TOKEN")
+        val authUrl = if (!token.isNullOrBlank()) {
+            // Insert token for authenticated push: https://x-access-token:<token>@github.com/...
+            remoteUrl.replace("://", "://x-access-token:$token@")
+        } else {
+            remoteUrl
+        }
+        val existing = runGitSafe(workspacePath, "remote", "get-url", "origin")
+        if (existing != null) {
+            logger.info("origin_remote_exists", mapOf("url" to existing))
+            return
+        }
+        runGitSafe(workspacePath, "remote", "add", "origin", authUrl)
+        logger.info("origin_remote_added", mapOf("url" to remoteUrl, "auth" to (!token.isNullOrBlank()).toString()))
     }
 
     fun commitAndPush(workspacePath: Path, issueIdentifier: String, title: String, labels: List<String> = emptyList()) {

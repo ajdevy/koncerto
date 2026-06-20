@@ -43,6 +43,26 @@ import com.flexsentlabs.koncerto.metrics.PrometheusMetricsBinder
 import com.flexsentlabs.koncerto.metrics.SqliteMetricsRepository
 import io.micrometer.core.instrument.binder.MeterBinder
 import com.flexsentlabs.koncerto.agent.FreeModelCycler
+import com.flexsentlabs.koncerto.demo.DemoController
+import com.flexsentlabs.koncerto.demo.config.DemoConfig
+import com.flexsentlabs.koncerto.demo.integration.DemoEventListener
+import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
+import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
+import com.flexsentlabs.koncerto.demo.recorder.DemoRecorder
+import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
+import com.flexsentlabs.koncerto.demo.recorder.PlaywrightRecorder
+import com.flexsentlabs.koncerto.demo.recorder.RecorderFactory
+import com.flexsentlabs.koncerto.demo.recorder.XcrunRecorder
+import com.flexsentlabs.koncerto.demo.report.DemoReporter
+import com.flexsentlabs.koncerto.demo.report.DemoReportGenerator
+import com.flexsentlabs.koncerto.demo.report.LinearReportPublisher
+import com.flexsentlabs.koncerto.demo.repository.DemoTaskRepository
+import com.flexsentlabs.koncerto.demo.repository.SqliteDemoTaskRepository
+import com.flexsentlabs.koncerto.demo.service.DemoRecordingService
+import com.flexsentlabs.koncerto.demo.storage.DemoStorage
+import com.flexsentlabs.koncerto.demo.storage.R2DemoStorage
 import com.flexsentlabs.koncerto.agent.ModelRetryHandler
 import com.flexsentlabs.koncerto.orchestrator.AutoReviewOrchestrator
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
@@ -375,5 +395,98 @@ class Beans {
                 }
             } else null
         )
+    }
+
+    @Bean
+    fun demoConfig(): DemoConfig = DemoConfig(
+        enabled = true,
+        maxRetries = 3,
+        retryDelayMs = 5_000L,
+        retentionDays = 90,
+        maxRecordingsPerSpace = 100,
+        defaultPlatform = "playwright"
+    )
+
+    @Bean
+    fun playwrightRecorder(): DemoRecorder = PlaywrightRecorder()
+
+    @Bean
+    fun asciinemaRecorder(): DemoRecorder = AsciinemaRecorder()
+
+    @Bean
+    fun adbRecorder(): DemoRecorder = AdbRecorder()
+
+    @Bean
+    fun xcrunRecorder(): DemoRecorder = XcrunRecorder()
+
+    @Bean
+    fun ffmpegRecorder(): DemoRecorder = FfmpegRecorder()
+
+    @Bean
+    fun recorderFactory(recorders: List<DemoRecorder>): RecorderFactory = RecorderFactory(recorders)
+
+    @Bean
+    fun demoTaskRepository(@Value("\${koncerto.db.path:${'$'}{user.home}/.koncerto/metrics.db}") dbPath: String): DemoTaskRepository {
+        val dir = java.nio.file.Paths.get(dbPath).parent
+        if (dir != null) java.nio.file.Files.createDirectories(dir)
+        return SqliteDemoTaskRepository(dbPath)
+    }
+
+    @Bean
+    fun demoStorage(config: DemoConfig): DemoStorage? {
+        val r2 = config.r2 ?: return null
+        return R2DemoStorage(
+            endpoint = r2.endpoint,
+            accessKey = r2.accessKey,
+            secretKey = r2.secretKey,
+            bucketName = r2.bucketName,
+            publicUrlBase = r2.publicUrlBase
+        )
+    }
+
+    @Bean
+    fun demoReporter(linearClientFactory: (ProjectConfig) -> LinearClient, config: ServiceConfig): DemoReporter? {
+        val project = config.projects.values.firstOrNull() ?: return null
+        val linearClient = linearClientFactory(project)
+        return LinearReportPublisher(linearClient)
+    }
+
+    @Bean
+    fun demoReportGenerator(): DemoReportGenerator = DemoReportGenerator()
+
+    @Bean
+    fun demoMetricsRecorder(): DemoMetricsRecorder = DemoMetricsRecorder()
+
+    @Bean
+    fun demoAuditLogger(): DemoAuditLogger = DemoAuditLogger()
+
+    @Bean
+    fun demoRecordingService(
+        demoConfig: DemoConfig,
+        demoTaskRepository: DemoTaskRepository,
+        recorderFactory: RecorderFactory,
+        demoStorage: DemoStorage?,
+        demoReporter: DemoReporter?,
+        demoReportGenerator: DemoReportGenerator,
+        demoMetricsRecorder: DemoMetricsRecorder,
+        demoAuditLogger: DemoAuditLogger
+    ): DemoRecordingService? {
+        if (demoStorage == null || demoReporter == null) return null
+        return DemoRecordingService(
+            demoConfig, demoTaskRepository, recorderFactory, demoStorage, demoReporter,
+            demoReportGenerator, demoMetricsRecorder, demoAuditLogger
+        )
+    }
+
+    @Bean
+    fun demoController(demoRecordingService: DemoRecordingService?): DemoController? {
+        if (demoRecordingService == null) return null
+        return DemoController(demoRecordingService)
+    }
+
+    @Bean
+    fun demoEventListener(demoRecordingService: DemoRecordingService?): DemoEventListener? {
+        if (demoRecordingService == null) return null
+        return DemoEventListener(demoRecordingService, enabled = demoConfig().enabled)
     }
 }

@@ -12,5 +12,6 @@ include(
     "koncerto-metrics",
     "koncerto-app",
     "koncerto-e2e",
-    "koncerto-notifications"
+    "koncerto-notifications",
+    "koncerto-demo"
 )

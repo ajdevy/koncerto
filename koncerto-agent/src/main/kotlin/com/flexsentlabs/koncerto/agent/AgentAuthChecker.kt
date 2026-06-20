@@ -23,6 +23,15 @@ object AgentAuthChecker {
         overrideAuth[agentKind.lowercase().trim()] = true
     }
 
+    @Volatile private var claudeApiKey: String? = null
+
+    fun setClaudeApiKey(key: String) {
+        claudeApiKey = key.trim().takeIf { it.isNotBlank() }
+        if (claudeApiKey != null) markAuthenticated("claude")
+    }
+
+    fun getClaudeApiKey(): String? = claudeApiKey
+
     fun reset() {
         overrideAuth.clear()
         cache.clear()

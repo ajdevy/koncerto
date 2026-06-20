@@ -323,7 +323,8 @@ data class ServiceConfig(
                 autoCommit = (map["auto_commit"] as? Boolean) ?: true,
                 autoPush = (map["auto_push"] as? Boolean) ?: false,
                 createPr = (map["create_pr"] as? Boolean) ?: false,
-                prBase = (map["pr_base"] as? String) ?: "main"
+                prBase = (map["pr_base"] as? String) ?: "main",
+                remoteUrl = resolveEnvRef(map["remote_url"] as? String) ?: ""
             )
         }
 
@@ -414,5 +415,6 @@ data class GitConfig(
     val autoCommit: Boolean = true,
     val autoPush: Boolean = false,
     val createPr: Boolean = false,
-    val prBase: String = "main"
+    val prBase: String = "main",
+    val remoteUrl: String = ""
 )
