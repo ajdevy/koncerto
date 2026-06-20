@@ -70,6 +70,7 @@ class LinearClientTest {
         put("updatedAt", JsonNull)
         put("state", buildJsonObject { put("name", JsonPrimitive(stateName)) })
         put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+        put("children", buildJsonObject { put("nodes", buildJsonArray {}) })
         put("blockedBy", buildJsonObject { put("nodes", buildJsonArray {}) })
     }
 
@@ -831,6 +832,11 @@ class LinearClientTest {
         }
 
         @Test
+        fun `candidateQuery contains children`() {
+            assertThat(sut.candidateQuery()).contains("children")
+        }
+
+        @Test
         fun `issuesByStatesQuery contains project filter`() {
             assertThat(sut.issuesByStatesQuery).contains("project")
             assertThat(sut.issuesByStatesQuery).contains("slugId")
@@ -847,6 +853,11 @@ class LinearClientTest {
             assertThat(sut.issuesByStatesQuery).contains("identifier")
             assertThat(sut.issuesByStatesQuery).contains("title")
             assertThat(sut.issuesByStatesQuery).contains("branchName")
+        }
+
+        @Test
+        fun `issuesByStatesQuery contains children`() {
+            assertThat(sut.issuesByStatesQuery).contains("children")
         }
 
         @Test
@@ -887,6 +898,11 @@ class LinearClientTest {
             assertThat(sut.issueByIdQuery).contains("creator")
             assertThat(sut.issueByIdQuery).contains("displayName")
             assertThat(sut.issueByIdQuery).contains("isBot")
+        }
+
+        @Test
+        fun `issueByIdQuery contains children`() {
+            assertThat(sut.issueByIdQuery).contains("children")
         }
 
         @Test

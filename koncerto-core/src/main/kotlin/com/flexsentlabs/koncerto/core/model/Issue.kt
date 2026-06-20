@@ -15,7 +15,8 @@ data class Issue(
     val blockedBy: List<BlockerRef>,
     val creator: UserRef? = null,
     val createdAt: Instant?,
-    val updatedAt: Instant?
+    val updatedAt: Instant?,
+    val children: List<String> = emptyList()
 ) {
     val normalizedState: String get() = state.lowercase()
 }

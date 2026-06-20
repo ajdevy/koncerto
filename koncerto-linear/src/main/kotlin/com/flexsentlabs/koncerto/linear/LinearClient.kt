@@ -29,6 +29,7 @@ class DefaultLinearClient(
               id identifier title description priority url branchName createdAt updatedAt
               state { name }
               labels { nodes { name } }
+              children { nodes { id } }
               blockedBy: inverseRelations(first: 25) {
                 nodes {
                   type
@@ -51,6 +52,7 @@ class DefaultLinearClient(
             nodes { id identifier title description priority url branchName createdAt updatedAt
               state { name }
               labels { nodes { name } }
+              children { nodes { id } }
             }
           }
         }
@@ -71,6 +73,7 @@ class DefaultLinearClient(
             state { name }
             labels { nodes { name } }
             creator { id displayName isBot }
+            children { nodes { id } }
             blockedBy: inverseRelations(first: 25) {
               nodes {
                 type

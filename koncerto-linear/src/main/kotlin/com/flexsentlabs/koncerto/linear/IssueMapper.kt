@@ -26,6 +26,9 @@ object IssueMapper {
             ?.filter { it.isNotEmpty() }
             ?: emptyList()
         
+        val childrenNodes = (node["children"] as? JsonObject)?.get("nodes") as? JsonArray
+        val children = childrenNodes?.mapNotNull { (it as? JsonObject)?.stringOrNull("id") } ?: emptyList()
+
         val blockedByNodes = (node["blockedBy"] as? JsonObject)?.get("nodes") as? JsonArray
         val blockedBy = blockedByNodes?.mapNotNull { node ->
             val obj = node as? JsonObject ?: return@mapNotNull null
@@ -59,7 +62,8 @@ object IssueMapper {
             blockedBy = blockedBy,
             creator = creator,
             createdAt = createdAt,
-            updatedAt = updatedAt
+            updatedAt = updatedAt,
+            children = children
         )
     }
 }

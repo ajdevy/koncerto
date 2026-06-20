@@ -97,6 +97,7 @@ class DispatchService(
         val sorted = graph.frontier
             .filter { !state.running.containsKey(it.id) && !state.isClaimed(it.id) }
             .filter { matchesRequiredLabels(it) }
+            .filter { it.children.isEmpty() }
             .filter { !isBlockedForTodo(it) }
             .sortedWith(
                 compareBy<Issue>({ it.priority ?: DEFAULT_PRIORITY })

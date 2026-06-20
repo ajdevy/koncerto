@@ -5,6 +5,8 @@
 
 A Kotlin/Spring Boot orchestrator that polls Linear for issues, dispatches them to AI agents (opencode, Codex, Claude), and manages the full lifecycle — retries, state transitions, and notifications.
 
+**Epic handling:** Issues with sub-issues (children) are treated as epics and are skipped by the agent dispatch — only leaf-level tasks are processed. This prevents koncerto from attempting to complete a parent issue that is a container for smaller work items.
+
 ## Quick Start
 
 ```bash

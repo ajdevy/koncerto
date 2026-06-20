@@ -235,6 +235,21 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `dispatch skips issues with sub-issues (children)`() {
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            candidates = listOf(
+                issue("1", "A-1", "Todo"),
+                issue("2", "A-2", "Todo").copy(children = listOf("sub-1")),
+                issue("3", "A-3", "Todo").copy(children = listOf("sub-2", "sub-3"))
+            )
+        )
+        runDispatch(svc)
+        assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
+    }
+
+    @Test
     fun `matchesRequiredLabels is case insensitive`() {
         val projectConfig = config().copy(tracker = config().tracker.copy(requiredLabels = listOf("BugFix")))
         val runner = CollectingAgentRunner()
