@@ -871,6 +871,7 @@ class LinearClientTest {
         @Test
         fun `statesByIdsQuery uses issues filter query`() {
             assertThat(sut.statesByIdsQuery).contains("issues")
+            assertThat(sut.statesByIdsQuery).contains("nodes")
             assertThat(sut.statesByIdsQuery).contains("filter")
         }
 
