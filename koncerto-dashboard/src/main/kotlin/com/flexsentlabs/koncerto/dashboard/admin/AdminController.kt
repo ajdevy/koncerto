@@ -105,7 +105,7 @@ class AdminController @Autowired constructor(
 
     @GetMapping("/projects/{projectSlug}", produces = [MediaType.APPLICATION_JSON_VALUE])
     fun getProjectDetail(
-        @PathVariable projectSlug: String,
+        @PathVariable("projectSlug") projectSlug: String,
         @RequestHeader("X-Admin-Key") adminKey: String?
     ): Mono<ResponseEntity<ProjectDetail>> {
         if (!authorized(adminKey)) return Mono.just(ResponseEntity.status(401).build())

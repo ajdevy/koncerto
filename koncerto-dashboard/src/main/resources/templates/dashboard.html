@@ -103,7 +103,27 @@
 
     <script>
         const outputSources = {};
+        const openOutputs = {};
         let tokenChartInstance = null;
+
+        function outputStreamUrl(id, project) {
+            let url = '/api/v1/running/' + encodeURIComponent(id) + '/output/stream';
+            if (project) url += '?project=' + encodeURIComponent(project);
+            return url;
+        }
+
+        function connectOutputStream(id, project) {
+            const pre = document.getElementById('out-' + id);
+            if (!pre || outputSources[id]) return;
+            openOutputs[id] = { project: project || '', text: pre.textContent };
+            outputSources[id] = new EventSource(outputStreamUrl(id, project));
+            outputSources[id].addEventListener('output', function(e) {
+                pre.textContent += e.data + '\n';
+                if (openOutputs[id]) openOutputs[id].text = pre.textContent;
+                pre.scrollTop = pre.scrollHeight;
+            });
+            outputSources[id].onerror = function() { closeOutput(id); };
+        }
 
         async function refresh() {
             const r = await fetch('/api/v1/state');
@@ -112,16 +132,33 @@
                 `in=${s.tokenTotals.inputTokens} out=${s.tokenTotals.outputTokens} total=${s.tokenTotals.totalTokens}`;
             const ids = new Set(s.running.map(x => x.issueIdentifier));
             for (const id of Object.keys(outputSources)) {
-                if (!ids.has(id)) { outputSources[id].close(); delete outputSources[id]; }
+                const pre = document.getElementById('out-' + id);
+                if (pre && openOutputs[id]) openOutputs[id].text = pre.textContent;
+                outputSources[id].close();
+                delete outputSources[id];
+            }
+            for (const id of Object.keys(openOutputs)) {
+                if (!ids.has(id)) delete openOutputs[id];
             }
             const rb = document.querySelector('#running tbody');
             rb.innerHTML = s.running.map(x => {
                 const controls = x.paused
                     ? `<button onclick="resumeAgent('${x.issueIdentifier}')">Resume</button>`
                     : `<button onclick="pauseAgent('${x.issueIdentifier}')">Pause</button>`;
-                return `<tr><td>${x.issueIdentifier}</td><td>${x.projectSlug ?? ''}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td><td>${controls} <button class="btn-danger" onclick="cancelAgent('${x.issueIdentifier}')">Cancel</button></td><td><button class="btn-out" onclick="toggleOutput('${x.issueIdentifier}')">View</button></td></tr>` +
+                const projectArg = (x.projectSlug || '').replace(/'/g, "\\'");
+                return `<tr><td>${x.issueIdentifier}</td><td>${x.projectSlug ?? ''}</td><td>${x.threadId}</td><td>${x.turnCount}</td><td>${x.url ?? ''}</td><td>${controls} <button class="btn-danger" onclick="cancelAgent('${x.issueIdentifier}')">Cancel</button></td><td><button class="btn-out" onclick="toggleOutput('${x.issueIdentifier}', '${projectArg}')">View</button></td></tr>` +
                     `<tr id="outrow-${x.issueIdentifier}" style="display:none"><td colspan="7"><pre class="output" id="out-${x.issueIdentifier}"></pre></td></tr>`;
             }).join('');
+            for (const [id, state] of Object.entries(openOutputs)) {
+                if (!ids.has(id)) continue;
+                const row = document.getElementById('outrow-' + id);
+                const pre = document.getElementById('out-' + id);
+                if (!row || !pre) continue;
+                row.style.display = 'table-row';
+                pre.classList.add('open');
+                pre.textContent = state.text;
+                connectOutputStream(id, state.project);
+            }
             const rt = document.querySelector('#retrying tbody');
             rt.innerHTML = s.retrying.map(x => `<tr><td>${x.identifier}</td><td>${x.attempt}</td><td>${x.error ?? ''}</td></tr>`).join('');
             const bl = document.querySelector('#blocked tbody');
@@ -130,29 +167,25 @@
             ).join('');
         }
 
-        function toggleOutput(id) {
+        function toggleOutput(id, project) {
             const row = document.getElementById('outrow-' + id);
             if (!row) return;
             const pre = document.getElementById('out-' + id);
             if (row.style.display === 'table-row') {
                 row.style.display = 'none';
                 if (outputSources[id]) { outputSources[id].close(); delete outputSources[id]; }
+                delete openOutputs[id];
                 return;
             }
             row.style.display = 'table-row';
             pre.classList.add('open');
-            if (!outputSources[id]) {
-                outputSources[id] = new EventSource('/api/v1/running/' + id + '/output/stream');
-                outputSources[id].addEventListener('output', function(e) {
-                    pre.textContent += e.data + '\n';
-                    pre.scrollTop = pre.scrollHeight;
-                });
-                outputSources[id].onerror = function() { closeOutput(id); };
-            }
+            openOutputs[id] = { project: project || '', text: pre.textContent };
+            connectOutputStream(id, project);
         }
 
         function closeOutput(id) {
             if (outputSources[id]) { outputSources[id].close(); delete outputSources[id]; }
+            delete openOutputs[id];
             const row = document.getElementById('outrow-' + id);
             if (row) row.style.display = 'none';
         }

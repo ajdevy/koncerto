@@ -8,6 +8,8 @@ import com.flexsentlabs.koncerto.metrics.IssueMetrics
 import com.flexsentlabs.koncerto.metrics.MetricsRepository
 import com.flexsentlabs.koncerto.orchestrator.DependencyGraph
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
+import com.flexsentlabs.koncerto.orchestrator.RunningEntry
+import com.flexsentlabs.koncerto.orchestrator.RuntimeState
 import kotlinx.coroutines.reactive.asPublisher
 import kotlinx.serialization.Serializable
 import org.springframework.http.MediaType
@@ -56,7 +58,9 @@ class ApiV1Controller @Autowired constructor(
         val inputTokens: Long,
         val outputTokens: Long,
         val totalTokens: Long,
-        val url: String?
+        val url: String?,
+        val projectSlug: String = "",
+        val paused: Boolean = false
     )
 
     @Serializable
@@ -87,25 +91,37 @@ class ApiV1Controller @Autowired constructor(
 
     @GetMapping("/running/{identifier}/output/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamOutput(
-        @PathVariable identifier: String,
-        @RequestParam(defaultValue = "") project: String
+        @PathVariable("identifier") identifier: String,
+        @RequestParam("project", defaultValue = "") project: String
     ): Flux<ServerSentEvent<String>> {
-        val pr = if (project.isNotBlank()) projects[project] else null
-        val state = pr?.state ?: projects.values.firstOrNull()?.state ?: return Flux.empty()
-        val entry = state.running.values.firstOrNull { it.issue.identifier == identifier }
-            ?: return Flux.empty()
-        val flow = state.outputFlow(entry.issue.id) ?: return Flux.empty()
+        val match = findRunningEntry(identifier, project) ?: return Flux.empty()
+        val flow = match.first.outputFlow(match.second.issue.id) ?: return Flux.empty()
         return Flux.from(flow.asPublisher())
             .map { line: String -> ServerSentEvent.builder(line).event("output").build() }
     }
 
+    private fun findRunningEntry(identifier: String, project: String): Pair<RuntimeState, RunningEntry>? {
+        if (project.isNotBlank()) {
+            val pr = projects[project] ?: return null
+            val entry = pr.state.running.values.firstOrNull { it.issue.identifier == identifier }
+            return entry?.let { pr.state to it }
+        }
+        for (pr in projects.values) {
+            val entry = pr.state.running.values.firstOrNull { it.issue.identifier == identifier }
+            if (entry != null) return pr.state to entry
+        }
+        return null
+    }
+
     @GetMapping("/state", produces = ["application/json"])
     fun state(): Mono<StateSnapshot> {
-        val allRunning = projects.values.flatMap { pr ->
+        val allRunning = projects.flatMap { (slug, pr) ->
             pr.state.running.values.map {
                 RunningRow(
                     it.issue.id, it.issue.identifier, it.threadId, it.turnId, it.turnCount,
-                    it.inputTokens, it.outputTokens, it.totalTokens, it.issue.url
+                    it.inputTokens, it.outputTokens, it.totalTokens, it.issue.url,
+                    projectSlug = slug,
+                    paused = it.paused
                 )
             }
         }
@@ -160,7 +176,7 @@ class ApiV1Controller @Autowired constructor(
     data class RefreshResponse(val status: String)
 
     @GetMapping("/{identifier}", produces = ["application/json"])
-    fun byIdentifier(@PathVariable identifier: String): Mono<IssueDetail> {
+    fun byIdentifier(@PathVariable("identifier") identifier: String): Mono<IssueDetail> {
         val entry = projects.values.asSequence().flatMap { pr ->
             pr.state.running.values.asSequence()
         }.firstOrNull { it.issue.identifier == identifier }
@@ -194,7 +210,7 @@ class ApiV1Controller @Autowired constructor(
     )
 
     @GetMapping("/models", produces = ["application/json"])
-    fun models(@RequestParam(defaultValue = "") project: String): Mono<ModelsResponse> {
+    fun models(@RequestParam("project", defaultValue = "") project: String): Mono<ModelsResponse> {
         val pr = if (project.isNotBlank()) projects[project]
                  else projects.values.firstOrNull()
         val pc = pr?.config ?: return Mono.just(ModelsResponse("opencode", emptyList(), 0))
@@ -230,7 +246,7 @@ class ApiV1Controller @Autowired constructor(
     )
 
     @GetMapping("/dependencies", produces = ["application/json"])
-    suspend fun dependencies(@RequestParam(defaultValue = "") project: String): DependencyGraphResponse {
+    suspend fun dependencies(@RequestParam("project", defaultValue = "") project: String): DependencyGraphResponse {
         val pr = if (project.isNotBlank()) projects[project]
                  else projects.values.firstOrNull()
         val dispatch = pr?.dispatch ?: return DependencyGraphResponse(emptyList(), emptyList())
@@ -270,8 +286,8 @@ class ApiV1Controller @Autowired constructor(
 
     @GetMapping("/history", produces = ["application/json"])
     suspend fun history(
-        @RequestParam project: String? = null,
-        @RequestParam(defaultValue = "50") limit: Int = 50
+        @RequestParam("project") project: String? = null,
+        @RequestParam("limit", defaultValue = "50") limit: Int = 50
     ): List<IssueMetrics> {
         return if (project != null) {
             metricsRepository?.findByProject(project) ?: emptyList()
@@ -328,7 +344,7 @@ class ApiV1Controller @Autowired constructor(
     }
 
     @PutMapping("/running/{identifier}/pause")
-    fun pauseAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+    fun pauseAgent(@PathVariable("identifier") identifier: String): ResponseEntity<Unit> {
         val found = projects.values.any { pr ->
             val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
             id != null && pr.state.pauseAgent(id)
@@ -337,7 +353,7 @@ class ApiV1Controller @Autowired constructor(
     }
 
     @PutMapping("/running/{identifier}/resume")
-    fun resumeAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+    fun resumeAgent(@PathVariable("identifier") identifier: String): ResponseEntity<Unit> {
         val found = projects.values.any { pr ->
             val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key
             id != null && pr.state.resumeAgent(id)
@@ -346,7 +362,7 @@ class ApiV1Controller @Autowired constructor(
     }
 
     @PutMapping("/running/{identifier}/cancel")
-    suspend fun cancelAgent(@PathVariable identifier: String): ResponseEntity<Unit> {
+    suspend fun cancelAgent(@PathVariable("identifier") identifier: String): ResponseEntity<Unit> {
         var found = false
         for (pr in projects.values) {
             val id = pr.state.running.entries.firstOrNull { it.value.issue.identifier == identifier }?.key

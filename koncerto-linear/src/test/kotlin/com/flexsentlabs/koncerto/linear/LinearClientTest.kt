@@ -58,6 +58,14 @@ class LinearClientTest {
         }
     }
 
+    private fun issueStatesResponse(vararg nodes: JsonObject) = buildJsonObject {
+        put("data", buildJsonObject {
+            put("issues", buildJsonObject {
+                put("nodes", buildJsonArray { nodes.forEach { add(it) } })
+            })
+        })
+    }
+
     private fun makeIssueNode(id: String, identifier: String, stateName: String) = buildJsonObject {
         put("id", JsonPrimitive(id))
         put("identifier", JsonPrimitive(identifier))
@@ -861,8 +869,8 @@ class LinearClientTest {
         }
 
         @Test
-        fun `statesByIdsQuery uses nodes query`() {
-            assertThat(sut.statesByIdsQuery).contains("nodes")
+        fun `statesByIdsQuery uses issues filter query`() {
+            assertThat(sut.statesByIdsQuery).contains("issues")
             assertThat(sut.statesByIdsQuery).contains("filter")
         }
 
@@ -1409,24 +1417,18 @@ class LinearClientTest {
         @Test
         fun `fetchIssueStatesByIds returns id to state map`() = runTest {
             val fake = FakeGraphqlClient(
-                responses = mutableListOf(buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("nodes", buildJsonArray {
-                            add(buildJsonObject {
-                                put("id", JsonPrimitive("i1"))
-                                put("state", buildJsonObject {
-                                    put("name", JsonPrimitive("Done"))
-                                })
-                            })
-                            add(buildJsonObject {
-                                put("id", JsonPrimitive("i2"))
-                                put("state", buildJsonObject {
-                                    put("name", JsonPrimitive("Todo"))
-                                })
-                            })
-                        })
-                    })
-                })
+                responses = mutableListOf(
+                    issueStatesResponse(
+                        buildJsonObject {
+                            put("id", JsonPrimitive("i1"))
+                            put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
+                        },
+                        buildJsonObject {
+                            put("id", JsonPrimitive("i2"))
+                            put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                        }
+                    )
+                )
             )
 
             val sut = DefaultLinearClient(fake, "proj")
@@ -1440,21 +1442,17 @@ class LinearClientTest {
         @Test
         fun `fetchIssueStatesByIds skips nodes with null state`() = runTest {
             val fake = FakeGraphqlClient(
-                responses = mutableListOf(buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("nodes", buildJsonArray {
-                            add(buildJsonObject {
-                                put("id", JsonPrimitive("i1"))
-                                put("state", buildJsonObject {
-                                    put("name", JsonPrimitive("Done"))
-                                })
-                            })
-                            add(buildJsonObject {
-                                put("id", JsonPrimitive("i2"))
-                            })
-                        })
-                    })
-                })
+                responses = mutableListOf(
+                    issueStatesResponse(
+                        buildJsonObject {
+                            put("id", JsonPrimitive("i1"))
+                            put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
+                        },
+                        buildJsonObject {
+                            put("id", JsonPrimitive("i2"))
+                        }
+                    )
+                )
             )
 
             val sut = DefaultLinearClient(fake, "proj")
@@ -1467,17 +1465,13 @@ class LinearClientTest {
         @Test
         fun `fetchIssueStatesByIds uses empty string for null id`() = runTest {
             val fake = FakeGraphqlClient(
-                responses = mutableListOf(buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("nodes", buildJsonArray {
-                            add(buildJsonObject {
-                                put("state", buildJsonObject {
-                                    put("name", JsonPrimitive("Done"))
-                                })
-                            })
-                        })
-                    })
-                })
+                responses = mutableListOf(
+                    issueStatesResponse(
+                        buildJsonObject {
+                            put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
+                        }
+                    )
+                )
             )
 
             val sut = DefaultLinearClient(fake, "proj")
@@ -1499,6 +1493,23 @@ class LinearClientTest {
             assertThrows<LinearError.UnknownPayload> {
                 sut.fetchIssueStatesByIds(listOf("i1"))
             }
+        }
+
+        @Test
+        fun `fetchIssueStatesByIds passes correct variables`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(issueStatesResponse())
+            )
+
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.fetchIssueStatesByIds(listOf("a", "b"))
+
+            assertThat(fake.calls.size).isEqualTo(1)
+            val (query, vars) = fake.calls[0]
+            assertThat(query).contains("StatesByIds")
+            val ids = vars["ids"] as? kotlinx.serialization.json.JsonArray
+            assertThat(ids != null && ids.size == 2).isTrue()
+            assertThat(vars["first"] == JsonPrimitive(2)).isTrue()
         }
 
         @Test
@@ -1549,26 +1560,6 @@ class LinearClientTest {
             assertThat(query).contains("IssuesByStates")
             assertThat(vars["projectSlug"] == JsonPrimitive("my-proj")).isTrue()
             assertThat(vars["first"] == JsonPrimitive(50)).isTrue()
-        }
-
-        @Test
-        fun `fetchIssueStatesByIds passes correct variables`() = runTest {
-            val fake = FakeGraphqlClient(
-                responses = mutableListOf(buildJsonObject {
-                    put("data", buildJsonObject {
-                        put("nodes", buildJsonArray {})
-                    })
-                })
-            )
-
-            val sut = DefaultLinearClient(fake, "proj")
-            sut.fetchIssueStatesByIds(listOf("a", "b"))
-
-            assertThat(fake.calls.size).isEqualTo(1)
-            val (query, vars) = fake.calls[0]
-            assertThat(query).contains("StatesByIds")
-            val ids = vars["ids"] as? kotlinx.serialization.json.JsonArray
-            assertThat(ids != null && ids.size == 2).isTrue()
         }
 
         @Test

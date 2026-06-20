@@ -404,6 +404,69 @@ class ApiV1ControllerTest {
     }
 
     @Test
+    fun `streamOutput finds running agent across projects when project omitted`() {
+        val emptyState = RuntimeState()
+        val activeState = RuntimeState()
+        activeState.maxConcurrentAgents = 5
+        val issue = Issue("2", "XYZ-9", "Other project", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        activeState.running["2"] = RunningEntry(
+            issue = issue, threadId = "t-2", turnId = "u-2",
+            startedAt = Instant.now(), lastCodexTimestamp = null
+        )
+        runBlocking { activeState.appendOutput("2", "cross-project line") }
+        val config = minimalConfig().copy(
+            projects = mapOf(
+                "default" to minimalConfig().projects.getValue("default"),
+                "other" to minimalConfig().projects.getValue("default")
+            )
+        )
+        val orchestrator = createOrchestrator(
+            config,
+            emptyState,
+            slug = "default",
+        ).let { first ->
+            Orchestrator(
+                config = config,
+                linearClientFactory = { first.projects.getValue("default").linear },
+                workspaceManagerFactory = { first.projects.getValue("default").workspaces },
+                agentRunner = object : AgentRunner {
+                    override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
+                    override suspend fun run(
+                        issue: Issue, attempt: Int?, prompt: String,
+                        agentKindOverride: String?, commandOverride: String?,
+                        modelOverride: String?,
+                        effortOverride: String?,
+                        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+                    ): EmptyResult<IllegalStateException> = Result.Success(Unit)
+                },
+                workflowCache = WorkflowCache(),
+                logger = StructuredLogger(emptyList()),
+                scope = CoroutineScope(Job() + Dispatchers.Unconfined),
+                runtimeStates = mapOf("default" to emptyState, "other" to activeState),
+                metricsRepository = null
+            )
+        }
+        val controller = ApiV1Controller(config, orchestrator)
+        val result = controller.streamOutput("XYZ-9", "").next().block()
+        assertThat(result).isNotNull()
+        assertThat(result!!.data()).isEqualTo("cross-project line")
+    }
+
+    @Test
+    fun `state includes project slug and paused flag for running rows`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastCodexTimestamp = null, paused = true
+        )
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.running[0].projectSlug).isEqualTo("default")
+        assertThat(snapshot.running[0].paused).isTrue()
+    }
+
+    @Test
     fun `state returns blocked entries`() {
         val state = RuntimeState()
         val issue = Issue("1", "ABC-1", "Test Issue", null, 1, "Todo", null, "http://url", emptyList(), emptyList(), null, null, null)

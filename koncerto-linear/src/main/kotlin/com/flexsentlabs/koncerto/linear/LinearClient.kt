@@ -59,9 +59,9 @@ class DefaultLinearClient(
     """.trimIndent()
 
     internal val statesByIdsQuery = """
-        query StatesByIds(${'$'}ids: [ID!]!) {
-          nodes(filter: { id: { in: ${'$'}ids } }) {
-            ... on Issue { id state { name } }
+        query StatesByIds(${'$'}ids: [ID!]!, ${'$'}first: Int!) {
+          issues(filter: { id: { in: ${'$'}ids } }, first: ${'$'}first) {
+            nodes { id state { name } }
           }
         }
     """.trimIndent()
@@ -184,9 +184,12 @@ class DefaultLinearClient(
         if (issueIds.isEmpty()) return emptyMap()
         val vars = buildJsonObject {
             put("ids", buildJsonArray { issueIds.forEach { add(it) } })
+            put("first", issueIds.size.coerceAtMost(250))
         }
         val resp = graphql.execute(statesByIdsQuery, vars)
-        val nodes = (resp["data"] as JsonObject)["nodes"] as? JsonArray
+        val conn = (resp["data"] as JsonObject)["issues"] as? JsonObject
+            ?: throw LinearError.UnknownPayload()
+        val nodes = conn["nodes"] as? JsonArray
             ?: throw LinearError.UnknownPayload()
         val map = mutableMapOf<String, String>()
         nodes.forEach {

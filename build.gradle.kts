@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
     kotlin("jvm") version "2.0.21" apply false
     kotlin("plugin.serialization") version "2.0.21" apply false
@@ -16,6 +18,12 @@ allprojects {
 
 subprojects {
     apply(plugin = "jacoco")
+
+    tasks.withType<KotlinCompile>().configureEach {
+        compilerOptions {
+            javaParameters.set(true)
+        }
+    }
 
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()

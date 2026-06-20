@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
 import org.springframework.web.reactive.function.client.WebClient
+import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.reactive.function.client.bodyToMono
 import java.time.Duration
 
@@ -63,6 +64,10 @@ open class LinearGraphQLClient(
             } catch (e: LinearError) {
                 circuitBreaker?.recordFailure()
                 throw e
+            } catch (e: WebClientResponseException) {
+                circuitBreaker?.recordFailure()
+                val detail = e.responseBodyAsString.take(500).ifBlank { e.message ?: "http error" }
+                throw LinearError.Request("${e.statusCode.value()} $detail", e)
             } catch (e: Exception) {
                 circuitBreaker?.recordFailure()
                 throw LinearError.Request(e.message ?: "transport failure", e)
