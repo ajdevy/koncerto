@@ -483,4 +483,22 @@ class ApiV1Controller @Autowired constructor(
         loginCode = null
         return ResponseEntity.ok().build()
     }
+
+    data class ClaudeLoginStatus(val authenticated: Boolean, val message: String = "")
+
+    @PostMapping("/claude-login")
+    fun setClaudeApiKey(@RequestBody body: Map<String, String>): ResponseEntity<ClaudeLoginStatus> {
+        val key = (body["api_key"] ?: "").trim()
+        if (key.isBlank()) {
+            return ResponseEntity.badRequest().body(ClaudeLoginStatus(false, "API key cannot be empty"))
+        }
+        AgentAuthChecker.setClaudeApiKey(key)
+        return ResponseEntity.ok(ClaudeLoginStatus(true, "API key stored"))
+    }
+
+    @GetMapping("/claude-login-status")
+    fun getClaudeLoginStatus(): ResponseEntity<ClaudeLoginStatus> {
+        val authenticated = AgentAuthChecker.isAuthenticated("claude")
+        return ResponseEntity.ok(ClaudeLoginStatus(authenticated))
+    }
 }

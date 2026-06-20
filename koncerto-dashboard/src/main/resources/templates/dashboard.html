@@ -57,6 +57,17 @@
         <button id="codex-login-cancel-btn" style="display:none;" onclick="cancelCodexLogin()">Cancel</button>
         <div id="codex-login-url" style="display:none; margin-top:0.5rem;"></div>
     </div>
+    <div class="totals" id="claude-login-section" style="display:block;">
+        <strong>Claude:</strong>
+        <span id="claude-login-status">checking...</span>
+        <button id="claude-login-btn" style="display:none;" onclick="startClaudeLogin()">Login</button>
+        <div id="claude-login-form" style="display:none; margin-top:0.5rem;">
+            <input type="password" id="claude-api-key-input" placeholder="sk-ant-..." style="width:300px; background:#222; color:#eee; border:1px solid #444; padding:0.25rem;">
+            <button onclick="submitClaudeApiKey()" style="background:#333; color:#6cf; border:1px solid #555; cursor:pointer;">Submit</button>
+            <button onclick="cancelClaudeLogin()" style="background:#333; color:#f66; border:1px solid #555; cursor:pointer;">Cancel</button>
+            <div id="claude-login-message" style="margin-top:0.25rem;"></div>
+        </div>
+    </div>
 
     <section id="running">
         <h2>Running</h2>
@@ -382,8 +393,10 @@
         loadDependencies();
         loadTunnel();
         checkCodexLoginStatus();
+        checkClaudeLoginStatus();
         loadAgentAuthStatus();
         setInterval(checkCodexLoginStatus, 5000);
+        setInterval(checkClaudeLoginStatus, 5000);
         setInterval(loadAgentAuthStatus, 15000);
         setInterval(refresh, 5000);
         setInterval(loadDependencies, 30000);
@@ -476,6 +489,66 @@
             document.getElementById('codex-login-url').style.display = 'none';
             document.getElementById('codex-login-btn').style.display = 'inline';
             document.getElementById('codex-login-cancel-btn').style.display = 'none';
+        }
+
+        async function checkClaudeLoginStatus() {
+            const statusEl = document.getElementById('claude-login-status');
+            const btn = document.getElementById('claude-login-btn');
+            try {
+                const r = await fetch('/api/v1/claude-login-status');
+                const data = await r.json();
+                if (data.authenticated) {
+                    statusEl.textContent = 'logged in';
+                    btn.style.display = 'none';
+                    document.getElementById('claude-login-form').style.display = 'none';
+                } else {
+                    statusEl.textContent = 'not logged in';
+                    btn.style.display = 'inline';
+                }
+            } catch (e) {
+                statusEl.textContent = 'offline';
+                btn.style.display = 'none';
+            }
+        }
+
+        async function startClaudeLogin() {
+            document.getElementById('claude-login-btn').style.display = 'none';
+            document.getElementById('claude-login-form').style.display = 'block';
+            document.getElementById('claude-login-message').textContent = '';
+            document.getElementById('claude-api-key-input').value = '';
+        }
+
+        async function submitClaudeApiKey() {
+            const key = document.getElementById('claude-api-key-input').value.trim();
+            if (!key) {
+                document.getElementById('claude-login-message').textContent = 'Please enter an API key';
+                return;
+            }
+            const msgEl = document.getElementById('claude-login-message');
+            msgEl.textContent = 'saving...';
+            try {
+                const r = await fetch('/api/v1/claude-login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: key })
+                });
+                const data = await r.json();
+                if (data.authenticated) {
+                    msgEl.textContent = 'API key stored successfully';
+                    document.getElementById('claude-login-status').textContent = 'logged in';
+                    setTimeout(() => { document.getElementById('claude-login-form').style.display = 'none'; }, 1000);
+                } else {
+                    msgEl.textContent = data.message || 'Error saving API key';
+                }
+            } catch (e) {
+                msgEl.textContent = 'Error: ' + e.message;
+            }
+        }
+
+        function cancelClaudeLogin() {
+            document.getElementById('claude-login-form').style.display = 'none';
+            document.getElementById('claude-login-btn').style.display = 'inline';
+            document.getElementById('claude-login-message').textContent = '';
         }
     </script>
 </body>

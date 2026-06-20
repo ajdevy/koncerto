@@ -63,6 +63,9 @@ class ClaudeReviewRuntime(
             val pb = ProcessBuilder("bash", "-lc", command)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
+            AgentAuthChecker.getClaudeApiKey()?.let { key ->
+                pb.environment().put("ANTHROPIC_API_KEY", key)
+            }
             val p = pb.start()
             process = p
             pid = p.pid()

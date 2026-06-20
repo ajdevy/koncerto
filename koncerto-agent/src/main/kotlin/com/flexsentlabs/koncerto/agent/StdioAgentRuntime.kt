@@ -71,26 +71,29 @@ abstract class StdioAgentRuntime(
     }
 
     private suspend fun readStdout(reader: java.io.BufferedReader) {
+        var lineCount = 0
         try {
             reader.lineSequence().forEach { line ->
+                lineCount++
                 if (line.isBlank()) return@forEach
                 _output.tryEmit("[stdout] $line")
-                try {
-                    val msgs = JsonRpcFraming.decodeAll(line)
+                val msgs = JsonRpcFraming.decodeAll(line)
+                if (msgs.isNotEmpty()) {
                     msgs.forEach { dispatchMessage(it) }
-                } catch (e: Exception) {
-                    if (!tryHandleAsJsonl(line)) {
-                        events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
-                    }
+                } else if (!tryHandleAsJsonl(line)) {
+                    events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
                 }
             }
+            logger.info("${logTag}_stdout_stream_ended", mapOf("total_lines" to lineCount.toString(), "jsonlMode" to jsonlMode.toString(), "turnCompletedEmitted" to turnCompletedEmitted.toString()))
         } catch (e: Exception) {
-            logger.warn("${logTag}_stdout_read_failed", emptyMap(), "error" to (e.message ?: "unknown"))
+            logger.warn("${logTag}_stdout_read_failed", mapOf("error" to (e.message ?: "unknown"), "total_lines" to lineCount.toString()))
         }
         if (jsonlMode && !turnCompletedEmitted) {
+            logger.info("${logTag}_stdout_turn_completed_synthetic", mapOf("reason" to "stream ended before turn.completed"))
             _output.tryEmit("[jsonl] stream ended")
             events.trySend(AgentEvent.TurnCompleted("?", "?", null, pid))
         }
+        logger.info("${logTag}_stdout_reader_finished", mapOf("lineCount" to lineCount.toString(), "jsonlMode" to jsonlMode.toString(), "turnCompletedEmitted" to turnCompletedEmitted.toString()))
     }
 
     private fun tryHandleAsJsonl(line: String): Boolean {
