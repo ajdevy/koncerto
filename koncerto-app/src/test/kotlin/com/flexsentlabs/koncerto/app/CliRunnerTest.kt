@@ -88,7 +88,7 @@ class CliRunnerTest {
                 blockedBy = emptyList(), createdAt = null, updatedAt = null
             ),
             threadId = "thread-1", turnId = "turn-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null,
+            startedAt = Instant.now(), lastHeartbeatAt = null,
             turnCount = 3
         )
         return Orchestrator(

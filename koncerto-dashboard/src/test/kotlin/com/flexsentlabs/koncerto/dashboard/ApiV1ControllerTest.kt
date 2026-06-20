@@ -126,7 +126,7 @@ class ApiV1ControllerTest {
             threadId = "t-1",
             turnId = "u-1",
             startedAt = Instant.now(),
-            lastCodexTimestamp = null,
+            lastHeartbeatAt = null,
             inputTokens = 100,
             outputTokens = 50,
             totalTokens = 150,
@@ -156,7 +156,7 @@ class ApiV1ControllerTest {
             threadId = "t-1",
             turnId = "u-1",
             startedAt = Instant.now(),
-            lastCodexTimestamp = null,
+            lastHeartbeatAt = null,
             turnCount = 3
         )
 
@@ -288,7 +288,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.pauseAgent("ABC-1")
@@ -302,7 +302,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null, paused = true
+            startedAt = Instant.now(), lastHeartbeatAt = null, paused = true
         )
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val response = controller.resumeAgent("ABC-1")
@@ -316,7 +316,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         state.claimed["1"] = true
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
@@ -357,7 +357,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         runBlocking { state.appendOutput("1", "hello world") }
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
@@ -393,7 +393,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         runBlocking { state.appendOutput("1", "output") }
         val config = minimalConfig()
@@ -411,7 +411,7 @@ class ApiV1ControllerTest {
         val issue = Issue("2", "XYZ-9", "Other project", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         activeState.running["2"] = RunningEntry(
             issue = issue, threadId = "t-2", turnId = "u-2",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         runBlocking { activeState.appendOutput("2", "cross-project line") }
         val config = minimalConfig().copy(
@@ -458,7 +458,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null, paused = true
+            startedAt = Instant.now(), lastHeartbeatAt = null, paused = true
         )
         val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
         val snapshot = controller.state().block()
@@ -472,7 +472,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test Issue", null, 1, "Todo", null, "http://url", emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         state.addBlocked("1")
 
@@ -504,7 +504,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), listOf(blockerRef), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null
+            startedAt = Instant.now(), lastHeartbeatAt = null
         )
         state.addBlocked("1")
 
@@ -704,7 +704,7 @@ class ApiV1ControllerTest {
         val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
         state.running["1"] = RunningEntry(
             issue = issue, threadId = "t-1", turnId = "u-1",
-            startedAt = Instant.now(), lastCodexTimestamp = null,
+            startedAt = Instant.now(), lastHeartbeatAt = null,
             inputTokens = 100, outputTokens = 50, totalTokens = 150
         )
 

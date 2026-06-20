@@ -140,14 +140,14 @@ class RuntimeStateTest {
         assertThat(entry.lastReportedOutput).isEqualTo(0)
         assertThat(entry.lastReportedTotal).isEqualTo(0)
         assertThat(entry.turnCount).isEqualTo(1)
-        assertThat(entry.lastCodexTimestamp).isNull()
+        assertThat(entry.lastHeartbeatAt).isNull()
     }
 
     @Test
     fun `RunningEntry with non-default token values`() {
         val entry = RunningEntry(
             issue = Issue("1", "A-1", "t", null, 5, "Todo", null, null, emptyList(), emptyList(), null, null, null),
-            threadId = "t1", turnId = "u1", startedAt = Instant.now(), lastCodexTimestamp = null,
+            threadId = "t1", turnId = "u1", startedAt = Instant.now(), lastHeartbeatAt = null,
             inputTokens = 100, outputTokens = 50, totalTokens = 150,
             lastReportedInput = 50, lastReportedOutput = 25, lastReportedTotal = 75,
             turnCount = 3
@@ -242,6 +242,6 @@ class RuntimeStateTest {
         threadId = "thread-$id",
         turnId = "turn-$id",
         startedAt = Instant.now(),
-        lastCodexTimestamp = null
+        lastHeartbeatAt = null
     )
 }

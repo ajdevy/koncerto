@@ -123,7 +123,7 @@ class OrchestratorHealthIndicatorTest {
         threadId = "thread-$id",
         turnId = "turn-$id",
         startedAt = Instant.now(),
-        lastCodexTimestamp = null
+        lastHeartbeatAt = null
     )
 }
 

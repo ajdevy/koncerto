@@ -12,7 +12,7 @@ class WorkspaceManager(
     private val root: Path,
     private val hookExecutor: HookExecutor
 ) {
-    private val absoluteRoot: Path = root.toAbsolutePath().normalize()
+    val absoluteRoot: Path = root.toAbsolutePath().normalize()
 
     fun ensureWorkspace(identifier: String, tenantContext: TenantContext? = null): Workspace {
         val key = WorkspaceKey.sanitize(identifier)

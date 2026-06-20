@@ -4,6 +4,7 @@ import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.model.TokenUsage
+import com.flexsentlabs.koncerto.core.lifecycle.IssueLifecycle
 import com.flexsentlabs.koncerto.core.audit.AuditEvent
 import com.flexsentlabs.koncerto.core.audit.AuditEventType
 import com.flexsentlabs.koncerto.core.audit.AuditLogger
@@ -27,7 +28,11 @@ import com.flexsentlabs.koncerto.metrics.MetricsRepository
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
+import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
+import java.io.File
+import java.nio.file.Path
 import java.time.Instant
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -75,7 +80,8 @@ class DispatchService(
     private val quotaConfig: QuotaConfig? = null,
     private val crossProjectChainer: CrossProjectChainer? = null,
     private val auditLogger: AuditLogger? = null,
-    private val autoReviewOrchestrator: AutoReviewOrchestrator? = null
+    private val autoReviewOrchestrator: AutoReviewOrchestrator? = null,
+    private val gitWorkflow: GitWorkflow? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -132,10 +138,11 @@ class DispatchService(
             val currentForState = state.running.values.count { it.issue.normalizedState == issue.normalizedState }
             val perStateCap = perStateLimit ?: state.maxConcurrentAgents
             if (currentForState >= perStateCap) continue
+            val stageOverride = resolveStageOverride(issue)
             if (projectConfig.agent.sequentialMode) {
-                dispatchSequential(issue, scope)
+                dispatchSequential(issue, scope, stageNameOverride = stageOverride)
             } else {
-                dispatch(issue, scope)
+                dispatch(issue, scope, stageNameOverride = stageOverride)
             }
         }
     }
@@ -295,6 +302,21 @@ class DispatchService(
         return if (defaultModel != null) resolvedResult.copy(model = defaultModel) else resolvedResult
     }
 
+    private fun resolveStageOverride(issue: Issue): String? {
+        if (issue.normalizedState != "todo") return null
+        val workspacePath = findGitWorkspacePath() ?: return null
+        val gw = gitWorkflow ?: return null
+        val branch = gw.branchName(issue.identifier)
+        return if (gw.remoteBranchExists(branch, workspacePath)) "in review" else null
+    }
+
+    private fun findGitWorkspacePath(): Path? {
+        val root = workspaces?.absoluteRoot ?: return null
+        if (root.resolve(".git").toFile().exists()) return root
+        val dirs = root.toFile().listFiles { f -> f.isDirectory && File(f, ".git").exists() } ?: return null
+        return dirs.firstOrNull()?.toPath()
+    }
+
     private suspend fun handleNormalCompletion(
         issue: Issue,
         stageConfig: StageAgentConfig?,
@@ -349,8 +371,8 @@ class DispatchService(
         }
     }
 
-    private fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
-        val execData = prepareDispatch(issue, attempt) ?: run {
+    private suspend fun dispatch(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null, stageNameOverride: String? = null): Boolean {
+        val execData = prepareDispatch(issue, attempt, stageNameOverride) ?: run {
             retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
             return false
         }
@@ -360,8 +382,8 @@ class DispatchService(
         return true
     }
 
-    private fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null): Boolean {
-        val execData = prepareDispatch(issue, attempt) ?: run {
+    private suspend fun dispatchSequential(issue: Issue, scope: CoroutineScope, attempt: Int? = null, retryEntry: RetryEntry? = null, stageNameOverride: String? = null): Boolean {
+        val execData = prepareDispatch(issue, attempt, stageNameOverride) ?: run {
             retryEntry?.let { state.retryAttempts[issue.id] = it.copy(dueAtMs = System.currentTimeMillis() + RETRY_RESCHEDULE_DELAY_MS) }
             return false
         }
@@ -380,14 +402,20 @@ class DispatchService(
         val attempt: Int?
     )
 
-    private fun prepareDispatch(issue: Issue, attempt: Int?): DispatchExecutionData? {
+    private suspend fun prepareDispatch(issue: Issue, attempt: Int?, stageNameOverride: String? = null): DispatchExecutionData? {
         logger.info(
             "dispatch_start",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         )
-        val stageConfig = projectConfig.agent.stages[issue.normalizedState]
-        val prompt = stageConfig?.prompt ?: workflowCache.current().promptTemplate
-        val resolved = resolveAgent(issue, stageConfig)
+        val effectiveStage = stageNameOverride ?: issue.normalizedState
+        val stageConfig = projectConfig.agent.stages[effectiveStage]
+        val effectiveStageConfig = if (stageNameOverride != null && issue.normalizedState == "todo") {
+            stageConfig?.copy(onCompleteState = "In Review")
+        } else {
+            stageConfig
+        }
+        val prompt = effectiveStageConfig?.prompt ?: workflowCache.current().promptTemplate
+        val resolved = resolveAgent(issue, effectiveStageConfig)
 
         if (AgentAuthChecker.needsAuth(resolved.kind) && !AgentAuthChecker.isAuthenticated(resolved.kind)) {
             logger.warn("dispatch_skipped_not_authenticated", mapOf(
@@ -421,12 +449,31 @@ class DispatchService(
             return null
         }
 
+        // Transition Linear state to In Progress for normal dispatch path
+        if (stageNameOverride == null && issue.normalizedState == "todo") {
+            try {
+                val inProgressId = linear.resolveStateId(projectConfig.tracker.projectSlug, "In Progress")
+                if (inProgressId != null) {
+                    linear.updateIssueState(issue.id, inProgressId)
+                    logger.info("state_transitioned", mapOf(
+                        "issue_id" to issue.id,
+                        "to_state" to "In Progress"
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.warn("state_transition_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "target_state" to "In Progress"
+                ))
+            }
+        }
+
         val entry = RunningEntry(
             issue = issue,
             threadId = threadId,
             turnId = turnId,
             startedAt = Instant.now(),
-            lastCodexTimestamp = null,
+            lastHeartbeatAt = null,
             tenantContext = tenantContext
         )
         state.running[issue.id] = entry
@@ -439,7 +486,7 @@ class DispatchService(
             agentKind = resolved.kind
         ))
 
-        return DispatchExecutionData(stageConfig, prompt, resolved, threadId, turnId, attempt)
+        return DispatchExecutionData(effectiveStageConfig, prompt, resolved, threadId, turnId, attempt)
     }
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
@@ -463,6 +510,9 @@ class DispatchService(
                         event.usage?.let { usage ->
                             state.updateIssueTokens(issue.id, usage.inputTokens, usage.outputTokens, usage.totalTokens)
                         }
+                    }
+                    state.running.computeIfPresent(issue.id) { _, entry ->
+                        entry.copy(lastHeartbeatAt = Instant.now())
                     }
                 }
         }

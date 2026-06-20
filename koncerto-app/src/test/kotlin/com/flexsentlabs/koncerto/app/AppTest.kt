@@ -30,7 +30,7 @@ class AppTest {
             threadId = "t-1",
             turnId = "u-1",
             startedAt = java.time.Instant.now(),
-            lastCodexTimestamp = null
+            lastHeartbeatAt = null
         )
 
         assertThat(state.availableSlots()).isEqualTo(1)

@@ -96,7 +96,7 @@ class DispatchServiceTest {
             threadId = "thread-$id",
             turnId = "turn-$id",
             startedAt = java.time.Instant.now(),
-            lastCodexTimestamp = null
+            lastHeartbeatAt = null
         )
     }
 

@@ -17,7 +17,7 @@ data class RunningEntry(
     val threadId: String,
     val turnId: String,
     val startedAt: Instant,
-    val lastCodexTimestamp: Instant?,
+    val lastHeartbeatAt: Instant?,
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
     val totalTokens: Long = 0,

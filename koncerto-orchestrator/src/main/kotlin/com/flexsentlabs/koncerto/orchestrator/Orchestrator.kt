@@ -14,8 +14,11 @@ import com.flexsentlabs.koncerto.notifications.NotificationEvent
 import com.flexsentlabs.koncerto.orchestrator.SubtaskOrchestrator
 import com.flexsentlabs.koncerto.orchestrator.WorkplanParser
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
+import java.time.Duration
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -55,6 +58,8 @@ class Orchestrator(
 
     val projects: Map<String, ProjectRuntime>
 
+    private val gitWorkflow: GitWorkflow = GitWorkflow(config.gitConfig, logger)
+
     init {
         projects = config.projects.mapValues { (slug, pc) ->
             val state = runtimeStates[slug] ?: RuntimeState().also {
@@ -79,7 +84,8 @@ class Orchestrator(
                 subtaskOrchestrator = subtaskOrchestrator,
                 workplanParser = workplanParser,
                 auditLogger = auditLogger,
-                autoReviewOrchestrator = autoReview
+                autoReviewOrchestrator = autoReview,
+                gitWorkflow = gitWorkflow
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }
@@ -208,8 +214,35 @@ class Orchestrator(
                     try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
                 }
             }
+            detectZombies(state, pr)
         } catch (e: Exception) {
             logger.warn("reconcile_failed", emptyMap(), "error" to (e.message ?: "unknown"))
+        }
+    }
+
+    private suspend fun detectZombies(state: RuntimeState, pr: ProjectRuntime) {
+        val now = Instant.now()
+        val heartbeatTimeout = pr.config.agent.heartbeatTimeoutMs
+        for ((id, entry) in state.running) {
+            if (!entry.issue.normalizedState.equals("in progress", ignoreCase = true)) continue
+            val lastSignal: Instant = entry.lastHeartbeatAt ?: entry.startedAt
+            if (Duration.between(lastSignal, now).toMillis() < heartbeatTimeout) continue
+            logger.info(
+                "zombie_detected",
+                mapOf("issue_id" to id, "issue_identifier" to entry.issue.identifier)
+            )
+            try {
+                val todoStateId = pr.linear.resolveStateId(pr.config.tracker.projectSlug, "Todo")
+                if (todoStateId != null) {
+                    pr.linear.updateIssueState(id, todoStateId)
+                }
+            } catch (e: Exception) {
+                logger.warn("zombie_state_reset_failed", mapOf("issue_id" to id), "error" to (e.message ?: "unknown"))
+            }
+            state.running.remove(id)
+            state.releaseClaim(id)
+            state.removeOutput(id)
+            try { pr.workspaces.removeWorkspace(entry.issue.identifier) } catch (_: Exception) {}
         }
     }
 

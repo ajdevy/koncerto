@@ -499,7 +499,7 @@ class OrchestratorTest {
             issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
                 priority = 1, state = "Todo", branchName = null, url = null,
                 labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
-            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastHeartbeatAt = null
         )
         val linear = FakeLinearClient(emptyList())
         val runner = FakeAgentRunner()
@@ -550,7 +550,7 @@ class OrchestratorTest {
             issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
                 priority = 1, state = "Todo", branchName = null, url = null,
                 labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
-            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastHeartbeatAt = null
         )
         val linear = FakeLinearClient(emptyList())
         val runner = FakeAgentRunner()
@@ -597,7 +597,7 @@ class OrchestratorTest {
             issue = Issue(id = "1", identifier = "ABC-1", title = "Test", description = null,
                 priority = 1, state = "Todo", branchName = null, url = null,
                 labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null),
-            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastCodexTimestamp = null
+            threadId = "t1", turnId = "r1", startedAt = java.time.Instant.now(), lastHeartbeatAt = null
         )
         val linear = FakeLinearClient(emptyList())
         val runner = FakeAgentRunner()
@@ -1152,7 +1152,7 @@ class OrchestratorTest {
         threadId = "thread-$id",
         turnId = "turn-$id",
         startedAt = java.time.Instant.now(),
-        lastCodexTimestamp = null
+        lastHeartbeatAt = null
     )
 }
 

@@ -18,6 +18,7 @@ projects:
       project_slug: deb41f3a3628
       active_states:
         - Todo
+        - "In Progress"
         - "In Review"
       terminal_states:
         - Done
@@ -54,6 +55,7 @@ projects:
       project_slug: d3c2ba0a66a6
       active_states:
         - Todo
+        - "In Progress"
         - "In Review"
       terminal_states:
         - Done
