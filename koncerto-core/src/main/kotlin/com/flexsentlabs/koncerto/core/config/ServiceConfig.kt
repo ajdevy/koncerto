@@ -11,7 +11,8 @@ data class ServiceConfig(
     val hooks: HooksConfig = HooksConfig(null, null, null, null, 60000),
     val gitConfig: GitConfig = GitConfig(),
     val adminApiKey: String? = null,
-    val deprecationWarnings: List<String> = emptyList()
+    val deprecationWarnings: List<String> = emptyList(),
+    val demoRecording: DemoRecordingConfig = DemoRecordingConfig()
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
 
@@ -33,6 +34,7 @@ data class ServiceConfig(
             val git = parseGitConfig(map["git"] as? Map<*, *>)
             val projects = parseProjects(map["projects"] as? Map<*, *>, workflowFileDir)
             val adminApiKey = (map["admin"] as? Map<*, *>)?.get("apiKey") as? String
+            val demoRecording = parseDemoRecordingConfig(map["demo_recording"] as? Map<*, *>)
 
             ServiceConfig(
                 pollIntervalMs = pollIntervalMs,
@@ -40,7 +42,8 @@ data class ServiceConfig(
                 hooks = hooks,
                 gitConfig = git,
                 adminApiKey = adminApiKey,
-                deprecationWarnings = deprecations
+                deprecationWarnings = deprecations,
+                demoRecording = demoRecording
             )
         }
 
@@ -328,6 +331,53 @@ data class ServiceConfig(
             )
         }
 
+        internal fun parseDemoRecordingConfig(map: Map<*, *>?): DemoRecordingConfig {
+            if (map == null) return DemoRecordingConfig()
+            val platformMap = map["platform"] as? Map<*, *>
+            val qualityMap = map["quality"] as? Map<*, *>
+            val storageMap = map["storage"] as? Map<*, *>
+            val aiMap = map["ai"] as? Map<*, *>
+            val retryMap = map["retry"] as? Map<*, *>
+            val errorMap = map["error"] as? Map<*, *>
+            return DemoRecordingConfig(
+                enabled = (map["enabled"] as? Boolean) ?: false,
+                trigger = (map["trigger"] as? String) ?: "review_passed",
+                cleanupIntervalHours = (map["cleanup_interval_hours"] as? Number)?.toInt() ?: 24,
+                platform = DemoRecordingConfig.PlatformConfig(
+                    web = (platformMap?.get("web") as? String) ?: "playwright",
+                    terminal = (platformMap?.get("terminal") as? String) ?: "asciinema"
+                ),
+                quality = DemoRecordingConfig.QualityConfig(
+                    resolution = (qualityMap?.get("resolution") as? String) ?: "1280x720",
+                    fps = (qualityMap?.get("fps") as? Number)?.toInt() ?: 10,
+                    codec = (qualityMap?.get("codec") as? String) ?: "vp9"
+                ),
+                storage = storageMap?.let { s ->
+                    DemoRecordingConfig.StorageConfig(
+                        r2Endpoint = resolveEnvRef(s["r2_endpoint"] as? String) ?: "",
+                        r2Bucket = s["r2_bucket"] as? String ?: "",
+                        r2AccessKey = resolveEnvRef(s["r2_access_key"] as? String) ?: "",
+                        r2SecretKey = resolveEnvRef(s["r2_secret_key"] as? String) ?: "",
+                        publicUrlBase = resolveEnvRef(s["public_url_base"] as? String) ?: "",
+                        presignedUrlTtl = (s["presigned_url_ttl"] as? Number)?.toLong() ?: 3600,
+                        region = s["region"] as? String ?: "auto"
+                    )
+                },
+                ai = DemoRecordingConfig.AiConfig(
+                    model = (aiMap?.get("model") as? String) ?: "free",
+                    timeline = (aiMap?.get("timeline") as? Boolean) ?: false,
+                    reproSteps = (aiMap?.get("repro_steps") as? Boolean) ?: false
+                ),
+                retry = DemoRecordingConfig.RetryConfig(
+                    maxAttempts = (retryMap?.get("max_attempts") as? Number)?.toInt() ?: 3,
+                    backoff = (retryMap?.get("backoff") as? String) ?: "exponential"
+                ),
+                error = DemoRecordingConfig.ErrorConfig(
+                    onFailure = (errorMap?.get("on_failure") as? String) ?: "mark_blocked"
+                )
+            )
+        }
+
         internal fun resolveEnvRef(value: String?): String? {
             if (value == null) return null
             val envMatch = Regex("""^\$([A-Z_][A-Z0-9_]*)$""").matchEntire(value)
@@ -418,3 +468,49 @@ data class GitConfig(
     val prBase: String = "main",
     val remoteUrl: String = ""
 )
+
+data class DemoRecordingConfig(
+    val enabled: Boolean = false,
+    val trigger: String = "review_passed",
+    val platform: PlatformConfig = PlatformConfig(),
+    val quality: QualityConfig = QualityConfig(),
+    val storage: StorageConfig? = null,
+    val ai: AiConfig = AiConfig(),
+    val retry: RetryConfig = RetryConfig(),
+    val error: ErrorConfig = ErrorConfig(),
+    val cleanupIntervalHours: Int = 24
+) {
+    data class PlatformConfig(
+        val web: String = "playwright",
+        val terminal: String = "asciinema"
+    )
+    data class QualityConfig(
+        val resolution: String = "1280x720",
+        val fps: Int = 10,
+        val codec: String = "vp9"
+    ) {
+        val width: Int get() = resolution.split("x").firstOrNull()?.toIntOrNull() ?: 1280
+        val height: Int get() = resolution.split("x").lastOrNull()?.toIntOrNull() ?: 720
+    }
+    data class StorageConfig(
+        val r2Endpoint: String = "",
+        val r2Bucket: String = "",
+        val r2AccessKey: String = "",
+        val r2SecretKey: String = "",
+        val publicUrlBase: String = "",
+        val presignedUrlTtl: Long = 3600,
+        val region: String = "auto"
+    )
+    data class AiConfig(
+        val model: String = "free",
+        val timeline: Boolean = false,
+        val reproSteps: Boolean = false
+    )
+    data class RetryConfig(
+        val maxAttempts: Int = 3,
+        val backoff: String = "exponential"
+    )
+    data class ErrorConfig(
+        val onFailure: String = "mark_blocked"
+    )
+}

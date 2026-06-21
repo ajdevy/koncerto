@@ -49,6 +49,34 @@ projects:
           effort: medium
           on_complete_state: "Done"
           max_review_attempts: 3
+demo_recording:
+  enabled: true
+  trigger: review_passed
+  platform:
+    web: playwright
+    terminal: asciinema
+  quality:
+    resolution: 1280x720
+    fps: 10
+    codec: vp9
+  storage:
+    r2_endpoint: $R2_ENDPOINT
+    r2_bucket: koncerto-demos
+    r2_access_key: $R2_ACCESS_KEY
+    r2_secret_key: $R2_SECRET_KEY
+    public_url_base: $R2_PUBLIC_URL_BASE
+    presigned_url_ttl: 3600
+    region: auto
+  ai:
+    model: free
+    timeline: false
+    repro_steps: false
+  retry:
+    max_attempts: 3
+    backoff: exponential
+  error:
+    on_failure: mark_blocked
+  cleanup_interval_hours: 24
 
 ---
 
