@@ -55,11 +55,13 @@ import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
 import com.flexsentlabs.koncerto.demo.recorder.PlaywrightRecorder
 import com.flexsentlabs.koncerto.demo.recorder.RecorderFactory
 import com.flexsentlabs.koncerto.demo.recorder.XcrunRecorder
+import com.flexsentlabs.koncerto.demo.report.AiTimelineGenerator
 import com.flexsentlabs.koncerto.demo.report.DemoReporter
 import com.flexsentlabs.koncerto.demo.report.DemoReportGenerator
 import com.flexsentlabs.koncerto.demo.report.LinearReportPublisher
 import com.flexsentlabs.koncerto.demo.repository.DemoTaskRepository
 import com.flexsentlabs.koncerto.demo.repository.SqliteDemoTaskRepository
+import com.flexsentlabs.koncerto.demo.service.DemoCleanupScheduler
 import com.flexsentlabs.koncerto.demo.service.DemoRecordingService
 import com.flexsentlabs.koncerto.demo.storage.DemoStorage
 import com.flexsentlabs.koncerto.demo.storage.R2DemoStorage
@@ -363,7 +365,8 @@ class Beans {
         compositeNotifier: CompositeNotifier?,
         subtaskOrchestrator: SubtaskOrchestrator?,
         workplanParser: WorkplanParser?,
-        auditLogger: AuditLogger?
+        auditLogger: AuditLogger?,
+        demoEventListener: DemoEventListener?
     ): Orchestrator {
         val notifier = compositeNotifier ?: CompositeNotifier(emptyList())
         return Orchestrator(
@@ -382,15 +385,19 @@ class Beans {
             auditLogger = auditLogger,
             autoReviewOrchestratorFactory = if (config.projects.values.any { it.agent.stages.containsKey("in review") }) {
                 { pc, state ->
+                    val slug = pc.tracker.projectSlug ?: "default"
                     AutoReviewOrchestrator(
                         agentRunner = runner,
                         workspaceManager = workspaceManagerFactory(pc),
                         linearClient = linearClientFactory(pc),
                         projectConfig = pc,
-                        projectSlug = pc.tracker.projectSlug ?: "default",
+                        projectSlug = slug,
                         runtimeState = state,
                         notifier = compositeNotifier,
-                        logger = logger
+                        logger = logger,
+                        onReviewPassed = demoEventListener?.let { listener ->
+                            { issue -> listener.onReviewPassed(issue.id, issue.identifier, slug) }
+                        }
                     )
                 }
             } else null
@@ -398,14 +405,36 @@ class Beans {
     }
 
     @Bean
-    fun demoConfig(): DemoConfig = DemoConfig(
-        enabled = true,
-        maxRetries = 3,
-        retryDelayMs = 5_000L,
-        retentionDays = 90,
-        maxRecordingsPerSpace = 100,
-        defaultPlatform = "playwright"
-    )
+    fun demoConfig(serviceConfig: ServiceConfig): DemoConfig {
+        val dr = serviceConfig.demoRecording
+        return DemoConfig(
+            enabled = dr.enabled,
+            tempDir = "/tmp/koncerto-demo",
+            maxRetries = dr.retry.maxAttempts,
+            retryDelayMs = 5_000L,
+            preflightTimeoutMs = 10_000L,
+            retentionDays = 90,
+            maxRecordingsPerSpace = 100,
+            defaultPlatform = dr.platform.web,
+            r2 = dr.storage?.let { s ->
+                DemoConfig.R2Config(
+                    endpoint = s.r2Endpoint,
+                    accessKey = s.r2AccessKey,
+                    secretKey = s.r2SecretKey,
+                    bucketName = s.r2Bucket,
+                    publicUrlBase = s.publicUrlBase,
+                    presignedUrlTtlSeconds = s.presignedUrlTtl,
+                    region = s.region
+                )
+            },
+            ai = DemoConfig.AiConfig(
+                model = dr.ai.model,
+                timelineEnabled = dr.ai.timeline,
+                reproStepsEnabled = dr.ai.reproSteps
+            ),
+            cleanupIntervalHours = dr.cleanupIntervalHours
+        )
+    }
 
     @Bean
     fun playwrightRecorder(): DemoRecorder = PlaywrightRecorder()
@@ -440,7 +469,9 @@ class Beans {
             accessKey = r2.accessKey,
             secretKey = r2.secretKey,
             bucketName = r2.bucketName,
-            publicUrlBase = r2.publicUrlBase
+            publicUrlBase = r2.publicUrlBase,
+            presignedUrlTtlSeconds = r2.presignedUrlTtlSeconds,
+            region = r2.region
         )
     }
 
@@ -461,6 +492,16 @@ class Beans {
     fun demoAuditLogger(): DemoAuditLogger = DemoAuditLogger()
 
     @Bean
+    fun aiTimelineGenerator(demoConfig: DemoConfig): AiTimelineGenerator? {
+        val ai = demoConfig.ai ?: return null
+        return AiTimelineGenerator(
+            apiEndpoint = ai.endpoint,
+            apiKey = ai.apiKey,
+            model = ai.model
+        )
+    }
+
+    @Bean
     fun demoRecordingService(
         demoConfig: DemoConfig,
         demoTaskRepository: DemoTaskRepository,
@@ -469,12 +510,13 @@ class Beans {
         demoReporter: DemoReporter?,
         demoReportGenerator: DemoReportGenerator,
         demoMetricsRecorder: DemoMetricsRecorder,
-        demoAuditLogger: DemoAuditLogger
+        demoAuditLogger: DemoAuditLogger,
+        aiTimelineGenerator: AiTimelineGenerator?
     ): DemoRecordingService? {
         if (demoStorage == null || demoReporter == null) return null
         return DemoRecordingService(
             demoConfig, demoTaskRepository, recorderFactory, demoStorage, demoReporter,
-            demoReportGenerator, demoMetricsRecorder, demoAuditLogger
+            demoReportGenerator, demoMetricsRecorder, demoAuditLogger, aiTimelineGenerator
         )
     }
 
@@ -485,8 +527,27 @@ class Beans {
     }
 
     @Bean
-    fun demoEventListener(demoRecordingService: DemoRecordingService?): DemoEventListener? {
+    fun demoEventListener(
+        demoRecordingService: DemoRecordingService?,
+        demoConfig: DemoConfig
+    ): DemoEventListener? {
         if (demoRecordingService == null) return null
-        return DemoEventListener(demoRecordingService, enabled = demoConfig().enabled)
+        return DemoEventListener(demoRecordingService, enabled = demoConfig.enabled)
+    }
+
+    @Bean
+    fun demoCleanupScheduler(
+        demoRecordingService: DemoRecordingService?,
+        demoConfig: DemoConfig,
+        scope: CoroutineScope
+    ): DemoCleanupScheduler? {
+        if (demoRecordingService == null) return null
+        val scheduler = DemoCleanupScheduler(
+            recordingService = demoRecordingService,
+            scope = scope,
+            intervalHours = demoConfig.cleanupIntervalHours
+        )
+        scheduler.start()
+        return scheduler
     }
 }

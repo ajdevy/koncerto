@@ -554,7 +554,8 @@ class BeansTest {
             compositeNotifier = compositeNotifier,
             subtaskOrchestrator = subtaskOrchestrator,
             workplanParser = workplanParser,
-            auditLogger = auditLogger
+            auditLogger = auditLogger,
+            demoEventListener = null
         )
         assertThat(orchestrator).isNotNull()
     }

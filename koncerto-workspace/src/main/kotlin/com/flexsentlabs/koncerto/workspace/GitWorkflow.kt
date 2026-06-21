@@ -54,12 +54,27 @@ open class GitWorkflow(
 
     fun createBranch(workspacePath: Path, issueIdentifier: String) {
         if (!config.enabled) return
-        if (!isGitRepo(workspacePath)) {
+        val isNewRepo = !isGitRepo(workspacePath)
+        if (isNewRepo) {
             logger.info("git_init", mapOf("path" to workspacePath.toString()))
             runGitSafe(workspacePath, "init", "--initial-branch=main")
             runGitSafe(workspacePath, "config", "user.email", "agent@koncerto.dev")
             runGitSafe(workspacePath, "config", "user.name", "Koncerto Agent")
-            setupOriginRemote(workspacePath)
+        }
+        setupOriginRemote(workspacePath)
+
+        if (isNewRepo && config.remoteUrl.isNotBlank()) {
+            // Fetch the real base branch from remote so the feature branch shares history
+            val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase)
+            if (fetchResult != null) {
+                // Set up local main to track origin/main so gh PR create works
+                runGitSafe(workspacePath, "branch", "-f", config.prBase, "origin/${config.prBase}")
+                // Create feature branch from remote base branch
+                val branch = branchName(issueIdentifier)
+                runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
+                return
+            }
+            // Fall through to local init if fetch fails
             val readme = workspacePath.resolve("README.md")
             if (!readme.toFile().exists()) {
                 readme.toFile().writeText("# ${workspacePath.fileName}\n")
@@ -67,15 +82,25 @@ open class GitWorkflow(
             runGitSafe(workspacePath, "add", "-A")
             runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "initial")
         }
+
         val branch = branchName(issueIdentifier)
         val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
-        val created = if (branchExists) {
+        if (branchExists) {
             runGitSafe(workspacePath, "checkout", branch)
+            return
+        }
+        if (!isNewRepo && config.remoteUrl.isNotBlank()) {
+            // Refresh remote base ref for existing repos too
+            runGitSafe(workspacePath, "fetch", "origin", config.prBase)
+        }
+        val remoteRef = "origin/${config.prBase}"
+        val remoteExists = runGitSafe(workspacePath, "rev-parse", "--verify", remoteRef)
+        if (remoteExists != null) {
+            // Sync local base branch to origin so gh PR create works
+            runGitSafe(workspacePath, "branch", "-f", config.prBase, remoteRef)
+            runGitSafe(workspacePath, "checkout", "-b", branch, remoteRef)
         } else {
             runGitSafe(workspacePath, "checkout", "-b", branch)
-        }
-        if (created == null && !branchExists) {
-            runGitSafe(workspacePath, "checkout", branch)
         }
     }
 
@@ -108,7 +133,11 @@ open class GitWorkflow(
             runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "$prefix: $issueIdentifier: $title")
         }
         if (config.autoPush) {
-            runGitSafe(workspacePath, "push", "-u", "origin", branch)
+            val pushResult = runGitSafe(workspacePath, "push", "-u", "origin", branch)
+            if (pushResult == null) {
+                // Rejected (e.g. remote branch exists with divergent history) — force push
+                runGitSafe(workspacePath, "push", "--force", "-u", "origin", branch)
+            }
         }
     }
 

@@ -24,7 +24,8 @@ class AutoReviewOrchestrator(
     private val projectSlug: String,
     private val runtimeState: RuntimeState,
     private val notifier: CompositeNotifier?,
-    private val logger: StructuredLogger
+    private val logger: StructuredLogger,
+    private val onReviewPassed: (suspend (Issue) -> Unit)? = null
 ) {
     private val reviewStage: StageAgentConfig?
         get() = projectConfig.agent.stages["in review"]
@@ -63,6 +64,7 @@ class AutoReviewOrchestrator(
         return if (passed) {
             logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
             runtimeState.reviewAttempts.remove(issue.id)
+            onReviewPassed?.invoke(issue)
             ReviewDecision.Pass(stage.onCompleteState)
         } else if (currentAttempt < maxAttempts) {
             logger.info(
