@@ -2,8 +2,11 @@ package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
@@ -216,5 +219,64 @@ class AutoReviewOrchestratorTest {
         assertThat(state.reviewAttempts["issue-1"]).isEqualTo(1)
         orchestrator.onCodingComplete(issue())
         assertThat(state.reviewAttempts["issue-1"]).isEqualTo(2)
+    }
+
+    @Test
+    fun `invokes onReviewPassed callback when review passes`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        var capturedIssue: Issue? = null
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            onReviewPassed = { issue -> capturedIssue = issue }
+        )
+        val decision = orchestrator.onCodingComplete(issue(id = "issue-1", identifier = "T-1"))
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(capturedIssue).isNotNull()
+        assertThat(capturedIssue!!.id).isEqualTo("issue-1")
+        assertThat(capturedIssue!!.identifier).isEqualTo("T-1")
+    }
+
+    @Test
+    fun `does not invoke onReviewPassed callback when review fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        var invoked = false
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            onReviewPassed = { invoked = true }
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision !is AutoReviewOrchestrator.ReviewDecision.Pass).isTrue()
+        assertThat(invoked).isFalse()
     }
 }
