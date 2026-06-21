@@ -23,6 +23,7 @@ services:
       - koncerto-workspace:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
       - koncerto-codex:/root/.codex
+      - koncerto-claude:/root/.claude
     cap_add:
       - SYS_ADMIN
       - SYS_RESOURCE
@@ -63,3 +64,4 @@ volumes:
   koncerto-data:
   koncerto-workspace:
   koncerto-codex:
+  koncerto-claude:

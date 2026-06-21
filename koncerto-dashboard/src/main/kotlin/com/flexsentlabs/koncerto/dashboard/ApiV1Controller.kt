@@ -411,35 +411,39 @@ class ApiV1Controller @Autowired constructor(
     )
 
     companion object {
-        @Volatile private var loginProcess: Process? = null
-        @Volatile private var loginUrl: String? = null
-        @Volatile private var loginCode: String? = null
-        private val loginLock = Any()
+        @Volatile private var codexProcess: Process? = null
+        @Volatile private var codexUrl: String? = null
+        @Volatile private var codexCode: String? = null
+        private val codexLock = Any()
+        @Volatile private var claudeProcess: Process? = null
+        @Volatile private var claudeUrl: String? = null
+        @Volatile private var claudeCode: String? = null
+        private val claudeLock = Any()
     }
 
     @PostMapping("/codex-login")
     fun startCodexLogin(): Mono<ResponseEntity<CodexLoginStatus>> {
-        synchronized(loginLock) {
-            loginProcess?.let { if (it.isAlive) {
+        synchronized(codexLock) {
+            codexProcess?.let { if (it.isAlive) {
                 return Mono.just(
-                    if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+                    if (codexUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", codexUrl, codexCode))
                     else ResponseEntity.status(409).build()
                 )
             } }
-            loginUrl = null
-            loginCode = null
+            codexUrl = null
+            codexCode = null
         }
         return Mono.fromCallable {
             val pb = ProcessBuilder("bash", "-lc", "codex login --device-auth")
             pb.redirectErrorStream(true)
             val p = pb.start()
-            loginProcess = p
+            codexProcess = p
             val output = p.inputStream
             val text = withTimeout(output, 5000)
             val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
-            loginUrl = Regex("https?://[^\\s]+").find(clean)?.value
-            loginCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
-            ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+            codexUrl = Regex("https?://[^\\s]+").find(clean)?.value
+            codexCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
+            ResponseEntity.ok(CodexLoginStatus("pending", codexUrl, codexCode))
         }.onErrorResume {
             Mono.just(ResponseEntity.status(500).body(CodexLoginStatus("error")))
         }
@@ -463,76 +467,91 @@ class ApiV1Controller @Autowired constructor(
 
     @GetMapping("/codex-login-status")
     fun getCodexLoginStatus(): ResponseEntity<CodexLoginStatus> {
-        val alive = loginProcess?.isAlive == true
-        if (!alive && loginProcess != null) {
-            loginProcess = null
+        val alive = codexProcess?.isAlive == true
+        if (!alive && codexProcess != null) {
+            codexProcess = null
+            AgentAuthChecker.markAuthenticated("codex")
             return ResponseEntity.ok(CodexLoginStatus("completed"))
         }
-        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", codexUrl, codexCode))
         return ResponseEntity.ok(CodexLoginStatus("idle"))
     }
 
     @PostMapping("/cancel-codex-login")
     fun cancelCodexLogin(): ResponseEntity<Unit> {
-        loginProcess?.let {
+        codexProcess?.let {
             it.destroyForcibly()
             try { it.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         }
-        loginProcess = null
-        loginUrl = null
-        loginCode = null
+        codexProcess = null
+        codexUrl = null
+        codexCode = null
         return ResponseEntity.ok().build()
     }
 
     @PostMapping("/claude-login")
     fun startClaudeLogin(): Mono<ResponseEntity<CodexLoginStatus>> {
-        synchronized(loginLock) {
-            loginProcess?.let { if (it.isAlive) {
+        synchronized(claudeLock) {
+            claudeProcess?.let { if (it.isAlive) {
                 return Mono.just(
-                    if (loginUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+                    if (claudeUrl != null) ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
                     else ResponseEntity.status(409).build()
                 )
             } }
-            loginUrl = null
-            loginCode = null
+            claudeUrl = null
+            claudeCode = null
         }
         return Mono.fromCallable {
-            val pb = ProcessBuilder("bash", "-lc", "claude login --no-browser")
+            val pb = ProcessBuilder("bash", "-lc", "claude auth login")
             pb.redirectErrorStream(true)
             val p = pb.start()
-            loginProcess = p
+            claudeProcess = p
             val output = p.inputStream
             val text = withTimeout(output, 5000)
             val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
-            loginUrl = Regex("https?://[^\\s]+").find(clean)?.value
-            loginCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
-            ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+            claudeUrl = Regex("https?://[^\\s]+").find(clean)?.value
+            claudeCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
+            ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
         }.onErrorResume {
             Mono.just(ResponseEntity.status(500).body(CodexLoginStatus("error")))
         }
     }
 
+    @PostMapping("/claude-login-code")
+    fun submitClaudeCode(@RequestBody body: Map<String, String>): ResponseEntity<CodexLoginStatus> {
+        val code = body["code"]?.trim() ?: return ResponseEntity.badRequest().body(CodexLoginStatus("error"))
+        val process = claudeProcess ?: return ResponseEntity.badRequest().body(CodexLoginStatus("no_process"))
+        if (!process.isAlive) return ResponseEntity.badRequest().body(CodexLoginStatus("process_exited"))
+        try {
+            process.outputStream.write((code + "\n").toByteArray(Charsets.UTF_8))
+            process.outputStream.flush()
+            return ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
+        } catch (e: Exception) {
+            return ResponseEntity.status(500).body(CodexLoginStatus("write_failed"))
+        }
+    }
+
     @GetMapping("/claude-login-status")
     fun getClaudeLoginStatus(): ResponseEntity<CodexLoginStatus> {
-        val alive = loginProcess?.isAlive == true
-        if (!alive && loginProcess != null) {
-            loginProcess = null
+        val alive = claudeProcess?.isAlive == true
+        if (!alive && claudeProcess != null) {
+            claudeProcess = null
             AgentAuthChecker.markAuthenticated("claude")
             return ResponseEntity.ok(CodexLoginStatus("completed"))
         }
-        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", loginUrl, loginCode))
+        if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
         return ResponseEntity.ok(CodexLoginStatus("idle"))
     }
 
     @PostMapping("/cancel-claude-login")
     fun cancelClaudeLogin(): ResponseEntity<Unit> {
-        loginProcess?.let {
+        claudeProcess?.let {
             it.destroyForcibly()
             try { it.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         }
-        loginProcess = null
-        loginUrl = null
-        loginCode = null
+        claudeProcess = null
+        claudeUrl = null
+        claudeCode = null
         return ResponseEntity.ok().build()
     }
 }
