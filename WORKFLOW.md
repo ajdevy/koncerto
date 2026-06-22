@@ -25,6 +25,8 @@ projects:
         - Done
       blocked_state: "Blocked"
       project_admin: "user-1"
+    reviewer:
+      kind: human
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
     agent:
@@ -38,7 +40,7 @@ projects:
         Todo:
           prompt: prompts/implement.md
           agent_kind: codex
-          command: codex exec --json --skip-git-repo-check
+          command: codex exec --json --skip-git-repo-check -s danger-full-access
           effort: medium
           on_complete_state: "In Review"
         "In Review":
@@ -47,8 +49,12 @@ projects:
           command: claude --print
           model: claude-sonnet-4-6
           effort: medium
-          on_complete_state: "Done"
+          on_complete_state: "Ready for Human Review"
           max_review_attempts: 3
+        "Ready for Human Review":
+          prompt: prompts/human-review.md
+          agent_kind: human
+          on_complete_state: "Done"
 demo_recording:
   enabled: true
   trigger: review_passed
