@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.dashboard
 
 import com.flexsentlabs.koncerto.agent.AgentAuthChecker
+import com.flexsentlabs.koncerto.agent.ClaudeAuthSupport
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
 import com.flexsentlabs.koncerto.core.ratelimit.RateLimitRegistry
 import com.flexsentlabs.koncerto.core.result.Result
@@ -407,7 +408,8 @@ class ApiV1Controller @Autowired constructor(
     data class CodexLoginStatus(
         val state: String,
         val url: String? = null,
-        val code: String? = null
+        val code: String? = null,
+        val authenticated: Boolean = state == "completed"
     )
 
     companion object {
@@ -418,6 +420,7 @@ class ApiV1Controller @Autowired constructor(
         @Volatile private var claudeProcess: Process? = null
         @Volatile private var claudeUrl: String? = null
         @Volatile private var claudeCode: String? = null
+        @Volatile private var claudeLoginOutput: String? = null
         private val claudeLock = Any()
     }
 
@@ -500,14 +503,19 @@ class ApiV1Controller @Autowired constructor(
             } }
             claudeUrl = null
             claudeCode = null
+            claudeLoginOutput = null
+        }
+        if (AgentAuthChecker.isAuthenticated("claude")) {
+            return Mono.just(ResponseEntity.ok(CodexLoginStatus("completed")))
         }
         return Mono.fromCallable {
-            val pb = ProcessBuilder("bash", "-lc", "claude auth login")
+            val pb = ProcessBuilder("bash", "-lc", "claude setup-token")
             pb.redirectErrorStream(true)
             val p = pb.start()
             claudeProcess = p
             val output = p.inputStream
             val text = withTimeout(output, 5000)
+            claudeLoginOutput = text
             val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
             claudeUrl = Regex("https?://[^\\s]+").find(clean)?.value
             claudeCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
@@ -533,10 +541,21 @@ class ApiV1Controller @Autowired constructor(
 
     @GetMapping("/claude-login-status")
     fun getClaudeLoginStatus(): ResponseEntity<CodexLoginStatus> {
+        if (AgentAuthChecker.isAuthenticated("claude")) {
+            return ResponseEntity.ok(CodexLoginStatus("completed"))
+        }
         val alive = claudeProcess?.isAlive == true
         if (!alive && claudeProcess != null) {
+            val remainingOutput = runCatching {
+                claudeProcess?.inputStream?.bufferedReader()?.readText().orEmpty()
+            }.getOrDefault("")
+            val combinedOutput = listOfNotNull(claudeLoginOutput, remainingOutput).joinToString("\n")
+            ClaudeAuthSupport.extractToken(combinedOutput)?.let { token ->
+                AgentAuthChecker.setClaudeAuthToken(token)
+            }
             claudeProcess = null
             AgentAuthChecker.markAuthenticated("claude")
+            claudeLoginOutput = null
             return ResponseEntity.ok(CodexLoginStatus("completed"))
         }
         if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
@@ -552,6 +571,7 @@ class ApiV1Controller @Autowired constructor(
         claudeProcess = null
         claudeUrl = null
         claudeCode = null
+        claudeLoginOutput = null
         return ResponseEntity.ok().build()
     }
 }
