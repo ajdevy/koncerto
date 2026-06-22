@@ -59,6 +59,7 @@ object AgentAuthChecker {
     }
 
     private fun checkClaude(): Boolean {
+        if (!getClaudeAuthToken().isNullOrBlank()) return true
         try {
             val pb = ProcessBuilder("bash", "-lc", "claude auth status --json")
             pb.redirectErrorStream(true)

@@ -41,7 +41,8 @@ class AgentRunnerLimitDetectionTest {
         val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(
             config, mgr, noopLogger(),
-            errorClassifier = PatternErrorClassifier()
+            errorClassifier = PatternErrorClassifier(),
+            heartbeatIntervalMs = 100
         )
         val latch = CountDownLatch(1)
         var captured: AgentEvent.LimitDetected? = null
@@ -77,7 +78,8 @@ class AgentRunnerLimitDetectionTest {
         val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(
             config, mgr, noopLogger(),
-            errorClassifier = PatternErrorClassifier()
+            errorClassifier = PatternErrorClassifier(),
+            heartbeatIntervalMs = 100
         )
         val latch = CountDownLatch(1)
         var captured: AgentEvent.LimitDetected? = null
@@ -147,7 +149,8 @@ class AgentRunnerLimitDetectionTest {
             config, mgr, noopLogger(),
             errorClassifier = PatternErrorClassifier(),
             maxRetries = 1,
-            retryDelayMs = 100
+            retryDelayMs = 100,
+            heartbeatIntervalMs = 100
         )
         val latch = CountDownLatch(1)
         var captured: AgentEvent.LimitDetected? = null
@@ -186,7 +189,8 @@ class AgentRunnerLimitDetectionTest {
             config, mgr, noopLogger(),
             errorClassifier = alwaysRateLimit,
             circuitBreaker = cb,
-            maxRetries = 2
+            maxRetries = 2,
+            heartbeatIntervalMs = 100
         )
         val issue = sampleIssue()
         runner.run(
@@ -212,7 +216,8 @@ class AgentRunnerLimitDetectionTest {
         val runner = DefaultAgentRunner(
             config, mgr, noopLogger(),
             circuitBreaker = cb,
-            maxRetries = 1
+            maxRetries = 1,
+            heartbeatIntervalMs = 100
         )
         val issue = sampleIssue()
         runner.run(
