@@ -8,6 +8,7 @@ object AgentAuthChecker {
     @Volatile private var lastChecked = 0L
     private const val cacheTtlMs = 30_000L
     private val overrideAuth = ConcurrentHashMap<String, Boolean>()
+    @Volatile private var claudeAuthToken: String? = null
 
     fun isAuthenticated(agentKind: String): Boolean {
         val key = agentKind.lowercase().trim()
@@ -23,19 +24,29 @@ object AgentAuthChecker {
         overrideAuth[agentKind.lowercase().trim()] = true
     }
 
-    @Volatile private var claudeApiKey: String? = null
-
-    fun setClaudeApiKey(key: String) {
-        claudeApiKey = key.trim().takeIf { it.isNotBlank() }
-        if (claudeApiKey != null) markAuthenticated("claude")
+    fun setClaudeAuthToken(token: String) {
+        claudeAuthToken = token.trim().takeIf { it.isNotBlank() }
+        claudeAuthToken?.let {
+            ClaudeAuthSupport.saveToken(it)
+            markAuthenticated("claude")
+        }
     }
 
-    fun getClaudeApiKey(): String? = claudeApiKey
+    fun getClaudeAuthToken(): String? = claudeAuthToken ?: ClaudeAuthSupport.loadToken()?.also {
+        claudeAuthToken = it
+    }
+
+    @Deprecated("Use setClaudeAuthToken", ReplaceWith("setClaudeAuthToken(token)"))
+    fun setClaudeApiKey(key: String) = setClaudeAuthToken(key)
+
+    @Deprecated("Use getClaudeAuthToken", ReplaceWith("getClaudeAuthToken()"))
+    fun getClaudeApiKey(): String? = getClaudeAuthToken()
 
     fun reset() {
         overrideAuth.clear()
         cache.clear()
         lastChecked = 0L
+        claudeAuthToken = null
     }
 
     private fun refreshCache() {
@@ -48,9 +59,11 @@ object AgentAuthChecker {
     }
 
     private fun checkClaude(): Boolean {
+        if (!getClaudeAuthToken().isNullOrBlank()) return true
         try {
             val pb = ProcessBuilder("bash", "-lc", "claude auth status --json")
             pb.redirectErrorStream(true)
+            ClaudeAuthSupport.applyToken(pb)
             val p = pb.start()
             val exited = p.waitFor(5, TimeUnit.SECONDS)
             if (!exited) {

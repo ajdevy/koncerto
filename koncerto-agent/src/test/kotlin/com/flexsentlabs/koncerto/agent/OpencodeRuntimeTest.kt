@@ -8,8 +8,10 @@ import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
+import java.util.Collections
+import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.cancel
 import org.junit.jupiter.api.Test
 
 class OpencodeRuntimeTest {
@@ -19,13 +21,18 @@ class OpencodeRuntimeTest {
     }))
 
     private fun collectEvents(runtime: OpencodeRuntime, timeoutMs: Long = 5_000): List<AgentEvent> {
-        val collected = mutableListOf<AgentEvent>()
-        runBlocking {
-            withTimeoutOrNull(timeoutMs) {
-                runtime.events().collect { ev -> collected += ev }
+        val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
+        val collector = thread(start = true, isDaemon = true, name = "opencode-events") {
+            runBlocking {
+                runtime.events().collect { ev ->
+                    collected += ev
+                    cancel()
+                }
             }
         }
-        return collected
+        collector.join(timeoutMs)
+        if (collector.isAlive) collector.interrupt()
+        return collected.toList()
     }
 
     @Test

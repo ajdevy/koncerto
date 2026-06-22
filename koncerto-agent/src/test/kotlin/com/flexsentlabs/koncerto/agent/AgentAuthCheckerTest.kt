@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.agent
 import assertk.assertThat
 import assertk.assertions.isFalse
 import assertk.assertions.isTrue
+import java.nio.file.Files
 import org.junit.jupiter.api.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -54,6 +55,25 @@ class AgentAuthCheckerTest {
     fun `isAuthenticated returns true for claude when marked authenticated`() {
         AgentAuthChecker.markAuthenticated("claude")
         assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
+    }
+
+    @Test
+    fun `isAuthenticated returns true for claude when oauth token is stored`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-checker-")
+        val tokenPath = dir.resolve("token.txt")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", tokenPath.toString())
+            ClaudeAuthSupport.saveToken("sk-ant-oat01-test-token")
+            AgentAuthChecker.reset()
+            assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
+        } finally {
+            if (original == null) {
+                System.clearProperty("koncerto.claude.auth.token.path")
+            } else {
+                System.setProperty("koncerto.claude.auth.token.path", original)
+            }
+        }
     }
 
     @Test
