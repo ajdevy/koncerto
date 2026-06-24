@@ -1,6 +1,7 @@
 name: Docker Publish
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     tags: ['v*']
@@ -8,12 +9,44 @@ on:
       - koncerto-app/Dockerfile
       - docker-compose.yml
       - .github/workflows/docker-publish.yml
+      - koncerto-demo/**
+      - koncerto-orchestrator/**
+      - koncerto-core/**
+      - koncerto-agent/**
+      - koncerto-deploy/**
+      - koncerto-dashboard/**
+      - koncerto-workflow/**
+      - koncerto-workspace/**
+      - koncerto-notifications/**
+      - koncerto-linear/**
+      - koncerto-metrics/**
+      - koncerto-logging/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
   pull_request:
     branches: [main]
     paths:
       - koncerto-app/Dockerfile
       - docker-compose.yml
       - .github/workflows/docker-publish.yml
+      - koncerto-demo/**
+      - koncerto-orchestrator/**
+      - koncerto-core/**
+      - koncerto-agent/**
+      - koncerto-deploy/**
+      - koncerto-dashboard/**
+      - koncerto-workflow/**
+      - koncerto-workspace/**
+      - koncerto-notifications/**
+      - koncerto-linear/**
+      - koncerto-metrics/**
+      - koncerto-logging/**
+      - gradle/**
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
