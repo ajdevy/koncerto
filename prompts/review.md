@@ -69,8 +69,20 @@ End with a summary verdict: "✅ Review PASSED" or "❌ Review FAILED — found 
 
 ## Demo Scenario (if review passed)
 
-If the review passes, also generate a demo scenario that will be executed by the Playwright screen recorder. This creates an interactive walkthrough of the feature for the demo recording.
+If the review passes, generate a demo scenario for the Playwright screen recorder. Read `prompts/demo-scenario.md` for the full schema — **only use actions documented there**. Output as:
 
-Read `prompts/demo-scenario.md` for the full instructions, action schema, and examples.
+```yaml demo_scenario
+description: "What this scenario demonstrates"
+steps:
+  - action: navigate
+    url: "/"
+  - action: wait
+    ms: 1000
+```
 
-Output the demo scenario as a YAML code block labeled `demo_scenario` after the review verdict. Make sure the scenario demonstrates the actual code changes in the PR — not generic page exploration.
+Rules:
+- Only use actions from the schema doc (`scroll`, `click`, `type`, `select`, `wait`, `wait_for_selector`, `scroll_to`, `set_viewport`, `highlight`, `assert`, `navigate`, `hover`, `keypress`, `screenshot`)
+- Each step must have only fields listed in that action's spec — extra fields are silently ignored
+- Use exact selector values that match the PR's actual markup
+- 5-40 steps, natural pacing with waits between interactions
+- Demonstrate real changes in this PR, not generic page exploration

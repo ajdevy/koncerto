@@ -40,6 +40,29 @@ Scroll the page vertically.
 ```
 When `direction=to`, scroll to a specific element: `selector: "#footer"` and `amount` is ignored.
 
+### scroll_to
+Scroll a specific element into view. Convenience alias for `scroll direction=to`.
+```yaml
+- action: scroll_to
+  selector: "#footer"
+  timeout: 5000
+```
+
+### set_viewport
+Resize the browser viewport to test responsive layouts.
+```yaml
+- action: set_viewport
+  width: 375
+  height: 812
+```
+
+### highlight
+Visually highlight an element with an orange outline + background. Useful for drawing attention before a screenshot.
+```yaml
+- action: highlight
+  selector: "[data-primary-cta='true']"
+```
+
 ### click
 Click an element.
 ```yaml
@@ -76,6 +99,14 @@ OR:
 ```yaml
 - action: wait
   selector: ".toast-success" # wait for element to appear
+  timeout: 5000              # max wait in ms (default 5000)
+```
+
+### wait_for_selector
+Wait for a specific element to appear in the DOM. Alias for `wait` with a `selector` field.
+```yaml
+- action: wait_for_selector
+  selector: "h1#landing-title"
   timeout: 5000              # max wait in ms (default 5000)
 ```
 

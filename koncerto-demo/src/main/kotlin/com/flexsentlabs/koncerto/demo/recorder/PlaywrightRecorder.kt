@@ -325,6 +325,52 @@ async function executeScenarioStep(page, step) {
         }
         break;
       }
+      case 'wait_for_selector': {
+        const el = await findElement(page, step.selector, step.timeout || 5000);
+        if (!el) {
+          console.error('  [warn] wait_for_selector timeout: ' + step.selector);
+        }
+        break;
+      }
+      case 'scroll_to': {
+        if (step.selector) {
+          try {
+            const el = await page.locator(step.selector).first();
+            await el.scrollIntoViewIfNeeded({ timeout: timeout || 5000 });
+          } catch (e) {
+            console.error('  [warn] scroll_to failed: ' + e.message);
+          }
+        }
+        break;
+      }
+      case 'highlight': {
+        if (step.selector) {
+          try {
+            await page.evaluate((sel) => {
+              const el = document.querySelector(sel);
+              if (el) {
+                el.style.outline = '3px solid #ff6600';
+                el.style.outlineOffset = '2px';
+                el.style.backgroundColor = 'rgba(255, 102, 0, 0.1)';
+              }
+            }, step.selector);
+          } catch (e) {
+            console.error('  [warn] highlight failed: ' + e.message);
+          }
+        }
+        break;
+      }
+      case 'set_viewport': {
+        try {
+          const w = parseInt(step.width || step.viewport_width || '1280', 10);
+          const h = parseInt(step.height || step.viewport_height || '720', 10);
+          await page.setViewportSize({ width: w, height: h });
+          await page.waitForTimeout(500);
+        } catch (e) {
+          console.error('  [warn] set_viewport failed: ' + e.message);
+        }
+        break;
+      }
       default:
         console.error('  [warn] unknown action: ' + action);
     }

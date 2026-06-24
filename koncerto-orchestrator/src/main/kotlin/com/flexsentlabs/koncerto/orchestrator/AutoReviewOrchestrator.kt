@@ -190,13 +190,37 @@ class AutoReviewOrchestrator(
     }
 
     private fun saveDemoScenario(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?) {
-        val ws = workspace ?: return
+        val ws = workspace ?: run {
+            logger.warn("demo_scenario_no_workspace", mapOf("issue_id" to issue.id))
+            return
+        }
         val detailedPath = ws.path.resolve(".review-output-detailed")
-        if (!Files.exists(detailedPath)) return
-        val raw = try { Files.readString(detailedPath) } catch (_: Exception) { return }
-        if (raw.isBlank()) return
+        if (!Files.exists(detailedPath)) {
+            logger.warn("demo_scenario_file_missing", mapOf(
+                "issue_id" to issue.id,
+                "path" to detailedPath.toString()
+            ))
+            return
+        }
+        val raw = try { Files.readString(detailedPath) } catch (e: Exception) {
+            logger.warn("demo_scenario_read_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            return
+        }
+        if (raw.isBlank()) {
+            logger.warn("demo_scenario_file_blank", mapOf("issue_id" to issue.id, "path" to detailedPath.toString()))
+            return
+        }
 
-        val scenarioBlock = extractScenarioBlock(raw) ?: return
+        val scenarioBlock = extractScenarioBlock(raw)
+        if (scenarioBlock == null) {
+            logger.warn("demo_scenario_extract_failed", mapOf(
+                "issue_id" to issue.id,
+                "raw_length" to raw.length.toString(),
+                "has_fence" to raw.contains("```yaml").toString(),
+                "has_demo_scenario" to raw.contains("demo_scenario").toString()
+            ))
+            return
+        }
 
         val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
         try {
