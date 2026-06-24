@@ -283,7 +283,10 @@ async function executeScenarioStep(page, step) {
       }
       case 'navigate': {
         try {
-          const targetUrl = step.url.startsWith('http') ? step.url : new URL(step.url, page.url()).href;
+          const rawUrl = step.url || '/';
+          const targetUrl = rawUrl.startsWith('http')
+            ? rewriteLocalhostUrl(rawUrl, page.url())
+            : new URL(rawUrl, page.url()).href;
           await page.goto(targetUrl, { waitUntil: step.waitUntil || 'domcontentloaded', timeout });
         } catch (e) {
           console.error('  [warn] navigation failed: ' + e.message);
@@ -376,6 +379,21 @@ async function executeScenarioStep(page, step) {
     }
   } catch (e) {
     console.error('  [warn] step failed (' + action + '): ' + e.message);
+  }
+}
+
+function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.hostname !== 'localhost') return rawUrl;
+    const current = new URL(currentPageUrl);
+    if (parsed.port === current.port) return rawUrl;
+    const rewritten = current.origin + parsed.pathname + parsed.search + parsed.hash;
+    console.error('  [navigate] rewriting ' + rawUrl + ' -> ' + rewritten);
+    return rewritten;
+  } catch (e) {
+    console.error('  [warn] rewriteLocalhostUrl error: ' + e.message);
+    return rawUrl;
   }
 }
 

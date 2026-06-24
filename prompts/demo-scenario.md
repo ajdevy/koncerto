@@ -120,10 +120,10 @@ Verify page state. Does NOT fail the recording — logs a warning.
 ```
 
 ### navigate
-Navigate to a different page.
+Navigate to a different page. **Always use relative URLs** — the app is deployed on a dynamic port.
 ```yaml
 - action: navigate
-  url: "/pricing"               # relative to base URL
+  url: "/pricing"               # relative path only! never http://localhost:PORT
   waitUntil: networkidle        # load event to wait for (default domcontentloaded)
 ```
 

@@ -84,5 +84,6 @@ Rules:
 - Only use actions from the schema doc (`scroll`, `click`, `type`, `select`, `wait`, `wait_for_selector`, `scroll_to`, `set_viewport`, `highlight`, `assert`, `navigate`, `hover`, `keypress`, `screenshot`)
 - Each step must have only fields listed in that action's spec — extra fields are silently ignored
 - Use exact selector values that match the PR's actual markup
+- **`navigate` URLs must be relative** (e.g. `/pricing`). Never use `http://localhost:PORT` — the app runs on a dynamic port
 - 5-40 steps, natural pacing with waits between interactions
 - Demonstrate real changes in this PR, not generic page exploration
