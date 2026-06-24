@@ -12,7 +12,8 @@ data class RecordingConfig(
     val codec: String = "vp9",
     val outputFormat: String = "webm",
     val targetUrl: String = "",
-    val captureInputIndex: String = "1"
+    val captureInputIndex: String = "1",
+    val scenarioPath: String = ""
 ) {
     val maxDuration: kotlin.time.Duration get() = maxDurationSeconds.seconds
 }

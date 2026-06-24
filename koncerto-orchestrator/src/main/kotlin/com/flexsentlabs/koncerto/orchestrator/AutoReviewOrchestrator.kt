@@ -86,6 +86,7 @@ class AutoReviewOrchestrator(
             logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
             runtimeState.reviewAttempts.remove(issue.id)
 
+            saveDemoScenario(issue, workspace)
             val deployUrl = deployTargetProject(issue, workspace)
             val demoUrl = onReviewPassed?.invoke(issue, deployUrl)
             postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
@@ -165,6 +166,36 @@ class AutoReviewOrchestrator(
             }
         } catch (e: Exception) {
             logger.warn("pr_review_comment_error", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+        }
+    }
+
+    private fun saveDemoScenario(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?) {
+        val ws = workspace ?: return
+        val detailedPath = ws.path.resolve(".review-output-detailed")
+        if (!Files.exists(detailedPath)) return
+        val raw = try { Files.readString(detailedPath) } catch (_: Exception) { return }
+        if (raw.isBlank()) return
+
+        val scenarioMatch = Regex("""demo_scenario:\s*\n(?:.*\n)*?(?=\n---|\n```|$)""").find(raw)
+        val scenarioBlock = scenarioMatch?.value?.let { block ->
+            val trimmed = block.trimEnd()
+            "demo_scenario:\n" + trimmed.lines().drop(1).joinToString("\n")
+        } ?: return
+
+        val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
+        try {
+            java.nio.file.Files.createDirectories(scenarioDir)
+            val targetPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
+            Files.writeString(targetPath, scenarioBlock)
+            logger.info("demo_scenario_saved", mapOf(
+                "issue_id" to issue.id,
+                "path" to targetPath.toString()
+            ))
+        } catch (e: Exception) {
+            logger.warn("demo_scenario_save_failed", mapOf(
                 "issue_id" to issue.id,
                 "error" to (e.message ?: "unknown")
             ))

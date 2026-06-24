@@ -66,3 +66,11 @@ List categories reviewed with no issues found.
 
 ---
 End with a summary verdict: "✅ Review PASSED" or "❌ Review FAILED — found blocking issue(s)".
+
+## Demo Scenario (if review passed)
+
+If the review passes, also generate a demo scenario that will be executed by the Playwright screen recorder. This creates an interactive walkthrough of the feature for the demo recording.
+
+Read `prompts/demo-scenario.md` for the full instructions, action schema, and examples.
+
+Output the demo scenario as a YAML code block labeled `demo_scenario` after the review verdict. Make sure the scenario demonstrates the actual code changes in the PR — not generic page exploration.

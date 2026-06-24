@@ -319,9 +319,11 @@ class DemoRecordingService(
 
         val recorder = (recorderResult as DemoResult.Success).value
         val effectiveTargetUrl = pendingTargetUrlOverride?.takeIf { it.isNotBlank() } ?: config.targetUrl
+        val scenarioPath = resolveScenarioPath(task)
         val recordingConfig = RecordingConfig(
             platform = task.platform,
-            targetUrl = effectiveTargetUrl
+            targetUrl = effectiveTargetUrl,
+            scenarioPath = scenarioPath
         )
         val tempFile = File(config.tempDir, "${task.id}.${recordingConfig.outputFormat}")
 
@@ -392,6 +394,11 @@ class DemoRecordingService(
         auditLogger.logReportPosted(updatedTask, storageResult.url)
 
         return DemoResult.Success(updatedTask)
+    }
+
+    private fun resolveScenarioPath(task: DemoTask): String {
+        val scenarioFile = File(config.tempDir, "${task.issueId}-scenario.yaml")
+        return if (scenarioFile.exists()) scenarioFile.absolutePath else ""
     }
 
     private suspend fun resolvePlatform(): DemoPlatform? {
