@@ -172,6 +172,23 @@ class AutoReviewOrchestrator(
         }
     }
 
+    private fun extractScenarioBlock(raw: String): String? {
+        val fenceMatch = Regex("""```(?:yaml|yml)\s+demo_scenario\s*\n(.*?)\n```""", RegexOption.DOT_MATCHES_ALL).find(raw)
+        if (fenceMatch != null) {
+            val yamlContent = fenceMatch.groupValues[1].trim()
+            return "demo_scenario:\n" + yamlContent.lines().joinToString("\n") { line ->
+                if (line.startsWith("  ")) line else "  $line"
+            }
+        }
+        val rawMatch = Regex("""demo_scenario:\s*\n(?:[ \t].*\n?)*""").find(raw)
+        if (rawMatch != null) {
+            val block = rawMatch.value.trimEnd()
+            val lines = block.lines()
+            return lines.joinToString("\n")
+        }
+        return null
+    }
+
     private fun saveDemoScenario(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?) {
         val ws = workspace ?: return
         val detailedPath = ws.path.resolve(".review-output-detailed")
@@ -179,11 +196,7 @@ class AutoReviewOrchestrator(
         val raw = try { Files.readString(detailedPath) } catch (_: Exception) { return }
         if (raw.isBlank()) return
 
-        val scenarioMatch = Regex("""demo_scenario:\s*\n(?:.*\n)*?(?=\n---|\n```|$)""").find(raw)
-        val scenarioBlock = scenarioMatch?.value?.let { block ->
-            val trimmed = block.trimEnd()
-            "demo_scenario:\n" + trimmed.lines().drop(1).joinToString("\n")
-        } ?: return
+        val scenarioBlock = extractScenarioBlock(raw) ?: return
 
         val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
         try {
