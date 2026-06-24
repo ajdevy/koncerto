@@ -342,6 +342,7 @@ data class ServiceConfig(
             return DemoRecordingConfig(
                 enabled = (map["enabled"] as? Boolean) ?: false,
                 trigger = (map["trigger"] as? String) ?: "review_passed",
+                targetUrl = resolveEnvRef(map["target_url"] as? String) ?: "",
                 cleanupIntervalHours = (map["cleanup_interval_hours"] as? Number)?.toInt() ?: 24,
                 platform = DemoRecordingConfig.PlatformConfig(
                     web = (platformMap?.get("web") as? String) ?: "playwright",
@@ -355,11 +356,11 @@ data class ServiceConfig(
                 storage = storageMap?.let { s ->
                     DemoRecordingConfig.StorageConfig(
                         r2Endpoint = resolveEnvRef(s["r2_endpoint"] as? String) ?: "",
-                        r2Bucket = s["r2_bucket"] as? String ?: "",
+                        r2Bucket = resolveEnvRef(s["r2_bucket"] as? String) ?: "",
                         r2AccessKey = resolveEnvRef(s["r2_access_key"] as? String) ?: "",
                         r2SecretKey = resolveEnvRef(s["r2_secret_key"] as? String) ?: "",
                         publicUrlBase = resolveEnvRef(s["public_url_base"] as? String) ?: "",
-                        presignedUrlTtl = (s["presigned_url_ttl"] as? Number)?.toLong() ?: 3600,
+                        presignedUrlTtl = (s["presigned_url_ttl"] as? Number)?.toLong() ?: 604800,
                         region = s["region"] as? String ?: "auto"
                     )
                 },
@@ -472,6 +473,7 @@ data class GitConfig(
 data class DemoRecordingConfig(
     val enabled: Boolean = false,
     val trigger: String = "review_passed",
+    val targetUrl: String = "",
     val platform: PlatformConfig = PlatformConfig(),
     val quality: QualityConfig = QualityConfig(),
     val storage: StorageConfig? = null,
@@ -498,7 +500,7 @@ data class DemoRecordingConfig(
         val r2AccessKey: String = "",
         val r2SecretKey: String = "",
         val publicUrlBase: String = "",
-        val presignedUrlTtl: Long = 3600,
+        val presignedUrlTtl: Long = 604800,
         val region: String = "auto"
     )
     data class AiConfig(

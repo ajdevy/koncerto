@@ -1,0 +1,207 @@
+package com.flexsentlabs.koncerto.deploy
+
+import com.flexsentlabs.koncerto.logging.StructuredLogger
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
+
+data class DeployResult(
+    val url: String?,
+    val success: Boolean,
+    val error: String?,
+    val logs: String?
+) {
+    companion object {
+        fun success(url: String) = DeployResult(url, true, null, null)
+        fun failure(error: String, logs: String? = null) = DeployResult(null, false, error, logs)
+    }
+}
+
+data class DeployConfig(
+    val repoFullName: String,
+    val prBranch: String,
+    val baseBranch: String = "main",
+    val projectPath: Path
+)
+
+class TargetProjectDeployer(
+    private val configDetector: DockerConfigDetector,
+    private val frameworkDetector: FrameworkDetector,
+    private val dockerfileGenerator: DockerfileGenerator,
+    private val containerManager: ContainerLifecycleManager,
+    private val logger: StructuredLogger
+) {
+    suspend fun deploy(config: DeployConfig): DeployResult {
+        val projectPath = config.projectPath
+        val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
+
+        // Phase 1: Detect existing Docker config
+        val existingConfig = configDetector.detect(projectPath)
+        if (existingConfig != null) {
+            logger.info("deploy_docker_config_found", mapOf("type" to existingConfig.type.name))
+            return buildAndRun(existingConfig, projectPath, tag)
+        }
+
+        // Phase 2: Check for framework and generate Dockerfile
+        val framework = frameworkDetector.detectFramework(projectPath)
+        if (framework == null) {
+            return DeployResult.failure("Could not detect project framework type")
+        }
+
+        // Generate Dockerfile and write it to project root temporarily
+        val dockerfileContent = dockerfileGenerator.generate(framework)
+        val tempDockerfile = projectPath.resolve("Dockerfile.koncerto")
+        try {
+            tempDockerfile.toFile().writeText(dockerfileContent)
+            val detected = DetectedDockerConfig(DockerConfigType.DOCKERFILE, dockerfile = tempDockerfile)
+            return buildAndRun(detected, projectPath, tag)
+        } finally {
+            tempDockerfile.toFile().delete()
+        }
+    }
+
+    private val webPorts = setOf(80, 3000, 5000, 8000, 8080, 8443, 3001, 5173, 4200, 8001, 9090)
+
+    private fun buildAndRun(config: DetectedDockerConfig, projectPath: Path, tag: String): DeployResult {
+        return try {
+            when (config.type) {
+                DockerConfigType.DOCKER_COMPOSE -> {
+                    deployWithCompose(config.composeFile!!, projectPath, tag)
+                }
+                DockerConfigType.DOCKERFILE -> {
+                    deployWithDockerfile(config.dockerfile!!, projectPath, tag)
+                }
+            }
+        } catch (e: Exception) {
+            DeployResult.failure("Deployment error: ${e.message}")
+        }
+    }
+
+    private fun deployWithDockerfile(dockerfile: Path, projectPath: Path, tag: String, network: String? = null): DeployResult {
+        val buildResult = containerManager.buildImage(projectPath, dockerfile, tag)
+        if (buildResult.isFailure) {
+            return DeployResult.failure(
+                "Docker build failed",
+                buildResult.exceptionOrNull()?.message
+            )
+        }
+
+        val framework = frameworkDetector.detectFramework(projectPath)
+        val containerPort = framework?.ports?.firstOrNull() ?: 8080
+        val hostPort = containerManager.allocatePort()
+
+        val runResult = containerManager.runContainer(tag, hostPort, containerPort, network)
+        if (runResult.isFailure) {
+            containerManager.releasePort(hostPort)
+            return DeployResult.failure(
+                "Container start failed",
+                runResult.exceptionOrNull()?.message
+            )
+        }
+
+        val container = runResult.getOrThrow()
+        val healthResult = containerManager.waitForHealthy(container.containerId)
+
+        if (healthResult.isFailure) {
+            val logs = containerManager.captureLogs(container.containerId)
+            containerManager.stopAndRemove(container.containerId)
+            containerManager.releasePort(hostPort)
+            return DeployResult.failure("Health check failed", logs)
+        }
+
+        logger.info("deploy_success", mapOf("url" to container.baseUrl))
+        return DeployResult.success(container.baseUrl)
+    }
+
+    private fun deployWithCompose(composeFile: Path, projectPath: Path, tag: String): DeployResult {
+        val projectName = "koncerto-demo"
+        try {
+            // Clean up any previous compose instance
+            ProcessBuilder(
+                "docker", "compose", "-p", projectName,
+                "-f", composeFile.toString(), "down", "--remove-orphans"
+            ).directory(projectPath.toFile())
+             .redirectErrorStream(true)
+             .start()
+             .waitFor(30, TimeUnit.SECONDS)
+
+            val pb = ProcessBuilder(
+                "docker", "compose", "-p", projectName,
+                "-f", composeFile.toString(), "up", "-d"
+            ).directory(projectPath.toFile()).redirectErrorStream(true)
+            val p = pb.start()
+            val output = p.inputStream.bufferedReader().readText()
+            p.waitFor(120, TimeUnit.SECONDS)
+
+            if (p.exitValue() != 0) {
+                return DeployResult.failure("docker compose up failed", output)
+            }
+
+            val psPb = ProcessBuilder(
+                "docker", "compose", "-p", projectName,
+                "-f", composeFile.toString(), "ps"
+            ).directory(projectPath.toFile()).redirectErrorStream(true)
+            val psP = psPb.start()
+            val psOutput = psP.inputStream.bufferedReader().readText()
+            psP.waitFor(5, TimeUnit.SECONDS)
+
+            val portMatch = Regex("""(\d+)->\d+/tcp""").find(psOutput)
+            val hostPort = portMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
+            if (hostPort > 0 && hostPort in webPorts) {
+                logger.info("deploy_compose_success", mapOf("port" to hostPort.toString()))
+                return DeployResult.success("http://host.docker.internal:$hostPort")
+            }
+
+            // Infra-only compose: keep infra running, detect and deploy the app
+            logger.info("deploy_compose_infra_only", mapOf(
+                "port" to hostPort.toString(),
+                "action" to "falling_through_to_app_build"
+            ))
+            val composeNetwork = resolveComposeNetwork(projectPath)
+            return deployAppOnNetwork(projectPath, tag, composeNetwork)
+        } catch (e: Exception) {
+            return DeployResult.failure("docker compose error: ${e.message}")
+        }
+    }
+
+    private fun resolveComposeNetwork(projectPath: Path, projectName: String = "koncerto-demo"): String {
+        return try {
+            val pb = ProcessBuilder(
+                "docker", "compose", "-p", projectName,
+                "-f", projectPath.resolve("docker-compose.yml").toString(),
+                "ps", "--format", "{{.Name}}"
+            ).directory(projectPath.toFile()).redirectErrorStream(true)
+            val p = pb.start()
+            // Filter out docker-compose structured log lines (e.g. time="..." level=warning)
+            val names = p.inputStream.bufferedReader().readText().lines()
+                .filter { it.isNotBlank() && !it.startsWith("time=") }
+            p.waitFor(5, TimeUnit.SECONDS)
+            if (names.isNotEmpty()) {
+                val inspectPb = ProcessBuilder(
+                    "docker", "inspect", names.last(),
+                    "--format", "{{.HostConfig.NetworkMode}}"
+                ).redirectErrorStream(true)
+                val ip = inspectPb.start()
+                val network = ip.inputStream.bufferedReader().readText().trim()
+                ip.waitFor(5, TimeUnit.SECONDS)
+                if (network.isNotBlank()) return network
+            }
+            "${projectName}_default"
+        } catch (_: Exception) {
+            "${projectName}_default"
+        }
+    }
+
+    private fun deployAppOnNetwork(projectPath: Path, tag: String, network: String): DeployResult {
+        val framework = frameworkDetector.detectFramework(projectPath)
+            ?: return DeployResult.failure("Could not detect framework for app build")
+        val dockerfileContent = dockerfileGenerator.generate(framework)
+        val tempDockerfile = projectPath.resolve("Dockerfile.koncerto")
+        try {
+            tempDockerfile.toFile().writeText(dockerfileContent)
+            return deployWithDockerfile(tempDockerfile, projectPath, tag, network)
+        } finally {
+            tempDockerfile.toFile().delete()
+        }
+    }
+}

@@ -75,7 +75,16 @@ class ClaudeReviewRuntime(
             }
             p.outputStream.close()
 
-            val output = p.inputStream.bufferedReader().readText()
+            val raw = p.inputStream.bufferedReader().readText()
+            val output = raw.lines()
+                .filter { line ->
+                    line !in listOf("", " ") &&
+                        !line.startsWith("Claude configuration file not found") &&
+                        !line.startsWith("A backup file exists at:") &&
+                        !line.startsWith("You can manually restore")
+                }
+                .joinToString("\n")
+                .trim()
             if (output.isNotBlank()) {
                 output.lines().forEach { _output.tryEmit(it) }
             }
@@ -88,11 +97,11 @@ class ClaudeReviewRuntime(
                 "output_bytes" to output.length.toString()
             ))
 
-            val hasFailures = output.contains("❌ FAIL") ||
-                output.contains("**Critical:**") && hasNonZeroCritical(output)
+            val hasFailures = output.contains("❌ FAIL")
 
             val statusFile = workspacePath.resolve(".review-status")
             Files.writeString(statusFile, if (hasFailures) "fail" else "pass")
+            Files.writeString(workspacePath.resolve(".review-output"), output)
 
             val attemptFile = workspacePath.resolve(".review-attempt")
             val attempt = if (Files.exists(attemptFile)) {

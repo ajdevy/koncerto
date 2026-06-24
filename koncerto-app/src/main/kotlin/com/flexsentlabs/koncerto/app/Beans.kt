@@ -74,6 +74,13 @@ import com.flexsentlabs.koncerto.orchestrator.SubtaskOrchestrator
 import com.flexsentlabs.koncerto.orchestrator.WorkplanParser
 import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
+import com.flexsentlabs.koncerto.deploy.ContainerLifecycleManager
+import com.flexsentlabs.koncerto.deploy.DemoFailureReporter
+import com.flexsentlabs.koncerto.deploy.DockerConfigDetector
+import com.flexsentlabs.koncerto.deploy.DockerfileGenerator
+import com.flexsentlabs.koncerto.deploy.FrameworkDetector
+import com.flexsentlabs.koncerto.deploy.GitHubPRQueryImpl
+import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
@@ -124,7 +131,9 @@ class Beans {
         val path = Paths.get(workflowPath)
         val def = WorkflowLoader.loadFromPath(path)
         workflowCache.set(def)
-        val workflowFileDir = path.parent?.toString() ?: "."
+        val parent = path.parent
+        if (parent != null) workflowCache.setWorkflowDir(parent)
+        val workflowFileDir = parent?.toString() ?: "."
         @Suppress("UNCHECKED_CAST")
         val configMap = def.config
         val config = ServiceConfig.fromMap(configMap, workflowFileDir)
@@ -395,9 +404,13 @@ class Beans {
                         runtimeState = state,
                         notifier = compositeNotifier,
                         logger = logger,
+                        workflowCache = cache,
                         onReviewPassed = demoEventListener?.let { listener ->
-                            { issue -> listener.onReviewPassed(issue.id, issue.identifier, slug) }
-                        }
+                            { issue, targetUrl -> listener.onReviewPassed(issue.id, issue.identifier, slug, targetUrl) }
+                        },
+                        targetProjectDeployer = targetProjectDeployer(logger),
+                        deployRepoFullName = parseRepoFullName(config),
+                        demoFailureReporter = DemoFailureReporter(logger)
                     )
                 }
             } else null
@@ -409,6 +422,7 @@ class Beans {
         val dr = serviceConfig.demoRecording
         return DemoConfig(
             enabled = dr.enabled,
+            targetUrl = dr.targetUrl,
             tempDir = "/tmp/koncerto-demo",
             maxRetries = dr.retry.maxAttempts,
             retryDelayMs = 5_000L,
@@ -533,6 +547,45 @@ class Beans {
     ): DemoEventListener? {
         if (demoRecordingService == null) return null
         return DemoEventListener(demoRecordingService, enabled = demoConfig.enabled)
+    }
+
+    @Bean
+    fun targetProjectDeployer(logger: StructuredLogger): TargetProjectDeployer {
+        val configDetector = DockerConfigDetector()
+        val frameworkDetector = FrameworkDetector()
+        val dockerfileGenerator = DockerfileGenerator()
+        val containerManager = ContainerLifecycleManager(logger)
+        return TargetProjectDeployer(
+            configDetector, frameworkDetector, dockerfileGenerator,
+            containerManager, logger
+        )
+    }
+
+    @Bean
+    fun demoFailureReporter(logger: StructuredLogger): DemoFailureReporter =
+        DemoFailureReporter(logger)
+
+    private fun parseRepoFullName(config: ServiceConfig): String? {
+        val remoteUrl = config.gitConfig.remoteUrl
+        if (remoteUrl.isBlank()) {
+            val firstProject = config.projects.values.firstOrNull()
+            return firstProject?.let { parseRemoteFromWorkspace(it.workspace.root) }
+        }
+        val match = Regex("""github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$""").find(remoteUrl)
+        return match?.groupValues?.get(1)
+    }
+
+    private fun parseRemoteFromWorkspace(root: String): String? {
+        val gitDir = Paths.get(root).resolve(".git")
+        if (!Files.exists(gitDir)) return null
+        return try {
+            val configFile = gitDir.resolve("config")
+            if (!Files.exists(configFile)) return null
+            val content = Files.readString(configFile)
+            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
+                .find(content, content.indexOf("[remote \"origin\"]"))
+            match?.groupValues?.get(1)
+        } catch (_: Exception) { null }
     }
 
     @Bean

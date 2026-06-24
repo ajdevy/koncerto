@@ -43,6 +43,12 @@ projects:
           command: codex exec --json --skip-git-repo-check -s danger-full-access
           effort: medium
           on_complete_state: "In Review"
+        "In Progress":
+          prompt: Agent is working on this issue. Check the workspace for progress and write PASS if work is actively progressing.
+          agent_kind: claude
+          command: claude --print
+          model: claude-sonnet-4-6
+          on_complete_state: "In Review"
         "In Review":
           prompt: prompts/review.md
           agent_kind: claude
@@ -55,9 +61,18 @@ projects:
           prompt: prompts/human-review.md
           agent_kind: human
           on_complete_state: "Done"
+# Deploys the target project in a Docker container after review passes
+# so the demo recorder can capture the running app.
+target_project_deploy:
+  enabled: true
+  trigger: review_passed
+  health_check_timeout_sec: 60
+  port_range: "32768-33000"
+
 demo_recording:
   enabled: true
   trigger: review_passed
+  target_url: $DEMO_TARGET_URL
   platform:
     web: playwright
     terminal: asciinema
@@ -67,11 +82,11 @@ demo_recording:
     codec: vp9
   storage:
     r2_endpoint: $R2_ENDPOINT
-    r2_bucket: koncerto-demos
+    r2_bucket: $R2_BUCKET
     r2_access_key: $R2_ACCESS_KEY
     r2_secret_key: $R2_SECRET_KEY
     public_url_base: $R2_PUBLIC_URL_BASE
-    presigned_url_ttl: 3600
+    presigned_url_ttl: 604800
     region: auto
   ai:
     model: free

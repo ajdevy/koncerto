@@ -3,8 +3,7 @@ services:
     build:
       context: .
       dockerfile: koncerto-app/Dockerfile
-    ports:
-      - "${KONCERTO_PORT:-17348}:17348"
+    network_mode: "host"
     environment:
       KONCERTO_WORKFLOW_PATH: /config/WORKFLOW.md
       KONCERTO_LOGS_ROOT: /logs
@@ -16,6 +15,11 @@ services:
       KONCERTO_WORKSPACE_ROOT: /workspace
       GH_TOKEN: "${GH_TOKEN:-}"
       GIT_REMOTE_URL: "${GIT_REMOTE_URL:-}"
+      R2_ENDPOINT: "${R2_ENDPOINT:-}"
+      R2_ACCESS_KEY: "${R2_ACCESS_KEY:-}"
+      R2_SECRET_KEY: "${R2_SECRET_KEY:-}"
+      R2_BUCKET: "${R2_BUCKET:-}"
+      R2_PUBLIC_URL_BASE: "${R2_PUBLIC_URL_BASE:-}"
     volumes:
       - .:/config
       - koncerto-logs:/logs
@@ -34,8 +38,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
-    networks:
-      - koncerto-network
     restart: unless-stopped
 
   koncerto-agent:
@@ -46,18 +48,12 @@ services:
       koncerto-app:
         condition: service_healthy
     environment:
-      KONCERTO_APP_URL: http://koncerto-app:17348
+      KONCERTO_APP_URL: http://host.docker.internal:17348
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - koncerto-network
     restart: unless-stopped
     profiles:
       - agent
-
-networks:
-  koncerto-network:
-    driver: bridge
 
 volumes:
   koncerto-logs:

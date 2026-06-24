@@ -410,11 +410,16 @@ class DispatchService(
         val effectiveStage = stageNameOverride ?: issue.normalizedState
         val stageConfig = projectConfig.agent.stages[effectiveStage]
         val effectiveStageConfig = if (stageNameOverride != null && issue.normalizedState == "todo") {
-            stageConfig?.copy(onCompleteState = "In Review")
+            if (stageNameOverride != "in review") {
+                stageConfig?.copy(onCompleteState = "In Review")
+            } else {
+                stageConfig
+            }
         } else {
             stageConfig
         }
-        val prompt = effectiveStageConfig?.prompt ?: workflowCache.current().promptTemplate
+        val rawPrompt = effectiveStageConfig?.prompt ?: workflowCache.current().promptTemplate
+        val prompt = workflowCache.resolvePrompt(rawPrompt)
         val resolved = resolveAgent(issue, effectiveStageConfig)
 
         if (AgentAuthChecker.needsAuth(resolved.kind) && !AgentAuthChecker.isAuthenticated(resolved.kind)) {
@@ -519,7 +524,6 @@ class DispatchService(
         try {
             result.onSuccess {
                 scope.coroutineContext.ensureActive()
-                state.releaseClaim(issue.id)
                 agentIdToIssueId.remove(data.threadId)
                 issueProjectMap.remove(issue.id)
                 val finalEntry = state.running.remove(issue.id)
@@ -544,10 +548,14 @@ class DispatchService(
                     totalTokens = finalEntry?.totalTokens ?: 0
                 ))
                 scope.coroutineContext.ensureActive()
-                handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
-                handleCrossProjectFollowUp(scope, issue, data.stageConfig)
-                handleNormalCompletion(issue, data.stageConfig, finalEntry)
-                quotaEnforcer?.release(projectConfig.tracker.projectSlug)
+                try {
+                    handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
+                    handleCrossProjectFollowUp(scope, issue, data.stageConfig)
+                    handleNormalCompletion(issue, data.stageConfig, finalEntry)
+                } finally {
+                    state.releaseClaim(issue.id)
+                    quotaEnforcer?.release(projectConfig.tracker.projectSlug)
+                }
             }.onFailure { err ->
                 scope.coroutineContext.ensureActive()
                 state.releaseClaim(issue.id)

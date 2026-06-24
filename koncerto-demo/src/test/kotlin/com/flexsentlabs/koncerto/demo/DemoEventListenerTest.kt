@@ -21,6 +21,7 @@ import java.time.Instant
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertNotNull
 
 class DemoEventListenerTest {
 
@@ -70,10 +71,8 @@ class DemoEventListenerTest {
             issueIdentifier = "KONC-123",
             projectSlug = "test"
         )
-        assert(result is DemoResult.Success)
-        val task = (result as DemoResult.Success).value as DemoTask
-        assert(task.issueId == "issue-1")
-        assert(task.trigger == DemoTrigger.REVIEW_PASSED)
+        assertNotNull(result)
+        assert(result!!.startsWith("http"))
     }
 
     @Test
@@ -84,23 +83,22 @@ class DemoEventListenerTest {
             projectSlug = "test",
             platform = DemoPlatform.PLAYWRIGHT
         )
-        assert(result is DemoResult.Success)
-        val task = (result as DemoResult.Success).value as DemoTask
+        assert(result is DemoResult.Success<*>)
+        val task = (result as DemoResult.Success<*>).value as DemoTask
         assert(task.issueId == "issue-2")
         assert(task.trigger == DemoTrigger.MANUAL)
         assert(task.platform == DemoPlatform.PLAYWRIGHT)
     }
 
     @Test
-    fun `onReviewPassed returns success when disabled`() = runTest {
+    fun `onReviewPassed returns null when disabled`() = runTest {
         val disabledListener = DemoEventListener(recordingService = service, enabled = false)
         val result = disabledListener.onReviewPassed(
             issueId = "issue-3",
             issueIdentifier = "KONC-789",
             projectSlug = "test"
         )
-        assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value == Unit)
+        assert(result == null)
     }
 
     @Test
@@ -111,8 +109,8 @@ class DemoEventListenerTest {
             issueIdentifier = "KONC-101",
             projectSlug = "test"
         )
-        assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value == Unit)
+        assert(result is DemoResult.Success<*>)
+        assert((result as DemoResult.Success<*>).value == Unit)
     }
 }
 

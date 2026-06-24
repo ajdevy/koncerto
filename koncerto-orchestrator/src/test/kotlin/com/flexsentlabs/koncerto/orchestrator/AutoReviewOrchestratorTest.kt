@@ -243,7 +243,7 @@ class AutoReviewOrchestratorTest {
             runtimeState = RuntimeState(),
             notifier = noopNotifier(),
             logger = noopLogger(),
-            onReviewPassed = { issue -> capturedIssue = issue }
+            onReviewPassed = { issue, _ -> capturedIssue = issue; null }
         )
         val decision = orchestrator.onCodingComplete(issue(id = "issue-1", identifier = "T-1"))
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
@@ -273,7 +273,7 @@ class AutoReviewOrchestratorTest {
             runtimeState = RuntimeState(),
             notifier = noopNotifier(),
             logger = noopLogger(),
-            onReviewPassed = { invoked = true }
+            onReviewPassed = { _, _ -> invoked = true; null }
         )
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision !is AutoReviewOrchestrator.ReviewDecision.Pass).isTrue()

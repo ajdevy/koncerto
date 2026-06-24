@@ -6,6 +6,7 @@ import java.io.File
 import java.net.URI
 import java.net.URLEncoder
 import java.net.http.HttpClient
+import java.util.LinkedHashMap
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
@@ -23,7 +24,7 @@ class R2DemoStorage(
     private val bucketName: String,
     private val publicUrlBase: String,
     private val quotaLimitBytes: Long = 9L * 1024 * 1024 * 1024,
-    private val presignedUrlTtlSeconds: Long = 3600,
+    private val presignedUrlTtlSeconds: Long = 604800,
     private val region: String = "auto"
 ) : DemoStorage {
 
@@ -40,20 +41,27 @@ class R2DemoStorage(
             val storageKey = "demo-recordings/$taskId/${file.name}"
             val fileBytes = Files.readAllBytes(file.toPath())
             val contentMd5 = MessageDigest.getInstance("MD5").digest(fileBytes)
+            val contentSha256 = MessageDigest.getInstance("SHA-256").digest(fileBytes)
+                .joinToString("") { "%02x".format(it) }
 
             val url = "$endpoint/$bucketName/$storageKey"
-            val builder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Content-Type", contentType)
-                .header("Content-MD5", java.util.Base64.getEncoder().encodeToString(contentMd5))
-                .header("Authorization", "Bearer $accessKey")
+            val now = Instant.now()
+            val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
 
-            if (tags.isNotEmpty()) {
-                val tagValue = tags.entries.joinToString("&") { "${it.key}=${it.value}" }
-                builder.header("x-amz-tagging", tagValue)
+            val headers = mutableMapOf(
+                "content-type" to contentType,
+                "content-md5" to java.util.Base64.getEncoder().encodeToString(contentMd5),
+                "x-amz-content-sha256" to contentSha256,
+                "x-amz-date" to amzDate
+            )
+            val authHeader = buildSigV4AuthHeader("PUT", "/$bucketName/$storageKey", "", headers, contentSha256, now)
+            headers["authorization"] = authHeader
+
+            val builder = HttpRequest.newBuilder().uri(URI.create(url))
+            headers.forEach { (key, value) ->
+                if (key != "authorization") builder.header(key, value)
             }
-
-            val request = builder
+            val request = builder.header("Authorization", authHeader)
                 .PUT(HttpRequest.BodyPublishers.ofByteArray(fileBytes))
                 .build()
 
@@ -83,9 +91,18 @@ class R2DemoStorage(
     override suspend fun delete(storageKey: String): DemoResult<Unit> {
         return try {
             val url = "$endpoint/$bucketName/$storageKey"
+            val now = Instant.now()
+            val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
+            val emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+            val headers = mapOf("x-amz-date" to amzDate, "x-amz-content-sha256" to emptyHash)
+            val authHeader = buildSigV4AuthHeader("DELETE", "/$bucketName/$storageKey", "", headers, emptyHash, now)
+
             val request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
-                .header("Authorization", "Bearer $accessKey")
+                .header("x-amz-date", amzDate)
+                .header("x-amz-content-sha256", emptyHash)
+                .header("Authorization", authHeader)
                 .DELETE()
                 .build()
 
@@ -151,6 +168,37 @@ class R2DemoStorage(
         } catch (e: Exception) {
             DemoResult.Failure(DemoError.StorageFailed(e))
         }
+    }
+
+    private fun buildSigV4AuthHeader(
+        method: String, canonicalUri: String, canonicalQueryString: String,
+        headers: Map<String, String>, payloadHash: String, timestamp: Instant
+    ): String {
+        val dateStr = timestamp.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd"))
+        val dateTimeStr = timestamp.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
+        val credentialScope = "$dateStr/$region/s3/aws4_request"
+        val hostService = URI.create(endpoint).host
+
+        val allHeaders = LinkedHashMap<String, String>()
+        allHeaders["host"] = hostService
+        headers.entries.sortedBy { it.key.lowercase() }.forEach { (k, v) ->
+            allHeaders[k.lowercase()] = v
+        }
+
+        val canonicalHeaders = allHeaders.entries.sortedBy { it.key }.joinToString("\n") { "${it.key}:${it.value}" } + "\n"
+        val signedHeaders = allHeaders.keys.sorted().joinToString(";")
+
+        val canonicalRequest = "$method\n$canonicalUri\n$canonicalQueryString\n$canonicalHeaders\n$signedHeaders\n$payloadHash"
+        val canonicalRequestHash = sha256Hex(canonicalRequest)
+        val stringToSign = "AWS4-HMAC-SHA256\n$dateTimeStr\n$credentialScope\n$canonicalRequestHash"
+
+        val dateKey = hmacSha256("AWS4$secretKey", dateStr)
+        val regionKey = hmacSha256(dateKey, region)
+        val serviceKey = hmacSha256(regionKey, "s3")
+        val signingKey = hmacSha256(serviceKey, "aws4_request")
+        val signature = hmacSha256Hex(signingKey, stringToSign)
+
+        return "AWS4-HMAC-SHA256 Credential=$accessKey/$credentialScope, SignedHeaders=$signedHeaders, Signature=$signature"
     }
 
     private fun generatePresignedUrl(storageKey: String, expiresInSeconds: Long): String {

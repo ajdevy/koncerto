@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":koncerto-dashboard"))
     implementation(project(":koncerto-notifications"))
     implementation(project(":koncerto-demo"))
+    implementation(project(":koncerto-deploy"))
 
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.spring.boot.starter.actuator)

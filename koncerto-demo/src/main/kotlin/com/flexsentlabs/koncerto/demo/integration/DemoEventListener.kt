@@ -10,14 +10,20 @@ class DemoEventListener(
     private val enabled: Boolean = true
 ) {
     suspend fun onReviewPassed(
-        issueId: String, issueIdentifier: String, projectSlug: String?
-    ): DemoResult<*> {
-        if (!enabled) return DemoResult.Success(Unit)
-        return recordingService.requestRecording(
+        issueId: String, issueIdentifier: String, projectSlug: String?,
+        targetUrl: String? = null
+    ): String? {
+        if (!enabled) return null
+        val result = recordingService.requestRecording(
             issueId = issueId, issueIdentifier = issueIdentifier,
             projectSlug = projectSlug, platform = null,
-            trigger = DemoTrigger.REVIEW_PASSED
+            trigger = DemoTrigger.REVIEW_PASSED,
+            targetUrl = targetUrl
         )
+        return when (result) {
+            is DemoResult.Success -> result.value.recordingUrl
+            else -> null
+        }
     }
 
     suspend fun onRecordDemoAction(

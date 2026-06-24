@@ -36,6 +36,8 @@ class DemoRecordingService(
     private val auditLogger: DemoAuditLogger,
     private val aiTimelineGenerator: AiTimelineGenerator? = null
 ) {
+    @Volatile
+    private var pendingTargetUrlOverride: String? = null
     suspend fun createTask(
         issueId: String, issueIdentifier: String, projectSlug: String?,
         platform: DemoPlatform, trigger: DemoTrigger
@@ -75,8 +77,10 @@ class DemoRecordingService(
 
     suspend fun requestRecording(
         issueId: String, issueIdentifier: String, projectSlug: String?,
-        platform: DemoPlatform?, trigger: DemoTrigger
+        platform: DemoPlatform?, trigger: DemoTrigger,
+        targetUrl: String? = null
     ): DemoResult<DemoTask> {
+        pendingTargetUrlOverride = targetUrl
         val resolvedPlatform = platform ?: resolvePlatform()
         if (resolvedPlatform == null) {
             return DemoResult.Failure(DemoError.RecorderNotAvailable("no_platform_available"))
@@ -314,7 +318,11 @@ class DemoRecordingService(
         if (recorderResult is DemoResult.Failure) return recorderResult as DemoResult<DemoTask>
 
         val recorder = (recorderResult as DemoResult.Success).value
-        val recordingConfig = RecordingConfig(platform = task.platform)
+        val effectiveTargetUrl = pendingTargetUrlOverride?.takeIf { it.isNotBlank() } ?: config.targetUrl
+        val recordingConfig = RecordingConfig(
+            platform = task.platform,
+            targetUrl = effectiveTargetUrl
+        )
         val tempFile = File(config.tempDir, "${task.id}.${recordingConfig.outputFormat}")
 
         val recordResult = recorder.record(recordingConfig, tempFile)
