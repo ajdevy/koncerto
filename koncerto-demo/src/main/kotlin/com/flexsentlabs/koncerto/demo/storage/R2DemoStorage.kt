@@ -24,7 +24,7 @@ class R2DemoStorage(
     private val bucketName: String,
     private val publicUrlBase: String,
     private val quotaLimitBytes: Long = 9L * 1024 * 1024 * 1024,
-    private val presignedUrlTtlSeconds: Long = 604800,
+    private val presignedUrlTtlSeconds: Long = 315360000, // 10 years — effective "never expire"; deletion is quota-driven
     private val region: String = "auto"
 ) : DemoStorage {
 

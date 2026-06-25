@@ -6,6 +6,7 @@ import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.tracker.TrackerClient
 import com.flexsentlabs.koncerto.deploy.DeployConfig
+import com.flexsentlabs.koncerto.deploy.DeployResult
 import com.flexsentlabs.koncerto.deploy.DemoFailureReporter
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.logging.StructuredLogger
@@ -87,9 +88,13 @@ class AutoReviewOrchestrator(
             runtimeState.reviewAttempts.remove(issue.id)
 
             saveDemoScenario(issue, workspace)
-            val deployUrl = deployTargetProject(issue, workspace)
+            val deployResult = deployTargetProject(issue, workspace)
+            val deployUrl = deployResult?.url
             val demoUrl = onReviewPassed?.invoke(issue, deployUrl)
             postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
+            if (deployResult != null) {
+                cleanupDemoDeploy(issue, workspace, deployResult)
+            }
             ReviewDecision.Pass(stage.onCompleteState)
         } else if (currentAttempt < maxAttempts) {
             logger.info(
@@ -146,23 +151,47 @@ class AutoReviewOrchestrator(
         val demoLink = if (!demoUrl.isNullOrBlank()) "\n---\n🎥 [Watch Demo Recording]($demoUrl)" else ""
         val body = header + content + demoLink
 
+        logger.info("pr_comment_debug", mapOf(
+            "issue_id" to issue.id,
+            "body_length" to body.length.toString(),
+            "demo_url" to (demoUrl ?: "null"),
+            "has_content" to content.isNotBlank().toString()
+        ))
+
+        val repo = resolveRepoFullName(ws.path) ?: deployRepoFullName ?: run {
+            logger.warn("pr_comment_no_repo", mapOf("issue_id" to issue.id))
+            return
+        }
+        val prNumber = resolvePrNumber(ws.path) ?: run {
+            logger.warn("pr_comment_no_pr", mapOf("issue_id" to issue.id))
+            return
+        }
         try {
-            val pb = ProcessBuilder("gh", "pr", "comment", "--body", body)
-                .directory(ws.path.toFile())
-                .redirectErrorStream(true)
-            val proc = pb.start()
-            val exitCode = proc.waitFor()
-            if (exitCode == 0) {
-                logger.info("pr_review_comment_posted", mapOf(
-                    "issue_id" to issue.id,
-                    "issue_identifier" to issue.identifier
-                ))
-            } else {
-                val err = proc.inputStream.bufferedReader().readText().take(200)
-                logger.warn("pr_review_comment_failed", mapOf(
-                    "issue_id" to issue.id,
-                    "error" to err
-                ))
+            val bodyFile = ws.path.resolve(".review-body.txt")
+            bodyFile.toFile().writeText(body)
+            try {
+                val pb = ProcessBuilder("gh", "pr", "comment", prNumber.toString(), "--repo", repo, "--body-file", bodyFile.toString())
+                    .directory(ws.path.toFile())
+                    .redirectErrorStream(true)
+                val proc = pb.start()
+                val output = proc.inputStream.bufferedReader().readText()
+                val exitCode = proc.waitFor()
+                if (exitCode == 0) {
+                    val commentUrl = output.trim().ifBlank { "(no url)" }
+                    logger.info("pr_review_comment_posted", mapOf(
+                        "issue_id" to issue.id,
+                        "issue_identifier" to issue.identifier,
+                        "comment_url" to commentUrl
+                    ))
+                } else {
+                    val err = output.take(200)
+                    logger.warn("pr_review_comment_failed", mapOf(
+                        "issue_id" to issue.id,
+                        "error" to err
+                    ))
+                }
+            } finally {
+                try { Files.deleteIfExists(bodyFile) } catch (_: Exception) {}
             }
         } catch (e: Exception) {
             logger.warn("pr_review_comment_error", mapOf(
@@ -195,21 +224,19 @@ class AutoReviewOrchestrator(
             return
         }
         val detailedPath = ws.path.resolve(".review-output-detailed")
-        if (!Files.exists(detailedPath)) {
-            logger.warn("demo_scenario_file_missing", mapOf(
-                "issue_id" to issue.id,
-                "path" to detailedPath.toString()
-            ))
-            return
-        }
-        val raw = try { Files.readString(detailedPath) } catch (e: Exception) {
+        val outputPath = ws.path.resolve(".review-output")
+
+        val raw = try {
+            when {
+                Files.exists(detailedPath) -> Files.readString(detailedPath)
+                Files.exists(outputPath) -> Files.readString(outputPath)
+                else -> null
+            }
+        } catch (e: Exception) {
             logger.warn("demo_scenario_read_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
             return
         }
-        if (raw.isBlank()) {
-            logger.warn("demo_scenario_file_blank", mapOf("issue_id" to issue.id, "path" to detailedPath.toString()))
-            return
-        }
+        if (raw.isNullOrBlank()) return
 
         val scenarioBlock = extractScenarioBlock(raw)
         if (scenarioBlock == null) {
@@ -225,11 +252,13 @@ class AutoReviewOrchestrator(
         val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
         try {
             java.nio.file.Files.createDirectories(scenarioDir)
-            val targetPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
-            Files.writeString(targetPath, scenarioBlock)
+            val uuidPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
+            Files.writeString(uuidPath, scenarioBlock)
+            val identPath = scenarioDir.resolve("${issue.identifier}-scenario.yaml")
+            Files.writeString(identPath, scenarioBlock)
             logger.info("demo_scenario_saved", mapOf(
                 "issue_id" to issue.id,
-                "path" to targetPath.toString()
+                "issue_identifier" to issue.identifier
             ))
         } catch (e: Exception) {
             logger.warn("demo_scenario_save_failed", mapOf(
@@ -305,10 +334,10 @@ class AutoReviewOrchestrator(
         }
     }
 
-    private suspend fun deployTargetProject(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?): String? {
+    private suspend fun deployTargetProject(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?): DeployResult? {
         val deployer = targetProjectDeployer ?: return null
-        val repoFullName = deployRepoFullName ?: return null
         val ws = workspace ?: return null
+        val repoFullName = resolveRepoFullName(ws.path) ?: deployRepoFullName ?: return null
         if (!Files.isDirectory(ws.path)) return null
 
         logger.info("deploy_target_project_start", mapOf("issue_id" to issue.id, "repo" to repoFullName))
@@ -322,7 +351,7 @@ class AutoReviewOrchestrator(
             val result = deployer.deploy(deployConfig)
             if (result.success) {
                 logger.info("deploy_target_project_ok", mapOf("url" to result.url!!))
-                result.url
+                result
             } else {
                 val prNumber = resolvePrNumber(ws.path)
                 logger.warn("deploy_target_project_failed", mapOf("reason" to (result.error ?: "unknown"), "logs" to (result.logs?.take(200) ?: "")))
@@ -335,9 +364,27 @@ class AutoReviewOrchestrator(
         }
     }
 
+    private suspend fun cleanupDemoDeploy(
+        issue: Issue,
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        deployResult: DeployResult
+    ) {
+        val deployer = targetProjectDeployer ?: return
+        val ws = workspace ?: return
+        val repoFullName = resolveRepoFullName(ws.path) ?: deployRepoFullName ?: return
+        val deployConfig = DeployConfig(
+            repoFullName = repoFullName,
+            prBranch = issue.identifier,
+            baseBranch = "main",
+            projectPath = ws.path
+        )
+        deployer.cleanup(deployConfig)
+    }
+
     private fun resolvePrNumber(workspacePath: Path): Int? {
+        val repo = resolveRepoFullName(workspacePath) ?: return null
         return try {
-            val pb = ProcessBuilder("gh", "pr", "view", "--json", "number")
+            val pb = ProcessBuilder("gh", "pr", "view", "--repo", repo, "--json", "number")
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
                 .start()
@@ -353,6 +400,17 @@ class AutoReviewOrchestrator(
         "Review the code changes for issue ${issue.identifier}: ${issue.title}. " +
             "Check for correctness, edge cases, security issues, and adherence to best practices. " +
             "Write '❌ FAIL' if there are critical issues, otherwise indicate the review passed."
+
+    private fun resolveRepoFullName(workspacePath: Path): String? {
+        val gitConfigPath = workspacePath.resolve(".git/config")
+        if (!Files.exists(gitConfigPath)) return null
+        return try {
+            val content = Files.readString(gitConfigPath)
+            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
+                .find(content, content.indexOf("[remote \"origin\"]"))
+            match?.groupValues?.get(1)
+        } catch (_: Exception) { null }
+    }
 
     sealed class ReviewDecision {
         data object NoReview : ReviewDecision()

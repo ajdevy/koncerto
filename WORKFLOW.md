@@ -86,7 +86,7 @@ demo_recording:
     r2_access_key: $R2_ACCESS_KEY
     r2_secret_key: $R2_SECRET_KEY
     public_url_base: $R2_PUBLIC_URL_BASE
-    presigned_url_ttl: 604800
+    presigned_url_ttl: 315360000
     region: auto
   ai:
     model: free

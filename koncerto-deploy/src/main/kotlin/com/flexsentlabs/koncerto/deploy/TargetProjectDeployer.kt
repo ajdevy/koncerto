@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.deploy
 
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
@@ -8,11 +9,15 @@ data class DeployResult(
     val url: String?,
     val success: Boolean,
     val error: String?,
-    val logs: String?
+    val logs: String?,
+    val isCompose: Boolean = false,
+    val tag: String? = null
 ) {
     companion object {
-        fun success(url: String) = DeployResult(url, true, null, null)
-        fun failure(error: String, logs: String? = null) = DeployResult(null, false, error, logs)
+        fun success(url: String, isCompose: Boolean = false, tag: String? = null) =
+            DeployResult(url, true, null, null, isCompose, tag)
+        fun failure(error: String, logs: String? = null) =
+            DeployResult(null, false, error, logs, false, null)
     }
 }
 
@@ -109,7 +114,7 @@ class TargetProjectDeployer(
         }
 
         logger.info("deploy_success", mapOf("url" to container.baseUrl))
-        return DeployResult.success(container.baseUrl)
+        return DeployResult.success(container.baseUrl, tag = tag)
     }
 
     private fun deployWithCompose(composeFile: Path, projectPath: Path, tag: String): DeployResult {
@@ -149,7 +154,7 @@ class TargetProjectDeployer(
 
             if (hostPort > 0 && hostPort in webPorts) {
                 logger.info("deploy_compose_success", mapOf("port" to hostPort.toString()))
-                return DeployResult.success("http://host.docker.internal:$hostPort")
+                return DeployResult.success("http://host.docker.internal:$hostPort", isCompose = true, tag = tag)
             }
 
             // Infra-only compose: keep infra running, detect and deploy the app
@@ -202,6 +207,111 @@ class TargetProjectDeployer(
             return deployWithDockerfile(tempDockerfile, projectPath, tag, network)
         } finally {
             tempDockerfile.toFile().delete()
+        }
+    }
+
+    suspend fun cleanup(config: DeployConfig) {
+        val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
+        logger.info("deploy_cleanup_start", mapOf("tag" to (tag as Any?)))
+
+        // Stop and remove all containers with this image tag
+        try {
+            val findPb = ProcessBuilder(
+                "docker", "ps", "-a", "--filter", "ancestor=$tag", "--format", "{{.ID}}"
+            ).redirectErrorStream(true)
+            val findP = findPb.start()
+            val ids = findP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            ids.forEach { id ->
+                try {
+                    ProcessBuilder("docker", "rm", "-f", id).start().waitFor(10, TimeUnit.SECONDS)
+                } catch (_: Exception) {}
+            }
+            logger.info("deploy_cleanup_containers", mapOf("count" to (ids.size.toString() as Any?)))
+        } catch (e: Exception) {
+            logger.warn("deploy_cleanup_containers_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+        }
+
+        // Remove the image
+        try {
+            ProcessBuilder("docker", "rmi", "-f", tag).start().waitFor(10, TimeUnit.SECONDS)
+        } catch (_: Exception) {}
+
+        // Clean up compose project if compose file exists
+        val composeFile = config.projectPath.resolve("docker-compose.yml")
+        if (Files.exists(composeFile)) {
+            try {
+                val pb = ProcessBuilder(
+                    "docker", "compose", "-p", "koncerto-demo",
+                    "-f", composeFile.toString(), "down", "--remove-orphans", "--volumes"
+                ).directory(config.projectPath.toFile()).redirectErrorStream(true).start()
+                pb.waitFor(30, TimeUnit.SECONDS)
+                logger.info("deploy_cleanup_compose", mapOf("status" to ("ok" as Any?)))
+            } catch (e: Exception) {
+                logger.warn("deploy_cleanup_compose_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+            }
+        }
+    }
+
+    suspend fun cleanupOrphans() {
+        logger.info("deploy_orphan_cleanup_start", emptyMap())
+
+        // Find and remove all containers with name koncerto-demo-*
+        try {
+            val findPb = ProcessBuilder(
+                "docker", "ps", "-a", "--filter", "name=koncerto-demo", "--format", "{{.ID}}"
+            ).redirectErrorStream(true)
+            val findP = findPb.start()
+            val ids = findP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            if (ids.isNotEmpty()) {
+                ids.forEach { id ->
+                    try {
+                        ProcessBuilder("docker", "rm", "-f", id).start().waitFor(10, TimeUnit.SECONDS)
+                    } catch (_: Exception) {}
+                }
+                logger.info("deploy_orphan_containers_removed", mapOf("count" to (ids.size.toString() as Any?)))
+            }
+        } catch (e: Exception) {
+            logger.warn("deploy_orphan_container_scan_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+        }
+
+        // Find and remove all images with name koncerto-demo-*
+        try {
+            val findImgPb = ProcessBuilder(
+                "docker", "images", "--format", "{{.Repository}}:{{.Tag}}",
+                "--filter", "reference=koncerto-demo-*"
+            ).redirectErrorStream(true)
+            val findImgP = findImgPb.start()
+            val tags = findImgP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            if (tags.isNotEmpty()) {
+                tags.forEach { tag ->
+                    try {
+                        ProcessBuilder("docker", "rmi", "-f", tag).start().waitFor(10, TimeUnit.SECONDS)
+                    } catch (_: Exception) {}
+                }
+                logger.info("deploy_orphan_images_removed", mapOf("count" to (tags.size.toString() as Any?)))
+            }
+        } catch (e: Exception) {
+            logger.warn("deploy_orphan_image_scan_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+        }
+
+        // Remove any dangling compose project
+        try {
+            val pb = ProcessBuilder(
+                "docker", "compose", "ls", "--format", "{{.Name}}"
+            ).redirectErrorStream(true)
+            val p = pb.start()
+            val names = p.inputStream.bufferedReader().readText().lines()
+                .filter { it.startsWith("koncerto-demo") }
+            names.forEach { name ->
+                try {
+                    val downPb = ProcessBuilder("docker", "compose", "-p", name, "down", "--remove-orphans", "--volumes")
+                        .redirectErrorStream(true).start()
+                    downPb.waitFor(30, TimeUnit.SECONDS)
+                    logger.info("deploy_orphan_compose_removed", mapOf("project" to (name as Any?)))
+                } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            logger.warn("deploy_orphan_compose_scan_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
         }
     }
 }

@@ -80,6 +80,7 @@ import com.flexsentlabs.koncerto.deploy.DockerConfigDetector
 import com.flexsentlabs.koncerto.deploy.DockerfileGenerator
 import com.flexsentlabs.koncerto.deploy.FrameworkDetector
 import com.flexsentlabs.koncerto.deploy.GitHubPRQueryImpl
+import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workflow.WorkflowLoader
@@ -599,6 +600,22 @@ class Beans {
             recordingService = demoRecordingService,
             scope = scope,
             intervalHours = demoConfig.cleanupIntervalHours
+        )
+        scheduler.start()
+        return scheduler
+    }
+
+    @Bean
+    fun orphanedContainerCleanupScheduler(
+        targetProjectDeployer: TargetProjectDeployer,
+        scope: CoroutineScope,
+        logger: StructuredLogger
+    ): OrphanedContainerCleanupScheduler {
+        val scheduler = OrphanedContainerCleanupScheduler(
+            deployer = targetProjectDeployer,
+            scope = scope,
+            logger = logger,
+            intervalMinutes = 5
         )
         scheduler.start()
         return scheduler

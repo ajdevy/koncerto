@@ -138,7 +138,38 @@ dispatch → codex → PR → review_passed → deploy(32774)
 → state="Ready for Human Review"
 ```
 
-### Known Limitations
-- Demo recording URL is a presigned URL (expires in 1hr). For production, set `R2_PUBLIC_URL_BASE` to use public URLs.
+## Known Limitations
+- Demo recording URL is a presigned URL (effectively permanent, 10yr TTL). For production, set `R2_PUBLIC_URL_BASE` to use public URLs.
 - `.review-*` files leak into PR diff
 - `gh_exit_1` "PR already exists" is cosmetic (safety-net stage clashes with codex PR)
+
+## gh pr comment Ghost Posting Fix (Session 2026-06-24)
+### Root cause
+- `postDetailedReviewAsPrComment` ran `gh pr comment --body` *without* `--repo` or PR number, relying on the current git branch to infer the target. On at least one run (15:06), exit code 0 was returned but the comment never appeared on the PR — the git state in the workspace didn't match what `gh` expected for branch-based inference.
+- The `deployRepoFullName` resolved by `parseRepoFullName(config)` returned the **koncerto** repo (from `GIT_REMOTE_URL`), not the target project (PromoMesh).
+
+### Fixes
+- **`resolveRepoFullName(workspacePath)`** — new helper that reads `<workspace>/.git/config` to extract `owner/repo` from the origin remote URL (the actual target project)
+- **`postDetailedReviewAsPrComment()`** — now uses `gh pr comment <PR#> --repo <repo> --body-file <file>` instead of `--body` with inferred PR. Writes body to `.review-body.txt`, deletes after posting.
+- **`resolvePrNumber()`** — now passes `--repo <repo>` explicitly
+- **`deployTargetProject()`** — prefers `resolveRepoFullName(ws.path)` over `deployRepoFullName`
+- **Debug logging** — added `pr_comment_debug` (body length, demo URL) and captures `comment_url` from `gh` output
+
+### Files
+- `AutoReviewOrchestrator.kt` — all changes above
+
+## Orphaned Demo Container Cleanup (Session 2026-06-25)
+### Problem
+- `TargetProjectDeployer.deploy()` started containers for the target project, but **nothing ever stopped them**. Postgres, Redis, and app containers + Docker images accumulated on the host permanently.
+
+### Fix
+- Added `cleanup(config: DeployConfig)` to `TargetProjectDeployer` that:
+  - Finds & force-removes all containers by image tag (`docker rm -f $(docker ps -a -q --filter ancestor=<tag>)`)
+  - Removes the Docker image (`docker rmi -f <tag>`)
+  - Runs `docker compose -p koncerto-demo down --remove-orphans --volumes` if `docker-compose.yml` exists in the project path
+- `AutoReviewOrchestrator.onCodingComplete()` now calls `cleanupDemoDeploy()` **after** demo recording + PR comment posting
+- `DeployResult` now carries `isCompose` and `tag` fields for clean reconciliation
+
+### Files
+- `TargetProjectDeployer.kt` — `cleanup()`, updated `DeployResult`
+- `AutoReviewOrchestrator.kt` — `cleanupDemoDeploy()`, `DeployResult` import

@@ -398,7 +398,11 @@ class DemoRecordingService(
 
     private fun resolveScenarioPath(task: DemoTask): String {
         val scenarioFile = File(config.tempDir, "${task.issueId}-scenario.yaml")
-        return if (scenarioFile.exists()) scenarioFile.absolutePath else ""
+        if (scenarioFile.exists()) return scenarioFile.absolutePath
+        // Also check for issue-identifier based scenario (for backward compatibility)
+        val identFile = File(config.tempDir, "${task.issueIdentifier}-scenario.yaml")
+        if (identFile.exists()) return identFile.absolutePath
+        return ""
     }
 
     private suspend fun resolvePlatform(): DemoPlatform? {

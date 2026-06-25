@@ -20,7 +20,7 @@ data class DemoConfig(
         val secretKey: String,
         val bucketName: String,
         val publicUrlBase: String,
-        val presignedUrlTtlSeconds: Long = 604800,
+        val presignedUrlTtlSeconds: Long = 315360000,
         val region: String = "auto"
     )
 
