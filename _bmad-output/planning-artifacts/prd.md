@@ -1,9 +1,9 @@
 # Product Requirements Document: Koncerto
 
-**Version:** 1.1  
-**Date:** 2026-06-09  
+**Version:** 2.0  
+**Date:** 2026-06-25  
 **PM:** Sarah the PM  
-**Status:** Updated (v1.1: advanced orchestration features)  
+**Status:** Updated (v2.0: demo recording, auto-deploy, auto-review, metrics, notifications, admin API)  
 
 ---
 
@@ -107,6 +107,58 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | FR-30 | Manual refresh | P1 | POST /api/v1/refresh triggers poll |
 | FR-31 | Query issue status | P1 | GET /api/v1/{identifier} returns details |
 
+### 5.7 Demo Recording
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-32 | Record web app demos via Playwright | P1 | Launches Chromium, navigates to URL, captures 120s video |
+| FR-33 | Upload recordings to R2/S3-compatible storage | P1 | SigV4-authenticated PUT with presigned URL support |
+| FR-34 | Support multiple recorder backends | P2 | Playwright (web), Asciinema (terminal), ADB (Android) |
+| FR-35 | Convert raw capture to compressed video via ffmpeg | P1 | H.264/VP9 codec, configurable FPS and resolution |
+
+### 5.8 Auto-Review Pipeline
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-36 | Run Claude Code review on completed PRs | P1 | Reads diff, runs claude --print with review prompt |
+| FR-37 | Post review results as PR comment | P1 | Formats output as GH comment with verdict header |
+| FR-38 | Support review pass/fail gating | P1 | ❌ FAIL blocks state transition, ✅ PASS proceeds |
+| FR-39 | Strip preamble and config noise from review output | P1 | Filters stderr config errors and conversational preamble |
+
+### 5.9 Target Project Auto-Deploy
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-40 | Auto-detect Docker config in target project | P1 | Detects docker-compose.yml or Dockerfile |
+| FR-41 | Detect project framework for Dockerfile generation | P1 | Spring Boot, Node.js, Python, Go |
+| FR-42 | Build and run target project in Docker | P1 | Multi-stage build, port allocation, health check |
+| FR-43 | Clean up containers and images after demo | P1 | Force-remove containers, delete image, compose down |
+
+### 5.10 Notifications
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-44 | Webhook notifications on issue completion | P2 | POST JSON payload to configured URL |
+| FR-45 | Telegram notifications | P2 | Send formatted message to configured chat |
+| FR-46 | Email notifications via SMTP | P2 | Send plain-text email on configured events |
+| FR-47 | Composite notifier fans out to all channels | P2 | Single Notifier interface dispatches to all configured channels |
+
+### 5.11 Metrics & Monitoring
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-48 | SQLite-backed metrics store | P1 | Local file-based storage for issue and system metrics |
+| FR-49 | Prometheus endpoint at /actuator/prometheus | P1 | Micrometer-registered metrics exposed for scraping |
+| FR-50 | JVM, HTTP, and custom business metrics | P2 | Memory, threads, GC, dispatch count, retry count |
+
+### 5.12 Admin API
+
+| ID | Requirement | Priority | Acceptance Criteria |
+|----|-------------|----------|---------------------|
+| FR-51 | Admin endpoints at /api/v1/admin/ with API key auth | P1 | X-Admin-Key header required, returns 401 on mismatch |
+| FR-52 | Config read/write via API | P2 | GET/PUT /api/v1/config for live configuration management |
+| FR-53 | Dependency graph API | P2 | GET /api/v1/dependencies returns nodes/edges as JSON |
+
 ## 6. Non-Functional Requirements
 
 | ID | Requirement | Target | Measurement |
@@ -114,8 +166,10 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | NFR-01 | Startup time | < 5 seconds | Cold start measurement |
 | NFR-02 | Memory footprint | < 512 MB | RSS monitoring |
 | NFR-03 | Concurrent workspaces | 10+ | Load testing |
-| NFR-04 | Test coverage | > 80% | JaCoCo reports |
+| NFR-04 | Test coverage | > 80% (current: 67%) | JaCoCo reports |
 | NFR-05 | License | MIT | License file |
+| NFR-06 | Demo recording duration | < 180 seconds | Playwright + ffmpeg + R2 upload |
+| NFR-07 | Docker image size | < 500 MB | Multi-stage build |
 
 ## 7. Epics & Stories
 
@@ -545,7 +599,7 @@ Software teams using Linear for issue tracking and AI agents for code generation
 - **Acceptance Criteria:**
   - FollowUpRenderer supports {{ issue.title }}, {{ issue.identifier }}, {{ now }}, etc.
   - Unknown variables left as-is
-  - Unit tests for all variables
+-   Unit tests for all variables
 
 #### Story 12.4: Chain Execution
 - **As a** developer
@@ -558,16 +612,192 @@ Software teams using Linear for issue tracking and AI agents for code generation
   - Handles API failures gracefully
   - Logs chain creation event
 
+### Epic 13: Beyond-Scope Features (55 points)
+
+*Status: Most sub-epics complete (13.01-13.11 planned, 13.01-13.10 implemented)*
+
+#### Story 13.1: Docker Deployment
+- **As an** operator
+- **I want** Docker deployment
+- **So that** the service is containerized
+- **Acceptance Criteria:**
+  - [x] Multi-stage Dockerfile with Gradle build stage
+  - [x] docker-compose.yml with app + ngrok services
+  - [x] HEALTHCHECK on dashboard port
+  - [x] Non-root user in runtime stage
+
+#### Story 13.2: Prometheus Monitoring
+- **As a** DevOps engineer
+- **I want** Prometheus metrics
+- **So that** I can monitor the service
+- **Acceptance Criteria:**
+  - [x] /actuator/prometheus endpoint exposed
+  - [x] SQLite-backed metrics repository
+  - [x] JVM, HTTP, and custom business metrics
+
+#### Story 13.3: Conventional Commits
+- **As a** developer
+- **I want** conventional commit prefixes
+- **So that** commit messages follow convention
+- **Acceptance Criteria:**
+  - [x] commitPrefix() maps branch names to commit types
+  - [x] Automated commit prefix in workflows
+
+#### Story 13.4: Dashboard Authentication
+- **As an** operator
+- **I want** admin API key protection
+- **So that** dashboard endpoints are secured
+- **Acceptance Criteria:**
+  - [x] X-Admin-Key header required on /api/v1/admin/**
+  - [x] Configurable via admin.apiKey in workflow config
+
+#### Story 13.5: Config Editor UI
+- **As an** operator
+- **I want** to read/write config via API
+- **So that** live configuration is manageable
+- **Acceptance Criteria:**
+  - [x] GET/PUT /api/v1/config endpoints
+  - [x] Config schema endpoint
+
+#### Story 13.6: Visual Dependency Graph API
+- **As an** operator
+- **I want** to query the dependency graph
+- **So that** I can visualize issue relationships
+- **Acceptance Criteria:**
+  - [x] GET /api/v1/dependencies returns nodes/edges
+  - [x] Built from orchestrator RuntimeState
+
+#### Story 13.7: Agent Messaging
+- **As a** developer
+- **I want** inter-agent message passing
+- **So that** agents can coordinate
+- **Acceptance Criteria:**
+  - [x] AgentMessageStore with send/poll/ack/list
+  - [x] In-memory + SQLite implementations
+
+#### Story 13.8: Automated PR Creation
+- **As a** developer
+- **I want** automated PR creation
+- **So that** PRs are created without manual intervention
+- **Acceptance Criteria:**
+  - [x] gh pr create integration in GitWorkflow
+  - [x] Configurable base branch, title, body
+
+#### Story 13.9: GitHub Issues Bridge
+- **As a** developer
+- **I want** a generic TrackerClient interface
+- **So that** multiple issue trackers are supported
+- **Acceptance Criteria:**
+  - [x] TrackerClient interface with CRUD operations
+  - [x] Provider-agnostic pagination
+
+#### Story 13.10: E2E CI Pipeline
+- **As a** DevOps engineer
+- **I want** CI/CD via GitHub Actions
+- **So that** tests run on every PR
+- **Acceptance Criteria:**
+  - [x] .github/workflows/ci.yml for build + test
+  - [x] .github/workflows/e2e.yml for end-to-end
+  - [x] .github/workflows/docker-publish.yml for images
+
+#### Story 13.11: Test Coverage Expansion
+- **As a** developer
+- **I want** higher test coverage
+- **So that** code quality is maintained
+- **Acceptance Criteria:**
+  - [ ] Coverage threshold > 80% (current: 67%)
+  - [ ] Testcontainers-based integration tests
+
+### Epic 14: Scalable Multi-Project (8 points)
+
+*Status: Partially implemented*
+
+#### Story 14.1: Tenant Resolution
+- **As an** operator
+- **I want** multi-tenant support
+- **So that** a single instance serves multiple projects
+- **Acceptance Criteria:**
+  - [x] TenantId, TenantContext, TenantResolver interfaces
+  - [x] ConfigTenantResolver reads from project config
+  - [ ] Tenant-scoped rate limits and quotas
+  - [ ] Tenant-aware dashboard filtering
+
+### Epic 15: Cloud-Native Deploy (8 points)
+
+*Status: Not implemented*
+
+#### Story 15.1: Helm Chart
+- **As a** DevOps engineer
+- **I want** Kubernetes deployment
+- **So that** the service runs on K8s
+- **Acceptance Criteria:**
+  - [ ] Helm chart with Deployment, Service, ConfigMap
+  - [ ] Multi-environment values files
+
+### Epic 16: Claude Code Post-Story Code Reviews (34 points)
+
+#### Story 16.1: Review Prompt Template
+- **As a** developer
+- **I want** a Claude Code review prompt
+- **So that** code reviews are automated
+- **Acceptance Criteria:**
+  - [x] prompt-template.md with severity categories
+  - [x] Koncerto-specific review standards
+
+#### Story 16.2: Review Runtime (ClaudeReviewRuntime)
+- **As a** developer
+- **I want** a Claude CLI runtime
+- **So that** reviews run in the agent pipeline
+- **Acceptance Criteria:**
+  - [x] Spawns claude --print subprocess
+  - [x] Filters config errors and conversational preamble
+  - [x] Writes structured output to .review-output
+
+#### Story 16.3: Auto-Review Orchestrator
+- **As a** developer
+- **I want** automated review orchestration
+- **So that** reviews happen after implementation
+- **Acceptance Criteria:**
+  - [x] AutoReviewOrchestrator runs review after coding completes
+  - [x] Verdict parsing: explicit ❌ FAIL → review failed
+  - [x] postDetailedReviewAsPrComment() posts formatted comment
+  - [x] Review history tracked with sequence counter
+
+#### Story 16.4: Fix Loop Integration
+- **As a** developer
+- **I want** review findings to trigger fixes
+- **So that** critical issues are resolved automatically
+- **Acceptance Criteria:**
+  - [x] prompts/fix-review.md for fix instructions
+  - [x] Re-dispatch on review failure
+  - [x] Max review attempts before blocking
+
+### Epic 17: ngrok Tunnel (5 points)
+
+#### Story 17.1: Custom Dashboard Port
+- **As an** operator
+- **I want** a configurable dashboard port
+- **So that** the dashboard doesn't conflict with other services
+- **Acceptance Criteria:**
+  - [x] Dashboard on port 17348 (configurable via KONCERTO_DASHBOARD_PORT)
+  - [x] ngrok tunnel with OAuth auto-start
+
+#### Story 17.2: Tunnel Lifecycle
+- **As an** operator
+- **I want** ngrok tunnel management
+- **So that** the dashboard is accessible externally
+- **Acceptance Criteria:**
+  - [x] Tunnel auto-starts with the application
+  - [x] TunnelController exposes tunnel status in dashboard
+
 ## 8. Out of Scope
 
-- Web UI for configuration editing
-- Multi-project support in single instance
-- Agent-to-agent communication
-- Persistent audit logging
-- Visual dependency graph in dashboard
+- Full visual dependency graph in dashboard (API exists, no JS graph renderer)
 - Event-driven blocker tracking (poll-time only)
 - Cross-project dependency resolution
-- Automated PR creation via workflow chaining
+- Kubernetes/Helm deployment (Epic 15 - not yet implemented)
+- Multi-region / high-availability deployment
+- Native mobile app for monitoring
 
 ## 9. Open Questions
 
@@ -589,10 +819,19 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | LINEAR_API_KEY | Linear API key | — |
 | KONCERTO_WORKFLOW_PATH | Path to workflow file | ./WORKFLOW.md |
 | KONCERTO_LOGS_ROOT | Log directory | (stderr only) |
-| KONCERTO_WORKSPACE_ROOT | Workspace root | /tmp/symphony_workspaces |
+| KONCERTO_WORKSPACE_ROOT | Workspace root | /tmp/koncerto_workspaces |
 | KONCERTO_WEB_TYPE | Web mode | none |
 | KONCERTO_CODEX_COMMAND | Codex command | codex app-server |
 | KONCERTO_OPENCODE_COMMAND | opencode command | opencode |
+| KONCERTO_DASHBOARD_PORT | Dashboard port | 17348 |
+| GIT_REMOTE_URL | Default git remote URL | — |
+| GITHUB_TOKEN | GitHub CLI auth token | — |
+| DEMO_TARGET_URL | URL for Playwright demo recording | — |
+| R2_ENDPOINT | R2/S3 endpoint for demo uploads | — |
+| R2_ACCESS_KEY | R2 access key | — |
+| R2_SECRET_KEY | R2 secret key | — |
+| R2_BUCKET | R2 bucket name | — |
+| R2_PUBLIC_URL_BASE | R2 public URL base for presigned URLs | — |
 
 ### 10.2 Glossary
 
@@ -602,4 +841,7 @@ Software teams using Linear for issue tracking and AI agents for code generation
 | Turn | Single agent execution cycle (prompt → response) |
 | Attempt | Complete execution of an issue (may include multiple turns) |
 | Reconciliation | Process of checking running issues against tracker state |
-| Backoff | Increasing delay between retry attempts
+| Backoff | Increasing delay between retry attempts |
+| Demo Recording | Automated Playwright capture of deployed app for PR comments |
+| Auto-Review | Claude Code review run against completed PR before state transition |
+| Target Project | The external project whose Linear issues Koncerto dispatches |

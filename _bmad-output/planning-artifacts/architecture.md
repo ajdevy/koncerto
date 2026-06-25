@@ -1,9 +1,9 @@
 # Architecture Document: Koncerto
 
-**Version:** 1.1  
-**Date:** 2026-06-09  
+**Version:** 2.0  
+**Date:** 2026-06-25  
 **Architect:** Fred the Architect  
-**Status:** Updated (v1.1: dependency tracking, routing, chaining)  
+**Status:** Updated (v2.0: demo recording, auto-deploy, metrics, notifications, auto-review)  
 
 ---
 
@@ -51,68 +51,52 @@ Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents 
 | HTTP Client | Spring WebClient | (via Spring Boot) | Non-blocking, reactive |
 | Serialization | kotlinx.serialization | 1.7.3 | Compile-time, no reflection |
 | Templating | liqp | (Liquid) | Simple, well-known syntax |
-| Testing | JUnit 5, AssertK | — | Modern, expressive |
+| Testing | JUnit 5, AssertK, MockK | — | Modern, expressive |
 | Coverage | JaCoCo | — | Industry standard |
+| Video Recording | Playwright, ffmpeg | 1.49.0 | Cross-browser web app demo capture |
+| Storage | SQLite via JDBC | — | Local metrics persistence |
+| Cloud Storage | R2/S3-compatible (SigV4) | — | Demo video artifact upload |
+| Container Runtime | Docker (docker-compose) | — | Target project deploy for demos |
+| HTTP Client | OkHttp | — | Agent process I/O, JSON-RPC framing |
 
 ## 3. Module Architecture
 
 ### 3.1 Module Dependency Graph
 
 ```
-                    ┌─────────────────┐
-                    │   koncerto-app  │
-                    │ (Spring Boot)   │
-                    └────────┬────────┘
-                             │
-              ┌──────────────┼──────────────┐
-              │              │              │
-              ▼              ▼              ▼
-     ┌────────────┐  ┌────────────┐  ┌────────────┐
-     │ Dashboard  │  │  CLI Runner│  │   Beans    │
-     │ Controller │  │            │  │ (DI Config)│
-     └─────┬──────┘  └────────────┘  └────────────┘
-           │
-           ▼
-     ┌────────────┐
-     │ Orchestrator│
-     └─────┬──────┘
-           │
-    ┌──────┼──────┬──────────┐
-    │      │      │          │
-    ▼      ▼      ▼          ▼
-┌───────┐┌─────┐┌───────┐┌─────────┐
-│Linear ││Agent││Workflow││Workspace│
-│Client ││Runner││Cache  ││ Manager │
-└───┬───┘└──┬──┘└───┬───┘└────┬────┘
-    │       │       │         │
-    ▼       ▼       ▼         ▼
-┌───────┐┌─────┐┌───────┐┌─────────┐
-│GraphQL││Codex││FrontM ││ShellHook│
-│Client ││JSON ││Parser ││Executor │
-└───────┘└──┬──┘└───────┘└─────────┘
-            │
-            ▼
-     ┌────────────┐
-     │   Core     │
-     │ (Result,   │
-     │  Issue,    │
-     │  Config)   │
-     └────────────┘
+koncerto-app  (Spring Boot entry point, bean wiring, CLI runner)
+   │
+   ├── koncerto-dashboard    (REST API, HTML dashboard, admin)
+   ├── koncerto-orchestrator (Poll loop, dispatch, retry, auto-review)
+   ├── koncerto-demo         (Playwright recording, R2 upload, ffmpeg)
+   ├── koncerto-deploy       (Target project Docker build/run/cleanup)
+   ├── koncerto-metrics      (SQLite metrics, Prometheus exporter)
+   ├── koncerto-notifications(Webhook, Telegram, Email)
+   ├── koncerto-linear       (Linear GraphQL client)
+   ├── koncerto-agent        (Agent runtimes: Codex, opencode, Claude)
+   ├── koncerto-workspace    (Git, workspace isolation, hooks)
+   ├── koncerto-workflow     (YAML frontmatter, Liquid templates)
+   ├── koncerto-logging      (Structured logging)
+   └── koncerto-core         (Result, Issue, Config, RateLimiter, etc.)
 ```
 
 ### 3.2 Module Responsibilities
 
 | Module | Responsibility | Key Classes | Dependencies |
 |--------|---------------|-------------|--------------|
-| koncerto-core | Shared types, config parsing | Result, Issue, ServiceConfig, WorkflowDefinition | None |
-| koncerto-logging | Structured logging | StructuredLogger, StderrSink, FileSink | core |
+| koncerto-core | Shared types, config, rate limiting, circuit breakers, events, tenant | Result, ServiceConfig, ProjectConfig, TokenBucketRateLimiter, EventBus, TenantResolver, CircuitBreaker, ErrorTracker | None |
+| koncerto-logging | Structured logging | StructuredLogger, StderrSink, FileSink, AuditLogger | core |
 | koncerto-workflow | YAML parsing, template rendering | FrontMatterParser, PromptRenderer, WorkflowCache | core |
-| koncerto-workspace | Workspace isolation, hooks | WorkspaceManager, ShellHookExecutor, WorkspaceKey | core, logging |
-| koncerto-linear | Linear GraphQL integration | LinearGraphQLClient, DefaultLinearClient, IssueMapper | core |
-| koncerto-agent | Agent abstraction & runtimes | AgentRuntime, AgentRuntimeFactory, CodexRuntime, OpencodeRuntime, AgentEvent | core, logging, workflow, workspace |
-| koncerto-orchestrator | Poll loop, dispatch, retry | Orchestrator, RuntimeState | core, logging, workflow, workspace, agent, linear |
-| koncerto-dashboard | REST API, HTML dashboard | ApiV1Controller, DashboardController | core, orchestrator |
-| koncerto-app | Application entry point | KoncertoApplication, Beans, CliRunner | All modules |
+| koncerto-workspace | Workspace isolation, git operations, hooks | WorkspaceManager, GitWorkflow, HookExecutor, WorkspaceKey | core, logging |
+| koncerto-linear | Linear GraphQL integration | LinearGraphQLClient, RateLimitedLinearClient, IssueMapper, LinearError | core |
+| koncerto-agent | Agent abstraction & runtimes (Codex, opencode, Claude) | AgentRuntime, AgentRuntimeFactory, CodexRuntime, OpencodeRuntime, ClaudeReviewRuntime, AgentHealthChecker | core, logging, workflow, workspace |
+| koncerto-orchestrator | Poll loop, dispatch, retry, auto-review, dependency graph, follow-ups, subtasking | Orchestrator, DispatchService, RuntimeState, AutoReviewOrchestrator, DependencyGraph, FollowUpRenderer, CrossProjectChainer, AgentMessageStore, SubtaskOrchestrator | core, logging, workflow, workspace, agent, linear, metrics, notifications |
+| koncerto-dashboard | REST API, HTML dashboard, admin API | ApiV1Controller, DashboardController, AdminController, TunnelController | core, orchestrator, metrics, workflow |
+| koncerto-metrics | SQLite metrics, Prometheus binding | MetricsRepository, SqliteMetricsRepository, PrometheusMetricsBinder, IssueMetrics | core |
+| koncerto-notifications | Webhook, Telegram, SMTP notifications | Notifier, CompositeNotifier, WebhookNotifier, TelegramNotifier, SmtpEmailNotifier, LoggingNotifier | core, logging |
+| koncerto-demo | Playwright demo recording, R2 upload, ffmpeg | DemoRecordingService, PlaywrightRecorder, R2DemoStorage, DemoEventListener, DemoRecorder, FfmpegRecorder | core, logging, linear |
+| koncerto-deploy | Target project Docker build/run/cleanup | TargetProjectDeployer, ContainerLifecycleManager, DockerConfigDetector, FrameworkDetector, DockerfileGenerator | core, logging |
+| koncerto-app | Application entry point, bean wiring | KoncertoApplication, Beans, ConfigService, CliRunner, OrchestratorHealthIndicator | All modules |
 
 ### 3.3 Dependency Rules
 
@@ -147,10 +131,16 @@ Koncerto is a Kotlin/Spring Boot application that orchestrates AI coding agents 
    - Create workspace via WorkspaceManager
    - Execute after_create hook
    - Render prompt via WorkflowCache.current()
-   - Select agent runtime via AgentRuntimeFactory (Codex or opencode)
+   - Resolve prompt file path → read prompt content (resolvePrompt)
+   - Select agent runtime via AgentRuntimeFactory (Codex, opencode, or Claude)
    - Start agent via AgentRuntime.run()
 5. **Monitor** → Agent emits events, orchestrator tracks state
-6. **Complete** → Detect terminal state, clean up workspace
+6. **Complete** → Handle completion via stage config (onCompleteState):
+   - If review_passed trigger → run AutoReviewOrchestrator
+   - If auto-review passes → optionally deploy target project (koncerto-deploy)
+   - If demo recording enabled → record via Playwright, upload to R2
+   - Post PR comment with review + demo link
+   - Clean up demo containers
 
 ### 4.3 Retry Flow
 
@@ -482,7 +472,171 @@ New LinearClient methods:
 
 ---
 
-## 14. Future Considerations
+## 14. Auto-Review Architecture
+
+### 14.1 Overview
+
+After an agent completes implementation and creates a PR, the `AutoReviewOrchestrator` runs Claude Code against the PR diff to validate code quality before state transition.
+
+### 14.2 Flow
+
+```
+agent_completes → PR_created → AutoReviewOrchestrator.review()
+    ├── Read .review-output-detailed (backup of previous review)
+    ├── Run ClaudeReviewRuntime: claude --print with prompts/review.md
+    │   ├── Filter stderr config errors from output
+    │   └── Strip conversational preamble
+    ├── Parse verdict: ❌ FAIL or ✅ PASS
+    │   ├── FAIL → post comment, re-dispatch (up to max_review_attempts)
+    │   └── PASS → proceed to demo/deploy
+    ├── If target_project_deploy.enabled:
+    │   ├── TargetProjectDeployer.deploy()
+    │   │   ├── Detect Docker config (docker-compose.yml / Dockerfile)
+    │   │   ├── Detect framework (Spring Boot, Node, Python, Go)
+    │   │   ├── Build Docker image
+    │   │   ├── Start container on free port (32768-33000)
+    │   │   └── Health check
+    │   └── If no Docker config → generate Dockerfile.koncerto
+    ├── If demo_recording.enabled:
+    │   ├── DemoRecordingService.record(targetUrl)
+    │   │   ├── Playwright: launch Chromium, navigate, capture 120s
+    │   │   ├── ffmpeg: convert raw capture to VP9 video
+    │   │   └── R2DemoStorage.upload(): SigV4 PUT to R2/S3
+    │   └── Return recording URL
+    ├── postDetailedReviewAsPrComment()
+    │   ├── gh pr comment <PR#> --repo <owner/repo> --body-file
+    │   └── Appends 🎥 demo URL if recording was made
+    └── CleanupDemoDeploy(): docker rm/rmi, compose down
+         → State transition to onCompleteState
+```
+
+### 14.3 Key Components
+
+| Component | Module | Responsibility |
+|-----------|--------|---------------|
+| AutoReviewOrchestrator | koncerto-orchestrator | Orchestrates review → deploy → demo → comment lifecycle |
+| ClaudeReviewRuntime | koncerto-agent | Spawns claude --print, filters output |
+| TargetProjectDeployer | koncerto-deploy | Docker build/run/health/cleanup for target project |
+| DemoRecordingService | koncerto-demo | Coordinates Playwright + ffmpeg + R2 upload |
+| PlaywrightRecorder | koncerto-demo | Embedded Node.js Playwright script via Xvfb |
+| R2DemoStorage | koncerto-demo | SigV4 upload to R2/S3-compatible storage |
+
+## 15. Demo Recording Architecture
+
+### 15.1 Recorder Backends
+
+| Recorder | Platform | Technology |
+|----------|----------|------------|
+| PlaywrightRecorder | Web | Chromium + Playwright + ffmpeg via Xvfb |
+| AsciinemaRecorder | Terminal | Asciinema CLI capture |
+| AdbRecorder | Android | ADB screenrecord |
+| XcrunRecorder | iOS | XCUITest / xcrun |
+
+### 15.2 Storage Layer
+
+`R2DemoStorage` implements `DemoStorage` interface using SigV4 authentication:
+
+```
+PUT /{bucket}/{path}
+  Headers: Content-MD5, Content-Type, Host, x-amz-acl
+  Auth: AWS4-HMAC-SHA256 (canonical request sorted alphabetically)
+→ Returns presigned URL with 10yr TTL
+```
+
+## 16. Notifications Architecture
+
+### 16.1 Notifier Chain
+
+```
+Notifier (interface)
+  └── CompositeNotifier
+      ├── LoggingNotifier (always active)
+      ├── WebhookNotifier (configurable URL)
+      ├── TelegramNotifier (configurable chat ID + bot token)
+      └── SmtpEmailNotifier (configurable SMTP server + recipients)
+```
+
+Each notifier is independently configured per project in WORKFLOW.md. The `CompositeNotifier` fans out `NotificationEvent` to all active channels. `LimitCooldownTracker` prevents duplicate notifications within a configurable window.
+
+## 17. Metrics & Monitoring Architecture
+
+### 17.1 Metrics Pipeline
+
+```
+Issue event → MetricsRepository (interface)
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+ SqliteMetricsRepository   PrometheusMetricsBinder
+ (SQLite via JDBC)         (Micrometer MeterRegistry)
+                              │
+                              ▼
+                     /actuator/prometheus
+                     (scraped by Prometheus)
+```
+
+### 17.2 Tracked Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| koncerto_dispatch_total | Counter | Total dispatch attempts |
+| koncerto_completion_total | Counter | Successful completions |
+| koncerto_retry_total | Counter | Retry attempts |
+| koncerto_running_agents | Gauge | Currently running agents |
+| koncerto_blocked_issues | Gauge | Issues in blocked state |
+| JVM metrics (memory, threads, GC) | Various | Standard Micrometer JVM metrics |
+
+## 18. Deployment Architecture
+
+### 18.1 Docker (Current)
+
+The project uses a multi-stage `Dockerfile`:
+- **Build stage**: Gradle with cache mounts for dependencies
+- **Runtime stage**: `eclipse-temurin:21-jre-alpine` with non-root user
+
+`docker-compose.yml` defines:
+- `koncerto` service: application container on port 17348
+- `ngrok` service: tunnel for dashboard accessibility
+
+### 18.2 Agent Runtime Image
+
+`Dockerfile.agent` provides the full agent execution environment:
+- Python 3, Node.js 20, Go, JDK 21
+- Playwright + Chromium for demo recording
+- ffmpeg for video encoding
+- docker-compose for target project deploy
+- GitHub CLI (`gh`) for PR operations
+
+## 19. Core Subsystems Architecture
+
+### 19.1 Rate Limiting
+
+Token bucket algorithm (`TokenBucketRateLimiter`) with per-provider configuration:
+- Per-minute and per-hour limits
+- Token refill at 1-second granularity
+- `RateLimitRegistry` singleton manages named provider limiters
+- `RateLimitMonitor` with threshold-based alerting
+
+### 19.2 Circuit Breakers
+
+Two levels of circuit breaking:
+- **Per-agent-key**: `AgentCircuitBreaker` prevents launching agents on failing providers
+- **Provider-level**: `ProviderCircuitBreaker` with CLOSED/OPEN/HALF_OPEN states
+
+### 19.3 Event Bus
+
+`EventBus` uses Kotlin `MutableSharedFlow` for pub/sub:
+- `AgentLifecycleEvent` sealed class (started, completed, failed)
+- Subscribers consume via `SharedFlow`
+- Used for in-process event propagation
+
+### 19.4 Audit & Error Tracking
+
+- `AuditLogger` with `AuditEvent` sealed class for structured audit trail
+- `ErrorTracker` with `DefaultErrorTracker` for aggregating error patterns
+- `PatternErrorClassifier` categorizes errors by pattern matching
+
+## 20. Future Considerations
 
 | Area | Options | Trade-offs |
 |------|---------|------------|
@@ -491,3 +645,4 @@ New LinearClient methods:
 | Persistence | Database for audit trail | Storage vs observability |
 | Auth | API key or OAuth for dashboard | Security vs simplicity |
 | Monitoring | Prometheus metrics | Integration effort vs observability |
+| K8s | Helm chart for Kubernetes deployment | Covered by Epic 15 (not implemented) |

@@ -1,5 +1,7 @@
 # Architecture Document: Issue Lifecycle State Machine
 
+> **Status: Implemented** — IssueLifecycle.kt in koncerto-core, AutoReviewOrchestrator.kt in koncerto-orchestrator, remoteBranchExists() in koncerto-workspace.
+
 ## 1. System Overview
 
 The orchestrator manages issue state across two layers — in-memory `RuntimeState` and external Linear tracker — but there is no formal state machine enforcing valid transitions. This creates two concrete failure modes:
@@ -59,8 +61,25 @@ TODO ──dispatch()───┤                                               
 | `TODO` | `IN_REVIEW` | Agent dispatched | `tryClaim()` succeeds, slot available, remote branch exists |
 | `IN_PROGRESS` | `IN_REVIEW` | Agent completes | `transitionOnComplete()` called with agent result |
 | `IN_PROGRESS` | `TODO` | Stall detected | Entry in `running` exceeds `heartbeatTimeoutMs` without heartbeat |
-| `IN_REVIEW` | `DONE` | Review passes | Review decision is `Pass` or max attempts exceeded |
-| `IN_REVIEW` | `TODO` | Review fails | Review decision is `RetryWithCoding` or `Blocked` |
+| `IN_REVIEW` | `READY_FOR_HUMAN_REVIEW` | Review passes | Auto-review verdict is ✅ PASS |
+| `IN_REVIEW` | `TODO` | Review fails | Auto-review verdict is ❌ FAIL, re-dispatch |
+| `IN_REVIEW` | `DONE` | Review passes + no human review stage | Max review attempts exceeded |
+| `READY_FOR_HUMAN_REVIEW` | `DONE` | Human completes review | Manual state transition in Linear |
+
+### Extended Flow with Auto-Review
+
+```
+                      ┌─ review_passed ──→ deploy (optional) ──→ demo recording (optional)
+                      │                                              │
+IN_REVIEW ──auto──────┤                                              ▼
+                      │                                        postDetailedReviewAsPrComment()
+                      │                                         + 🎥 demo URL
+                      │                                              │
+                      │                                              ▼
+                      │                                        READY_FOR_HUMAN_REVIEW
+                      │
+                      └─ ❌ FAIL ──→ TODO (re-dispatch, up to max_review_attempts)
+```
 
 ### Zombie Detection
 
@@ -156,20 +175,35 @@ No new security concerns. All state transitions are server-side, authenticated t
 
 ## 9. Deployment
 
-### Config Changes (`WORKFLOW.md`)
+### Config Example (`WORKFLOW.md`)
 
 ```yaml
 tracker:
   active_states:
     - Todo
-    - "In Progress"    # NEW
+    - "In Progress"
     - "In Review"
   terminal_states:
     - Done
   blocked_state: "Blocked"
+agent:
+  stages:
+    Todo:          # → codex implements, onComplete → "In Review"
+      agent_kind: codex
+      on_complete_state: "In Review"
+    "In Progress": # → claude safety-net check
+      agent_kind: claude
+      on_complete_state: "In Review"
+    "In Review":   # → claude auto-review, onComplete → "Ready for Human Review"
+      agent_kind: claude
+      on_complete_state: "Ready for Human Review"
+      max_review_attempts: 3
+    "Ready for Human Review":
+      agent_kind: human
+      on_complete_state: "Done"
 ```
 
-No new config keys. Existing `heartbeatTimeoutMs` (default 90s, from `AgentProjectConfig`) drives the zombie detection threshold.
+Key config: `heartbeatTimeoutMs` (default 90s from `AgentProjectConfig`) drives zombie detection.
 
 ### Order of Deployment
 
@@ -191,10 +225,14 @@ No new config keys. Existing `heartbeatTimeoutMs` (default 90s, from `AgentProje
 
 ## 11. Testing Strategy
 
-| Test | Coverage |
-|------|----------|
-| State machine validation | `IssueLifecycle.validate()` rejects illegal transitions (e.g., `Todo → Done`) |
-| Zombie detection reconcile | Create stale `RunningEntry` with old heartbeat, verify `reconcile()` resets to Todo |
-| Remote branch dispatch | Mock `remoteBranchExists` true/false, verify dispatch targets InReview vs InProgress |
-| Heartbeat update on RunningEntry | Simulate agent heartbeat, verify `lastHeartbeatAt` updates |
-| `remoteBranchExists` unit | Mock `git ls-remote` output, verify true/false for existing/missing branches |
+| Test | Coverage | Status |
+|------|----------|--------|
+| State machine validation | `IssueLifecycle.validate()` rejects illegal transitions (e.g., `Todo → Done`) | ✅ |
+| Zombie detection reconcile | Create stale `RunningEntry` with old heartbeat, verify `reconcile()` resets to Todo | ✅ |
+| Remote branch dispatch | Mock `remoteBranchExists` true/false, verify dispatch targets InReview vs InProgress | ✅ |
+| Heartbeat update on RunningEntry | Simulate agent heartbeat, verify `lastHeartbeatAt` updates | ✅ |
+| `remoteBranchExists` unit | Mock `git ls-remote` output, verify true/false for existing/missing branches | ✅ |
+| Auto-review verdict parsing | Verify ❌ FAIL → review_failed, ✅ PASS → review_passed | ✅ Verified e2e |
+| PR comment posting | Verify gh pr comment --body-file with correct repo/PR# | ✅ Verified e2e |
+| Demo recording pipeline | Verify Playwright → ffmpeg → R2 upload → 200 OK | ✅ Verified e2e (FLE-51) |
+| Target project deploy | Verify Docker build → container start → health check | ✅ Verified e2e (FLE-75) |
