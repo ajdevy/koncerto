@@ -68,6 +68,23 @@ class IssueTest {
         assertThat(ref.isBot).isEqualTo(false)
     }
 
+    @Test
+    fun `TokenUsage stores input output and total tokens`() {
+        val usage = TokenUsage(inputTokens = 100L, outputTokens = 40L, totalTokens = 140L)
+        assertThat(usage.inputTokens).isEqualTo(100L)
+        assertThat(usage.outputTokens).isEqualTo(40L)
+        assertThat(usage.totalTokens).isEqualTo(140L)
+    }
+
+    @Test
+    fun `TokenUsage equality compares all fields`() {
+        val a = TokenUsage(10L, 20L, 30L)
+        val b = TokenUsage(10L, 20L, 30L)
+        val c = TokenUsage(10L, 20L, 31L)
+        assertThat(a).isEqualTo(b)
+        assertThat(a == c).isEqualTo(false)
+    }
+
     private fun sampleIssue() = Issue(
         id = "1", identifier = "A-1", title = "t", description = "d",
         priority = 1, state = "Todo", branchName = null, url = null,

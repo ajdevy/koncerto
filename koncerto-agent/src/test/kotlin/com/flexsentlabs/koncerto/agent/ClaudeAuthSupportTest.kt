@@ -45,4 +45,23 @@ class ClaudeAuthSupportTest {
             }
         }
     }
+
+    @Test
+    fun `clearToken removes saved token file`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-clear-")
+        val tokenPath = dir.resolve("token.txt")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", tokenPath.toString())
+            ClaudeAuthSupport.saveToken("sk-ant-oat01-test-token")
+            ClaudeAuthSupport.clearToken()
+            assertThat(ClaudeAuthSupport.loadToken()).isNull()
+        } finally {
+            if (original == null) {
+                System.clearProperty("koncerto.claude.auth.token.path")
+            } else {
+                System.setProperty("koncerto.claude.auth.token.path", original)
+            }
+        }
+    }
 }

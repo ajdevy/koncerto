@@ -73,6 +73,12 @@ class DemoScenarioGenerator(
                 appendLine(systemPrompt)
                 appendLine()
             }
+            appendLine("## Demo Priorities")
+            appendLine("- Demonstrate the PR's created functionality, not generic project documentation or API explorers.")
+            appendLine("- If the PR includes a user-facing website, start from the main landing page or index page (`/` or `index.html`) and show the new UI there.")
+            appendLine("- Do not default to Swagger/OpenAPI/docs pages unless the PR specifically changes API docs or is only backend/API work with no user-facing website.")
+            appendLine("- If the PR touches multiple user-facing endpoints or features, cover the main ones in one coherent flow.")
+            appendLine()
             appendLine("## Issue")
             appendLine("${issue.title}: ${issue.description ?: ""}")
             appendLine()
@@ -86,7 +92,7 @@ class DemoScenarioGenerator(
                 appendLine(diff)
                 appendLine()
             }
-            append("Generate the demo_scenario YAML now.")
+            append("Generate the demo_scenario YAML now. The scenario must include scrolling and button pressing, with at least one scroll action and at least one button click.")
         }
     }
 
@@ -127,12 +133,12 @@ class DemoScenarioGenerator(
             try {
                 val pb = ProcessBuilder(command).directory(workDir).redirectErrorStream(true)
                 val process = pb.start()
-                val output = process.inputStream.bufferedReader().use { it.readText() }
                 val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
                 if (!completed) {
                     process.destroyForcibly()
                     return@ProcessRunner null
                 }
+                val output = process.inputStream.bufferedReader().use { it.readText() }
                 if (process.exitValue() != 0) null else output.takeIf { it.isNotBlank() }
             } catch (_: Exception) {
                 null

@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.app
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
@@ -96,5 +97,103 @@ class DemoRecordingTriggerTest {
         val content = """{"status":"done"}"""
         val match = Regex(""""issue_id":"([^"]+)"""").find(content)
         assertThat(match).isNull()
+    }
+
+    @Test
+    fun `resolveIssueId regex matches issue_id in review exhausted file content`() {
+        val content = """
+            {"issue_id":"issue-uuid-99","attempts":3}
+        """.trimIndent()
+        val match = Regex(""""issue_id":"([^"]+)"""").find(content)
+        assertThat(match).isNotNull()
+        assertThat(match!!.groupValues[1]).isEqualTo("issue-uuid-99")
+    }
+
+    @Test
+    fun `parseRepoFullName regex matches Beans git config pattern`() {
+        val gitConfig = "[remote \"origin\"]\n\turl = https://github.com/owner/repo.git\n"
+        val originIdx = gitConfig.indexOf("[remote \"origin\"]")
+        val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
+            .find(gitConfig, originIdx)
+        assertThat(match).isNotNull()
+        assertThat(match!!.groupValues[1]).isEqualTo("owner/repo")
+    }
+
+    @Test
+    fun `resolveRepoFullName reads github remote from git config`(@org.junit.jupiter.api.io.TempDir tmpDir: java.nio.file.Path) {
+        val gitDir = tmpDir.resolve(".git")
+        java.nio.file.Files.createDirectories(gitDir)
+        java.nio.file.Files.writeString(
+            gitDir.resolve("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:acme/widget.git\n"
+        )
+
+        val result = invokeResolveRepoFullName(tmpDir)
+
+        assertThat(result).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `resolveRepoFullName returns null when git config missing`(@org.junit.jupiter.api.io.TempDir tmpDir: java.nio.file.Path) {
+        assertThat(invokeResolveRepoFullName(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `resolveIssueId reads issue_id from review exhausted file`(@org.junit.jupiter.api.io.TempDir tmpDir: java.nio.file.Path) {
+        java.nio.file.Files.writeString(
+            tmpDir.resolve(".review-exhausted"),
+            """{"issue_id":"linear-uuid-42"}"""
+        )
+
+        val result = invokeResolveIssueId(tmpDir)
+
+        assertThat(result).isEqualTo("linear-uuid-42")
+    }
+
+    @Test
+    fun `resolveIssueId returns null when file missing`(@org.junit.jupiter.api.io.TempDir tmpDir: java.nio.file.Path) {
+        assertThat(invokeResolveIssueId(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `createDeployer returns configured deployer`() {
+        val method = DemoRecordingTrigger::class.java.getDeclaredMethod(
+            "createDeployer",
+            com.flexsentlabs.koncerto.logging.StructuredLogger::class.java
+        )
+        method.isAccessible = true
+        val deployer = method.invoke(
+            DemoRecordingTrigger,
+            com.flexsentlabs.koncerto.logging.StructuredLogger(emptyList())
+        )
+        assertThat(deployer).isNotNull()
+        assertThat(deployer!!::class.java).isEqualTo(
+            com.flexsentlabs.koncerto.deploy.TargetProjectDeployer::class.java
+        )
+    }
+
+    private fun invokeResolveRepoFullName(workspacePath: java.nio.file.Path): String? {
+        val method = DemoRecordingTrigger::class.java.getDeclaredMethod(
+            "resolveRepoFullName",
+            java.nio.file.Path::class.java,
+            com.flexsentlabs.koncerto.core.config.ServiceConfig::class.java
+        )
+        method.isAccessible = true
+        val config = ServiceConfig.fromMap(mapOf("poll_interval_ms" to 15000), ".")
+        return method.invoke(DemoRecordingTrigger, workspacePath, config) as String?
+    }
+
+    private fun invokeResolveIssueId(workspacePath: java.nio.file.Path): String? {
+        val method = DemoRecordingTrigger::class.java.getDeclaredMethod(
+            "resolveIssueId",
+            java.nio.file.Path::class.java,
+            com.flexsentlabs.koncerto.logging.StructuredLogger::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(
+            DemoRecordingTrigger,
+            workspacePath,
+            com.flexsentlabs.koncerto.logging.StructuredLogger(emptyList())
+        ) as String?
     }
 }

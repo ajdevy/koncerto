@@ -103,7 +103,11 @@ class DemoScenarioGeneratorTest {
         val prompt = generator().buildPrompt(issue, workspace)
         assertThat(prompt.contains("Add checkout button")).isEqualTo(true)
         assertThat(prompt.contains("Users need a checkout button")).isEqualTo(true)
+        assertThat(prompt.contains("main landing page or index page")).isEqualTo(true)
+        assertThat(prompt.contains("Do not default to Swagger/OpenAPI/docs pages")).isEqualTo(true)
         assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+        assertThat(prompt.contains("scrolling")).isEqualTo(true)
+        assertThat(prompt.contains("button pressing")).isEqualTo(true)
     }
 
     @Test
@@ -130,6 +134,9 @@ class DemoScenarioGeneratorTest {
         )
         val prompt = generator().buildPrompt(issue, workspace)
         assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+        assertThat(prompt.contains("main landing page or index page")).isEqualTo(true)
+        assertThat(prompt.contains("scrolling")).isEqualTo(true)
+        assertThat(prompt.contains("button pressing")).isEqualTo(true)
     }
 
     @Test
@@ -220,6 +227,40 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `buildPrompt includes git diff when repo has changes`(@TempDir tmpDir: Path) {
+        initGitRepoWithDiff(tmpDir, "feature change")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("## PR Changes")).isEqualTo(true)
+        assertThat(prompt.contains("feature change")).isEqualTo(true)
+    }
+
+    @Test
+    fun `generate writes scenario files by id and identifier`(@TempDir tmpDir: Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-save", identifier = "SAVE-1", title = "Save test", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val runner = DemoScenarioGenerator.ProcessRunner { _, _, _ -> validScenarioOutput }
+        val result = generatorWithRunner(runner).generate(issue, workspace)
+
+        assertThat(result).isEqualTo("/tmp/koncerto-demo/issue-save-scenario.yaml")
+        val uuidFile = File("/tmp/koncerto-demo/issue-save-scenario.yaml")
+        val identFile = File("/tmp/koncerto-demo/SAVE-1-scenario.yaml")
+        assertThat(uuidFile.exists()).isEqualTo(true)
+        assertThat(identFile.exists()).isEqualTo(true)
+        assertThat(uuidFile.readText()).isEqualTo(identFile.readText())
+        assertThat(uuidFile.readText().contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
     fun `generate returns null when output has no demo_scenario block`(@TempDir tmpDir: java.nio.file.Path) = runTest {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
@@ -232,5 +273,27 @@ class DemoScenarioGeneratorTest {
         val result = gen.generate(issue, workspace)
 
         assertThat(result).isNull()
+    }
+
+    private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {
+        runProcess(listOf("git", "init"), tmpDir)
+        runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
+        runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial content")
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "initial"), tmpDir)
+        runProcess(listOf("git", "checkout", "-b", "feature"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), changeContent)
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "feature"), tmpDir)
+    }
+
+    private fun runProcess(command: List<String>, workDir: Path) {
+        val process = ProcessBuilder(command)
+            .directory(workDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+        process.waitFor()
+        check(process.exitValue() == 0) { "Command failed: ${command.joinToString(" ")}" }
     }
 }

@@ -42,7 +42,7 @@ CMD ["sh", "-c", "${fw.runCmd ?: "npm start"}"]
 FROM python:3.12-slim
 WORKDIR /app
 COPY . .
-RUN ${fw.buildCmd ?: "pip install -e ."}
+RUN ${fw.buildCmd ?: "pip install --default-timeout 60 --retries 10 ."}
 EXPOSE ${fw.ports.first()}
 CMD ["sh", "-c", "${fw.runCmd ?: "python app.py"}"]
 """.trimIndent()

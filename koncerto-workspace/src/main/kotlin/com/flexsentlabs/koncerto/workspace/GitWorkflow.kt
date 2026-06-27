@@ -15,7 +15,7 @@ open class GitWorkflow(
 ) {
     fun branchName(identifier: String): String = "${config.branchPrefix}$identifier"
 
-    fun remoteBranchExists(branchName: String, workspacePath: Path): Boolean {
+    open fun remoteBranchExists(branchName: String, workspacePath: Path): Boolean {
         if (!config.enabled) return false
         val ref = runCmdSafe("git", workspacePath, "ls-remote", "--heads", "origin", branchName)
         return !ref.isNullOrBlank()

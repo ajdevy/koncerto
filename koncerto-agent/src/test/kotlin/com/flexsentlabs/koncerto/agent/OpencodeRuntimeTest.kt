@@ -2,16 +2,14 @@ package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
-import java.util.Collections
-import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.cancel
 import org.junit.jupiter.api.Test
 
 class OpencodeRuntimeTest {
@@ -20,32 +18,17 @@ class OpencodeRuntimeTest {
         override fun write(line: String) {}
     }))
 
-    private fun collectEvents(runtime: OpencodeRuntime, timeoutMs: Long = 5_000): List<AgentEvent> {
-        val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
-        val collector = thread(start = true, isDaemon = true, name = "opencode-events") {
-            runBlocking {
-                runtime.events().collect { ev ->
-                    collected += ev
-                    cancel()
-                }
-            }
-        }
-        collector.join(timeoutMs)
-        if (collector.isAlive) collector.interrupt()
-        return collected.toList()
-    }
-
     @Test
     fun `client spawns and receives stdout as events`() {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { assertThat(runtime.start()).isEqualTo(true) }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            assertThat(runtime.start()).isEqualTo(true)
+        }
         runtime.stop()
         assertThat(collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()).isNotNull()
     }
@@ -55,12 +38,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -74,12 +57,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/failed","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -91,12 +74,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/cancelled","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCancelled>().firstOrNull()
         assertThat(event).isNotNull()
@@ -108,12 +91,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/input_required","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         assertThat(collected.filterIsInstance<AgentEvent.TurnInputRequired>().firstOrNull()).isNotNull()
     }
@@ -123,12 +106,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"approval/auto_approved","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         assertThat(collected.filterIsInstance<AgentEvent.ApprovalAutoApproved>().firstOrNull()).isNotNull()
     }
@@ -138,12 +121,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"unsupported_tool_call","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         assertThat(collected.filterIsInstance<AgentEvent.UnsupportedToolCall>().firstOrNull()).isNotNull()
     }
@@ -153,12 +136,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"custom/unknown_event","params":{"foo":"bar"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.Notification>().firstOrNull()
         assertThat(event).isNotNull()
@@ -170,12 +153,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"session/started","thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -187,12 +170,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/completed","thread_id":"t1","turn_id":"u1","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -205,12 +188,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/failed","thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -221,12 +204,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"custom/result","data":"x"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.OtherMessage>().firstOrNull()
         assertThat(event).isNotNull()
@@ -237,12 +220,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             echo 'this is not valid json {{{'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.Malformed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -253,10 +236,9 @@ class OpencodeRuntimeTest {
     fun `startup failure emits StartupFailed event`() {
         val ws = java.nio.file.Path.of("/nonexistent/path/that/does/not/exist")
         val runtime = OpencodeRuntime("echo hello", ws, noopLogger())
-        val started = runBlocking { runtime.start() }
-        assertThat(started).isEqualTo(false)
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            assertThat(runtime.start()).isEqualTo(false)
+        }
         runtime.stop()
         assertThat(collected.filterIsInstance<AgentEvent.StartupFailed>().firstOrNull()).isNotNull()
     }
@@ -271,8 +253,7 @@ class OpencodeRuntimeTest {
         val runtime = OpencodeRuntime(script, ws, noopLogger())
         runBlocking { runtime.start() }
         runtime.stop()
-        val collected = collectEvents(runtime, timeoutMs = 2_000)
-        assertThat(collected).isNotNull()
+        assertThat(runtime.isAlive()).isFalse()
     }
 
     @Test
@@ -280,12 +261,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":30,"output_tokens":20}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -298,12 +279,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":"abc","output_tokens":"def"}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -317,12 +298,12 @@ class OpencodeRuntimeTest {
         val ws = Files.createTempDirectory("opencode-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         val event = collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -351,12 +332,12 @@ class OpencodeRuntimeTest {
             echo ''
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo ''
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
-
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
         assertThat(collected.size).isEqualTo(1)
         assertThat(collected[0] is AgentEvent.SessionStarted).isEqualTo(true)

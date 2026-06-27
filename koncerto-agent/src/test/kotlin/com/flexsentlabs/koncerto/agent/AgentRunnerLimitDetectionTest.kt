@@ -20,12 +20,9 @@ import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 
 class AgentRunnerLimitDetectionTest {
 
@@ -44,24 +41,17 @@ class AgentRunnerLimitDetectionTest {
             errorClassifier = PatternErrorClassifier(),
             heartbeatIntervalMs = 100
         )
-        val latch = CountDownLatch(1)
-        var captured: AgentEvent.LimitDetected? = null
-        val collectorJob = launch {
-            runner.events().collect { event ->
-                if (event is AgentEvent.LimitDetected) {
-                    captured = event
-                    latch.countDown()
-                }
-            }
+        val events = AgentRuntimeTestSupport.collectRunnerEventsDuring(
+            runner,
+            until = { collected -> collected.any { it is AgentEvent.LimitDetected } },
+        ) {
+            runner.run(
+                sampleIssue(), attempt = 1, prompt = "Fix it",
+                agentKindOverride = "opencode", commandOverride = script,
+                turnTimeoutMs = 50_000, stallTimeoutMs = 50_000
+            )
         }
-        val issue = sampleIssue()
-        runner.run(
-            issue, attempt = 1, prompt = "Fix it",
-            agentKindOverride = "opencode", commandOverride = script,
-            turnTimeoutMs = 50000, stallTimeoutMs = 50000
-        )
-        collectorJob.cancel()
-        assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue()
+        val captured = events.filterIsInstance<AgentEvent.LimitDetected>().firstOrNull()
         assertThat(captured).isNotNull()
         assertThat(captured!!.agentError.type is AgentErrorType.RateLimitError).isTrue()
     }
@@ -81,24 +71,17 @@ class AgentRunnerLimitDetectionTest {
             errorClassifier = PatternErrorClassifier(),
             heartbeatIntervalMs = 100
         )
-        val latch = CountDownLatch(1)
-        var captured: AgentEvent.LimitDetected? = null
-        val collectorJob = launch {
-            runner.events().collect { event ->
-                if (event is AgentEvent.LimitDetected) {
-                    captured = event
-                    latch.countDown()
-                }
-            }
+        val events = AgentRuntimeTestSupport.collectRunnerEventsDuring(
+            runner,
+            until = { collected -> collected.any { it is AgentEvent.LimitDetected } },
+        ) {
+            runner.run(
+                sampleIssue(), attempt = 1, prompt = "Fix it",
+                agentKindOverride = "opencode", commandOverride = script,
+                turnTimeoutMs = 50_000, stallTimeoutMs = 50_000
+            )
         }
-        val issue = sampleIssue()
-        runner.run(
-            issue, attempt = 1, prompt = "Fix it",
-            agentKindOverride = "opencode", commandOverride = script,
-            turnTimeoutMs = 50000, stallTimeoutMs = 50000
-        )
-        collectorJob.cancel()
-        assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue()
+        val captured = events.filterIsInstance<AgentEvent.LimitDetected>().firstOrNull()
         assertThat(captured).isNotNull()
         assertThat(captured!!.agentError.type is AgentErrorType.AuthError).isTrue()
     }
@@ -117,26 +100,18 @@ class AgentRunnerLimitDetectionTest {
             config, mgr, noopLogger(),
             errorClassifier = PatternErrorClassifier()
         )
-        val latch = CountDownLatch(1)
-        val limitEvents = mutableListOf<AgentEvent.LimitDetected>()
-        val collectorJob = launch {
-            runner.events().collect { event ->
-                if (event is AgentEvent.LimitDetected) {
-                    limitEvents.add(event)
-                    latch.countDown()
-                }
-            }
+        val events = AgentRuntimeTestSupport.collectRunnerEventsDuring(
+            runner,
+            timeoutMs = 3_000,
+            until = { true },
+        ) {
+            runner.run(
+                sampleIssue(), attempt = 1, prompt = "Fix it",
+                agentKindOverride = "opencode", commandOverride = script,
+                turnTimeoutMs = 50_000, stallTimeoutMs = 50_000
+            )
         }
-        val issue = sampleIssue()
-        runner.run(
-            issue, attempt = 1, prompt = "Fix it",
-            agentKindOverride = "opencode", commandOverride = script,
-            turnTimeoutMs = 50000, stallTimeoutMs = 50000
-        )
-        collectorJob.cancel()
-        val triggered = latch.await(3, TimeUnit.SECONDS)
-        assertThat(triggered).isFalse()
-        assertThat(limitEvents).isEmpty()
+        assertThat(events.filterIsInstance<AgentEvent.LimitDetected>()).isEmpty()
     }
 
     @Test
@@ -145,31 +120,37 @@ class AgentRunnerLimitDetectionTest {
         Files.createDirectories(root.resolve("ABC-1"))
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig(command = "false", agentKind = "opencode")
+        val classifier = PatternErrorClassifier(
+            PatternErrorClassifier.DEFAULT_PATTERNS + PatternErrorClassifier.ClassificationPattern(
+                regex = Regex("agent_process_died"),
+                build = { _, msg -> AgentErrorType.TransientError(details = msg) },
+            )
+        )
         val runner = DefaultAgentRunner(
             config, mgr, noopLogger(),
-            errorClassifier = PatternErrorClassifier(),
+            errorClassifier = classifier,
             maxRetries = 1,
             retryDelayMs = 100,
             heartbeatIntervalMs = 100
         )
-        val latch = CountDownLatch(1)
-        var captured: AgentEvent.LimitDetected? = null
-        val collectorJob = launch {
-            runner.events().collect { event ->
-                if (event is AgentEvent.LimitDetected) {
-                    captured = event
-                    latch.countDown()
-                }
+        val events = AgentRuntimeTestSupport.collectRunnerEventsDuring(
+            runner,
+            timeoutMs = 5_000,
+            until = { collected -> collected.any { it is AgentEvent.LimitDetected } },
+        ) {
+            try {
+                runner.run(
+                    sampleIssue(), attempt = null, prompt = "Hi",
+                    agentKindOverride = "opencode", commandOverride = "false",
+                    turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
+                )
+            } catch (_: Exception) {
+                // Expected when the stub agent exits immediately.
             }
         }
-        val issue = sampleIssue()
-        runner.run(
-            issue, attempt = null, prompt = "Hi",
-            agentKindOverride = "opencode", commandOverride = "false",
-            turnTimeoutMs = 5000, stallTimeoutMs = 5000
-        )
-        collectorJob.cancel()
-        latch.await(3, TimeUnit.SECONDS)
+        val captured = events.filterIsInstance<AgentEvent.LimitDetected>().firstOrNull()
+        assertThat(captured).isNotNull()
+        assertThat(captured!!.agentError.type is AgentErrorType.TransientError).isTrue()
     }
 
     @Test
@@ -178,7 +159,7 @@ class AgentRunnerLimitDetectionTest {
         Files.createDirectories(root.resolve("ABC-1"))
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig(command = "false", agentKind = "opencode")
-        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60000)
+        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60_000)
         val alwaysRateLimit = PatternErrorClassifier(
             listOf(PatternErrorClassifier.ClassificationPattern(
                 regex = Regex(".*"),
@@ -196,12 +177,12 @@ class AgentRunnerLimitDetectionTest {
         runner.run(
             issue, attempt = null, prompt = "Hi",
             agentKindOverride = "opencode", commandOverride = "false",
-            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+            turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
         )
         runner.run(
             issue, attempt = null, prompt = "Hi",
             agentKindOverride = "opencode", commandOverride = "false",
-            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+            turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
         )
         assertThat(cb.allowRequest("opencode:false:default")).isTrue()
     }
@@ -212,7 +193,7 @@ class AgentRunnerLimitDetectionTest {
         Files.createDirectories(root.resolve("ABC-1"))
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig(command = "false", agentKind = "opencode")
-        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60000)
+        val cb = AgentCircuitBreaker(failureThreshold = 2, resetTimeoutMs = 60_000)
         val runner = DefaultAgentRunner(
             config, mgr, noopLogger(),
             circuitBreaker = cb,
@@ -223,12 +204,12 @@ class AgentRunnerLimitDetectionTest {
         runner.run(
             issue, attempt = null, prompt = "Hi",
             agentKindOverride = "opencode", commandOverride = "false",
-            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+            turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
         )
         runner.run(
             issue, attempt = null, prompt = "Hi",
             agentKindOverride = "opencode", commandOverride = "false",
-            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+            turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
         )
         assertThat(cb.allowRequest("opencode:false:default")).isFalse()
     }
@@ -253,16 +234,16 @@ class AgentRunnerLimitDetectionTest {
                 workspace = WorkspaceConfig(root = "/tmp"),
                 agent = AgentProjectConfig(
                     kind = agentKind, command = command,
-                    maxConcurrentAgents = 1, maxTurns = 1, maxRetryBackoffMs = 300000,
+                    maxConcurrentAgents = 1, maxTurns = 1, maxRetryBackoffMs = 300_000,
                     maxConcurrentAgentsByState = emptyMap(),
-                    turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                    turnTimeoutMs = 3_600_000, readTimeoutMs = 5_000, stallTimeoutMs = 300_000,
                     stages = emptyMap()
                 )
             )
             return ServiceConfig(
-                pollIntervalMs = 30000,
+                pollIntervalMs = 30_000,
                 projects = mapOf("default" to projectConfig),
-                hooks = HooksConfig(null, null, null, null, 60000),
+                hooks = HooksConfig(null, null, null, null, 60_000),
                 gitConfig = GitConfig()
             )
         }

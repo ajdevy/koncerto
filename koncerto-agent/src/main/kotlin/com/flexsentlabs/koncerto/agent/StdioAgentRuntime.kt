@@ -38,7 +38,7 @@ abstract class StdioAgentRuntime(
     private var writer: BufferedWriter? = null
     private var readerJob: Job? = null
     private val events = Channel<AgentEvent>(Channel.BUFFERED)
-    private val _output = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    private val _output = MutableSharedFlow<String>(replay = 32, extraBufferCapacity = 64)
     override val output: SharedFlow<String> = _output.asSharedFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile

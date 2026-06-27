@@ -9,12 +9,18 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class AsciinemaRecorder : DemoRecorder {
+internal typealias ProcessStarter = (List<String>, Boolean) -> Process
+
+class AsciinemaRecorder(
+    private val processStarter: ProcessStarter = { cmd, redirect ->
+        ProcessBuilder(cmd).apply { if (redirect) redirectErrorStream(true) }.start()
+    }
+) : DemoRecorder {
     override val platform: DemoPlatform = DemoPlatform.ASCIINEMA
 
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val process = ProcessBuilder("which", "asciinema").start()
+            val process = processStarter(listOf("which", "asciinema"), false)
             process.waitFor(5, TimeUnit.SECONDS) && process.exitValue() == 0
         } catch (_: Exception) {
             false
@@ -30,14 +36,15 @@ class AsciinemaRecorder : DemoRecorder {
 
                 val startTime = System.currentTimeMillis()
 
-                val process = ProcessBuilder(
-                    "asciinema", "rec",
-                    "--overwrite",
-                    "--title", "Koncerto demo recording",
-                    outputFile.absolutePath
+                val process = processStarter(
+                    listOf(
+                        "asciinema", "rec",
+                        "--overwrite",
+                        "--title", "Koncerto demo recording",
+                        outputFile.absolutePath
+                    ),
+                    true
                 )
-                    .redirectErrorStream(true)
-                    .start()
 
                 val completed = process.waitFor(config.maxDurationSeconds.toLong(), TimeUnit.SECONDS)
                 if (!completed) {

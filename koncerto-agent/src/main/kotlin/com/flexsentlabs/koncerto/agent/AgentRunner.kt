@@ -342,10 +342,13 @@ class DefaultAgentRunner(
 
                     turnDone.await()
                     eventWatcher.cancel()
-                    runtime.stop()
+                    if (errorClassifier != null) {
+                        delay(250)
+                    }
                     outputJob.cancel()
                     stallJob.cancel()
                     aliveJob.cancel()
+                    runtime.stop()
                 }
             }
         } catch (e: Exception) {

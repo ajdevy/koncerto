@@ -2,6 +2,8 @@ package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.containsExactly
+import assertk.assertions.containsExactlyInAnyOrder
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
@@ -9,6 +11,7 @@ import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.core.model.Issue
 import java.time.Instant
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
@@ -231,6 +234,127 @@ class RuntimeStateTest {
         val entry = runningEntry("1", "A-1")
         assertThat(entry.paused).isFalse()
         assertThat(entry.cancelled).isFalse()
+    }
+
+    @Test
+    fun `updateIssueTokens accumulates per issue and global totals`() {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1")
+        val updated = s.updateIssueTokens("a", 10, 5, 15)
+        assertThat(updated).isTrue()
+        assertThat(s.running["a"]?.inputTokens).isEqualTo(10)
+        assertThat(s.running["a"]?.outputTokens).isEqualTo(5)
+        assertThat(s.running["a"]?.totalTokens).isEqualTo(15)
+        assertThat(s.running["a"]?.turnCount).isEqualTo(2)
+        assertThat(s.tokenTotals.inputTokens).isEqualTo(10)
+        assertThat(s.tokenTotals.outputTokens).isEqualTo(5)
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(15)
+    }
+
+    @Test
+    fun `updateIssueTokens returns false for unknown issue`() {
+        val s = RuntimeState()
+        assertThat(s.updateIssueTokens("missing", 10, 5, 15)).isFalse()
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(0)
+    }
+
+    @Test
+    fun `addTokenTotals accumulates across multiple calls`() {
+        val s = RuntimeState()
+        s.addTokenTotals(100, 50, 150)
+        s.addTokenTotals(20, 10, 30)
+        assertThat(s.tokenTotals.inputTokens).isEqualTo(120)
+        assertThat(s.tokenTotals.outputTokens).isEqualTo(60)
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(180)
+    }
+
+    @Test
+    fun `updateCodexRateLimits replaces previous limits`() {
+        val s = RuntimeState()
+        s.updateCodexRateLimits(mapOf("requests" to 100, "tokens" to 5000))
+        assertThat(s.codexRateLimits["requests"]).isEqualTo(100)
+        s.updateCodexRateLimits(mapOf("requests" to 50))
+        assertThat(s.codexRateLimits).isEqualTo(mapOf("requests" to 50))
+        assertThat(s.codexRateLimits.containsKey("tokens")).isFalse()
+    }
+
+    @Test
+    fun `tryClaim and releaseClaim manage claimed set`() {
+        val s = RuntimeState()
+        assertThat(s.tryClaim("a")).isTrue()
+        assertThat(s.isClaimed("a")).isTrue()
+        assertThat(s.tryClaim("a")).isFalse()
+        s.releaseClaim("a")
+        assertThat(s.isClaimed("a")).isFalse()
+        assertThat(s.tryClaim("a")).isTrue()
+    }
+
+    @Test
+    fun `blocked keys tracks add remove and cache`() {
+        val s = RuntimeState()
+        assertThat(s.addBlocked("a")).isTrue()
+        assertThat(s.addBlocked("a")).isFalse()
+        assertThat(s.isBlocked("a")).isTrue()
+        assertThat(s.blockedKeys.toList()).containsExactly("a")
+        s.addBlocked("b")
+        assertThat(s.blockedKeys.toList()).containsExactlyInAnyOrder("a", "b")
+        assertThat(s.removeBlocked("a")).isTrue()
+        assertThat(s.removeBlocked("a")).isFalse()
+        assertThat(s.blockedKeys.toList()).containsExactly("b")
+    }
+
+    @Test
+    fun `reviewAttempts stores attempt counts`() {
+        val s = RuntimeState()
+        s.reviewAttempts["a"] = 1
+        s.reviewAttempts["b"] = 2
+        assertThat(s.reviewAttempts["a"]).isEqualTo(1)
+        assertThat(s.reviewAttempts["b"]).isEqualTo(2)
+    }
+
+    @Test
+    fun `clearAll resets all runtime state`() = runTest {
+        val s = RuntimeState()
+        s.running["a"] = runningEntry("a", "A-1")
+        s.claimed["a"] = true
+        s.retryAttempts["a"] = RetryEntry("a", "A-1", 1, 0, "err")
+        s.reviewAttempts["a"] = 2
+        s.completed["a"] = true
+        s.addBlocked("a")
+        s.addTokenTotals(10, 5, 15)
+        s.updateCodexRateLimits(mapOf("requests" to 100))
+        s.appendOutput("a", "line")
+        s.clearAll()
+        assertThat(s.running).isEmpty()
+        assertThat(s.claimed).isEmpty()
+        assertThat(s.retryAttempts).isEmpty()
+        assertThat(s.reviewAttempts).isEmpty()
+        assertThat(s.completed).isEmpty()
+        assertThat(s.blockedKeys.toList()).isEmpty()
+        assertThat(s.tokenTotals.totalTokens).isEqualTo(0)
+        assertThat(s.codexRateLimits).isEmpty()
+        assertThat(s.outputFlow("a")).isNull()
+    }
+
+    @Test
+    fun `appendOutput emits to output flow`() = runTest {
+        val s = RuntimeState()
+        s.appendOutput("a", "hello")
+        val flow = s.outputFlow("a")
+        assertThat(flow).isNotNull()
+        assertThat(flow!!.first()).isEqualTo("hello")
+    }
+
+    @Test
+    fun `appendOutput evicts oldest buffer when at capacity`() = runTest {
+        val s = RuntimeState()
+        repeat(1000) { i ->
+            s.appendOutput("issue-$i", "line-$i")
+        }
+        s.appendOutput("issue-new", "line-new")
+        assertThat(s.outputFlow("issue-new")).isNotNull()
+        val evictedCount = (0 until 1000).count { s.outputFlow("issue-$it") == null }
+        assertThat(evictedCount).isEqualTo(1)
     }
 
     private fun runningEntry(id: String, identifier: String) = RunningEntry(

@@ -7,6 +7,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isEmpty
 import assertk.assertions.isFalse
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.config.HooksConfig
@@ -316,6 +317,52 @@ class AdminControllerTest {
         assertThat(detail.notifications.onCompleted).isFalse()
         assertThat(detail.notifications.onFailed).isFalse()
         assertThat(detail.notifications.onStalled).isFalse()
+    }
+
+    @Test
+    fun `getProjectDetail returns 401 with wrong key`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = registry)
+        val response = controller.getProjectDetail("project-alpha", "wrong-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(401)
+    }
+
+    @Test
+    fun `getProjectDetail falls back to config when registry is null`() {
+        val config = createConfig()
+        val controller = AdminController(config, projectRegistry = null)
+        val response = controller.getProjectDetail("project-alpha", "test-admin-key").block()
+
+        assertThat(response!!.statusCodeValue).isEqualTo(200)
+        assertThat(response.body!!.slug).isEqualTo("project-alpha")
+        assertThat(response.body!!.tracker.projectSlug).isEqualTo("alpha")
+    }
+
+    @Test
+    fun `listProjects works with null metrics repository`() {
+        val config = createConfig()
+        val controller = AdminController(config, metricsRepository = null, projectRegistry = registry)
+        val response = runBlocking { controller.listProjects("test-admin-key") }
+
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(response.body!!).hasSize(2)
+        assertThat(response.body!!.all { it.activeCount == 0 }).isTrue()
+    }
+
+    @Test
+    fun `listQuotas groups metrics with null projectSlug as unknown`() {
+        val metrics = listOf(
+            IssueMetrics("1", "ABC-1", null, 5, 100, 50, 150, "SUCCESS", "2024-01-01", "2024-01-01", "2024-01-10")
+        )
+        val config = createConfig()
+        val controller = AdminController(config, FakeMetricsRepository(metrics), registry)
+        val response = runBlocking { controller.listQuotas("test-admin-key") }
+
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(response.body!!).hasSize(1)
+        assertThat(response.body!![0].projectSlug).isEqualTo("unknown")
+        assertThat(response.body!![0].totalTokens).isEqualTo(150)
     }
 
     @Test

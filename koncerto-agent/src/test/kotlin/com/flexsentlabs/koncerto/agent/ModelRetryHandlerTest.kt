@@ -21,6 +21,7 @@ import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
 import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.verify
 import io.mockk.confirmVerified
@@ -143,5 +144,83 @@ class ModelRetryHandlerTest {
         }
 
         assertThat(result is Result.Failure).isTrue()
+    }
+
+    @Test
+    fun `handleExhaustion blocks issue in linear and sends notification`() = runTest {
+        val root = Files.createTempDirectory("model-retry-linear-")
+        val config = sampleConfig().projects["default"]!!.copy(
+            workspace = WorkspaceConfig(root = root.toString()),
+            tracker = sampleConfig().projects["default"]!!.tracker.copy(blockedState = "Blocked"),
+        )
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>(relaxed = true)
+        coEvery { linearClient.resolveStateId("p", "Blocked") } returns "blocked-state-id"
+        coEvery { linearClient.updateIssueState("issue-1", "blocked-state-id") } returns Unit
+        coEvery { linearClient.fetchIssueById("issue-1") } returns Issue(
+            id = "issue-1",
+            identifier = "FLE-1",
+            title = "Test issue",
+            description = null,
+            priority = null,
+            state = "Todo",
+            branchName = null,
+            url = null,
+            labels = emptyList(),
+            blockedBy = emptyList(),
+            createdAt = Instant.now(),
+            updatedAt = Instant.now(),
+        )
+        coEvery { notifier.send(any()) } returns Unit
+
+        val handler = ModelRetryHandler(cycler, config, linearClient, notifier, noopLogger())
+
+        val result = handler.executeWithRetry("issue-1") { _ ->
+            Result.Failure(Exception("model failed"))
+        }
+
+        assertThat(result is Result.Failure).isTrue()
+        coVerify { linearClient.updateIssueState("issue-1", "blocked-state-id") }
+        coVerify { notifier.send(match { it is NotificationEvent.AgentFailed }) }
+    }
+
+    @Test
+    fun `handleExhaustion continues when blocked state is missing`() = runTest {
+        val root = Files.createTempDirectory("model-retry-no-state-")
+        val config = sampleConfig().projects["default"]!!.copy(
+            workspace = WorkspaceConfig(root = root.toString()),
+        )
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>(relaxed = true)
+        coEvery { linearClient.resolveStateId(any(), any()) } returns null
+        coEvery { linearClient.fetchIssueById(any()) } returns null
+
+        val handler = ModelRetryHandler(cycler, config, linearClient, notifier, noopLogger())
+
+        val result = handler.executeWithRetry("issue-1") { _ ->
+            Result.Failure(Exception("model failed"))
+        }
+
+        assertThat(result is Result.Failure).isTrue()
+        coVerify(exactly = 0) { linearClient.updateIssueState(any(), any()) }
+    }
+
+    @Test
+    fun `executeWithRetry applies backoff before retrying same model`() = runTest {
+        val cycler = FreeModelCycler(listOf("model-a"), 3, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>()
+        val handler = ModelRetryHandler(cycler, sampleConfig().projects["default"]!!, linearClient, notifier, noopLogger())
+
+        var attempts = 0
+        val result = handler.executeWithRetry("issue-1") { _ ->
+            attempts++
+            Result.Failure(Exception("transient"))
+        }
+
+        assertThat(result is Result.Failure).isTrue()
+        assertThat(attempts).isEqualTo(3)
     }
 }

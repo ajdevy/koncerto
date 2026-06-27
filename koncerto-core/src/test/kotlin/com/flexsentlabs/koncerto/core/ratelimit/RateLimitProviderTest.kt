@@ -3,12 +3,18 @@ package com.flexsentlabs.koncerto.core.ratelimit
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isGreaterThan
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.core.config.RateLimitConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
+import java.util.concurrent.TimeUnit
 
 class RateLimitProviderTest {
 
@@ -94,5 +100,57 @@ class RateLimitProviderTest {
         val config = RateLimitConfig(requestsPerMinute = 100, requestsPerHour = 0, burstCapacity = 5)
         val provider = RateLimitProvider(config, scope)
         assertThat(provider.acquire()).isFalse()
+    }
+
+    @Test
+    fun `tokens refill after elapsed time`() = runBlocking {
+        val config = RateLimitConfig(requestsPerMinute = 60, requestsPerHour = 1000, burstCapacity = 10)
+        val provider = RateLimitProvider(config, scope)
+        repeat(10) { provider.acquire() }
+        assertThat(provider.availableTokens.value).isEqualTo(0.0)
+        delay(1100)
+        provider.acquire()
+        assertThat(provider.availableTokens.value).isGreaterThan(0.0)
+    }
+
+    @Test
+    fun `waitForAvailability returns true when acquire succeeds immediately`() = runBlocking {
+        val config = RateLimitConfig(requestsPerMinute = 100, requestsPerHour = 1000, burstCapacity = 10, backoffMs = 10)
+        val provider = RateLimitProvider(config, scope)
+        assertThat(provider.waitForAvailability()).isTrue()
+    }
+
+    @Test
+    @Timeout(value = 90, unit = TimeUnit.SECONDS)
+    fun `waitForAvailability waits until minute window slides`() = runBlocking {
+        val config = RateLimitConfig(requestsPerMinute = 1, requestsPerHour = 1000, burstCapacity = 10, backoffMs = 50)
+        val provider = RateLimitProvider(config, scope)
+        assertThat(provider.acquire()).isTrue()
+        assertThat(provider.acquire()).isFalse()
+
+        val result = async { provider.waitForAvailability() }
+        delay(61_000)
+        assertThat(result.await()).isTrue()
+    }
+
+    @Test
+    fun `registry getOrCreate returns same instance for same key`() {
+        val config = RateLimitConfig(requestsPerMinute = 10, requestsPerHour = 100)
+        val provider1 = RateLimitRegistry.getOrCreate("registry-same-key", config, scope)
+        val provider2 = RateLimitRegistry.getOrCreate("registry-same-key", config, scope)
+        assertThat(provider1).isEqualTo(provider2)
+    }
+
+    @Test
+    fun `registry get returns null for unknown key`() {
+        assertThat(RateLimitRegistry.get("registry-unknown-key-${System.nanoTime()}")).isNull()
+    }
+
+    @Test
+    fun `registry getAll includes registered providers`() {
+        val key = "registry-getall-key-${System.nanoTime()}"
+        val config = RateLimitConfig(requestsPerMinute = 5, requestsPerHour = 50)
+        val provider = RateLimitRegistry.getOrCreate(key, config, scope)
+        assertThat(RateLimitRegistry.getAll()[key]).isEqualTo(provider)
     }
 }

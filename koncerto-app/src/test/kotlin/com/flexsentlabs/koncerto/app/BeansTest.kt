@@ -2,7 +2,9 @@ package com.flexsentlabs.koncerto.app
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.agent.AgentHealthEndpoint
 import com.flexsentlabs.koncerto.agent.AgentRuntimeFactory
@@ -12,17 +14,31 @@ import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.core.CircuitBreaker
 import com.flexsentlabs.koncerto.core.agent.AgentCircuitBreaker
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
+import com.flexsentlabs.koncerto.core.config.CircuitBreakerConfig
+import com.flexsentlabs.koncerto.core.config.DemoRecordingConfig
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.config.HooksConfig
 import com.flexsentlabs.koncerto.core.config.NotificationsConfig
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
+import com.flexsentlabs.koncerto.core.config.RateLimitConfig
+import com.flexsentlabs.koncerto.core.config.RateLimiterConfig
+import com.flexsentlabs.koncerto.core.config.RateLimitsConfig
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
+import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
 import com.flexsentlabs.koncerto.core.errors.DefaultErrorTracker
 import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
 import com.flexsentlabs.koncerto.core.ratelimit.DefaultRateLimitMonitor
+import com.flexsentlabs.koncerto.demo.config.DemoConfig
+import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
+import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
+import com.flexsentlabs.koncerto.demo.recorder.PlaywrightRecorder
+import com.flexsentlabs.koncerto.demo.recorder.XcrunRecorder
+import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.linear.LinearClient
+import com.flexsentlabs.koncerto.linear.RateLimitedLinearClient
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.logging.audit.FileAuditLogger
@@ -558,5 +574,459 @@ class BeansTest {
             demoEventListener = null
         )
         assertThat(orchestrator).isNotNull()
+    }
+
+    @Test
+    fun `logger creates instance with blank logsRoot`() {
+        assertThat(beans.logger("")).isNotNull()
+    }
+
+    @Test
+    fun `linearClientFactory with rate limiter returns RateLimitedLinearClient`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val factory = beans.linearClientFactory(logger, scope)
+        val client = factory(
+            ProjectConfig(
+                tracker = TrackerConfig("linear", "x", "k", "p"),
+                workspace = WorkspaceConfig("/tmp"),
+                agent = AgentProjectConfig(kind = "opencode"),
+                rateLimiter = RateLimiterConfig(requestsPerSecond = 5, maxBurst = 10),
+                circuitBreaker = CircuitBreakerConfig(failureThreshold = 3, resetTimeoutMs = 5_000)
+            )
+        )
+        assertThat(client).isInstanceOf(RateLimitedLinearClient::class)
+    }
+
+    @Test
+    fun `linearClientFactory with rateLimits linear config`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val factory = beans.linearClientFactory(logger, scope)
+        val client = factory(
+            ProjectConfig(
+                tracker = TrackerConfig("linear", "x", "k", "p"),
+                workspace = WorkspaceConfig("/tmp"),
+                agent = AgentProjectConfig(kind = "opencode"),
+                rateLimits = RateLimitsConfig(
+                    linear = RateLimitConfig(
+                        requestsPerMinute = 60,
+                        requestsPerHour = 1000,
+                        burstCapacity = 20,
+                        backoffMs = 1000
+                    )
+                )
+            )
+        )
+        assertThat(client).isNotNull()
+    }
+
+    @Test
+    fun `linearClientFactory creates client even with empty project slug`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val factory = beans.linearClientFactory(logger, scope)
+        val client = factory(
+            ProjectConfig(
+                tracker = TrackerConfig("linear", "x", "k", ""),
+                workspace = WorkspaceConfig("/tmp"),
+                agent = AgentProjectConfig(kind = "opencode")
+            )
+        )
+        assertThat(client).isNotNull()
+    }
+
+    @Test
+    fun `workspaceManager throws when no projects`() {
+        val executor = ShellHookExecutor(60_000, logger)
+        assertThrows<IllegalStateException> {
+            beans.workspaceManager(ServiceConfig(), executor)
+        }
+    }
+
+    @Test
+    fun `compositeNotifier with webhook only`() {
+        val config = ServiceConfig(
+            projects = mapOf(
+                "test" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(kind = "opencode"),
+                    notifications = NotificationsConfig(
+                        onCompleted = true,
+                        webhook = com.flexsentlabs.koncerto.core.config.WebhookConfig(
+                            url = "https://hook.example.com",
+                            headers = mapOf("Authorization" to "Bearer token")
+                        )
+                    )
+                )
+            )
+        )
+        assertThat(beans.compositeNotifier(config, LoggingNotifier(logger))).isNotNull()
+    }
+
+    @Test
+    fun `compositeNotifier with telegram only`() {
+        val config = ServiceConfig(
+            projects = mapOf(
+                "test" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(kind = "opencode"),
+                    notifications = NotificationsConfig(
+                        onCompleted = true,
+                        telegram = com.flexsentlabs.koncerto.core.config.TelegramConfig(
+                            botToken = "bot:123",
+                            chatId = "-456"
+                        )
+                    )
+                )
+            )
+        )
+        assertThat(beans.compositeNotifier(config, LoggingNotifier(logger))).isNotNull()
+    }
+
+    @Test
+    fun `compositeNotifier with email only`() {
+        val config = ServiceConfig(
+            projects = mapOf(
+                "test" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(kind = "opencode"),
+                    notifications = NotificationsConfig(
+                        onCompleted = true,
+                        email = com.flexsentlabs.koncerto.core.config.EmailConfig(
+                            smtpHost = "smtp.example.com",
+                            smtpPort = 465,
+                            username = "user",
+                            password = "pass",
+                            from = "from@example.com",
+                            to = "to@example.com"
+                        )
+                    )
+                )
+            )
+        )
+        assertThat(beans.compositeNotifier(config, LoggingNotifier(logger))).isNotNull()
+    }
+
+    @Test
+    fun `serviceConfig logs deprecation warnings`() {
+        val workflowFile = Files.createTempFile("workflow-deprecation", ".md")
+        try {
+            Files.writeString(
+                workflowFile,
+                """
+                |---
+                |polling:
+                |  interval_ms: 12000
+                |projects:
+                |  test-project:
+                |    tracker:
+                |      kind: linear
+                |      api_key: test-key
+                |      project_slug: TEST
+                |    workspace:
+                |      root: /tmp/koncerto-test
+                |    agent:
+                |      kind: opencode
+                |---
+                """.trimMargin()
+            )
+            val cache = WorkflowCache()
+            val config = beans.serviceConfig(workflowFile.toString(), cache, logger)
+            assertThat(config.pollIntervalMs).isEqualTo(12_000L)
+            assertThat(config.deprecationWarnings).isNotNull()
+            assertThat(config.deprecationWarnings.isNotEmpty()).isTrue()
+        } finally {
+            Files.deleteIfExists(workflowFile)
+        }
+    }
+
+    @Test
+    fun `orchestrator with in review stage and git remote url`() {
+        val config = ServiceConfig(
+            gitConfig = GitConfig(enabled = false, remoteUrl = "git@github.com:owner/repo.git"),
+            projects = mapOf(
+                "test" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(
+                        kind = "opencode",
+                        stages = mapOf(
+                            "in review" to StageAgentConfig(
+                                prompt = "review.md",
+                                model = null,
+                                effort = null,
+                                maxConcurrent = null,
+                                agentKind = "claude",
+                                command = null,
+                                onCompleteState = "Ready for Human Review"
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        assertThat(createOrchestratorForConfig(config)).isNotNull()
+    }
+
+    @Test
+    fun `orchestrator resolves repo from workspace git config when remote url blank`() {
+        val wsRoot = Files.createTempDirectory("beans-ws-git")
+        try {
+            val gitDir = wsRoot.resolve(".git")
+            Files.createDirectories(gitDir)
+            Files.writeString(
+                gitDir.resolve("config"),
+                """
+                |[remote "origin"]
+                |    url = git@github.com:ws-owner/ws-repo.git
+                """.trimMargin()
+            )
+            val config = ServiceConfig(
+                gitConfig = GitConfig(enabled = false, remoteUrl = ""),
+                projects = mapOf(
+                    "test" to ProjectConfig(
+                        tracker = TrackerConfig("linear", "x", "k", "p"),
+                        workspace = WorkspaceConfig(wsRoot.toString()),
+                        agent = AgentProjectConfig(
+                            kind = "opencode",
+                            stages = mapOf(
+                                "in review" to StageAgentConfig(
+                                    prompt = "review.md",
+                                    model = null,
+                                    effort = null,
+                                    maxConcurrent = null,
+                                    agentKind = "claude",
+                                    command = null,
+                                    onCompleteState = "Ready for Human Review"
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+            assertThat(createOrchestratorForConfig(config)).isNotNull()
+        } finally {
+            wsRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `demoConfig maps service demo recording settings`() {
+        val config = ServiceConfig(
+            demoRecording = DemoRecordingConfig(
+                enabled = true,
+                targetUrl = "http://localhost:8080",
+                cleanupIntervalHours = 12
+            )
+        )
+        val demoConfig = beans.demoConfig(config)
+        assertThat(demoConfig.enabled).isTrue()
+        assertThat(demoConfig.targetUrl).isEqualTo("http://localhost:8080")
+        assertThat(demoConfig.cleanupIntervalHours).isEqualTo(12)
+    }
+
+    @Test
+    fun `demoStorage returns null without r2 config`() {
+        assertThat(beans.demoStorage(DemoConfig(enabled = false))).isNull()
+    }
+
+    @Test
+    fun `demoStorage creates R2 storage when configured`() {
+        val demoConfig = DemoConfig(
+            r2 = DemoConfig.R2Config(
+                endpoint = "https://r2.example.com",
+                accessKey = "key",
+                secretKey = "secret",
+                bucketName = "bucket",
+                publicUrlBase = "https://cdn.example.com"
+            )
+        )
+        assertThat(beans.demoStorage(demoConfig)).isNotNull()
+    }
+
+    @Test
+    fun `demoReporter returns null when no project configured`() {
+        val factory: (ProjectConfig) -> LinearClient = { throw AssertionError("should not be called") }
+        assertThat(beans.demoReporter(factory, ServiceConfig())).isNull()
+    }
+
+    @Test
+    fun `demoReporter creates publisher when project exists`() {
+        val config = ServiceConfig(
+            projects = mapOf(
+                "test" to ProjectConfig(
+                    tracker = TrackerConfig("linear", "x", "k", "p"),
+                    workspace = WorkspaceConfig("/tmp"),
+                    agent = AgentProjectConfig(kind = "opencode")
+                )
+            )
+        )
+        val factory: (ProjectConfig) -> LinearClient = {
+            com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                "p"
+            )
+        }
+        assertThat(beans.demoReporter(factory, config)).isNotNull()
+    }
+
+    @Test
+    fun `recorder beans create instances`() {
+        assertThat(beans.playwrightRecorder()).isInstanceOf(PlaywrightRecorder::class)
+        assertThat(beans.asciinemaRecorder()).isInstanceOf(AsciinemaRecorder::class)
+        assertThat(beans.adbRecorder()).isInstanceOf(AdbRecorder::class)
+        assertThat(beans.xcrunRecorder()).isInstanceOf(XcrunRecorder::class)
+        assertThat(beans.ffmpegRecorder()).isInstanceOf(FfmpegRecorder::class)
+    }
+
+    @Test
+    fun `recorderFactory creates factory from recorders`() {
+        val recorders = listOf(
+            beans.playwrightRecorder(),
+            beans.asciinemaRecorder(),
+            beans.adbRecorder()
+        )
+        assertThat(beans.recorderFactory(recorders)).isNotNull()
+    }
+
+    @Test
+    fun `demoTaskRepository creates sqlite repository`() {
+        assertThat(beans.demoTaskRepository(":memory:")).isNotNull()
+    }
+
+    @Test
+    fun `demoRecordingService returns null when storage missing`() {
+        val demoConfig = beans.demoConfig(ServiceConfig())
+        val taskRepository = beans.demoTaskRepository(":memory:")
+        val recorderFactory = beans.recorderFactory(listOf(beans.playwrightRecorder()))
+        val reporter = beans.demoReporter(
+            {
+                com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                    com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                    "p"
+                )
+            },
+            ServiceConfig(
+                projects = mapOf(
+                    "test" to ProjectConfig(
+                        tracker = TrackerConfig("linear", "x", "k", "p"),
+                        workspace = WorkspaceConfig("/tmp"),
+                        agent = AgentProjectConfig(kind = "opencode")
+                    )
+                )
+            )
+        )
+        val service = beans.demoRecordingService(
+            demoConfig = demoConfig,
+            demoTaskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            demoStorage = null,
+            demoReporter = reporter,
+            demoReportGenerator = beans.demoReportGenerator(),
+            demoMetricsRecorder = beans.demoMetricsRecorder(),
+            demoAuditLogger = beans.demoAuditLogger(),
+            aiTimelineGenerator = beans.aiTimelineGenerator(demoConfig)
+        )
+        assertThat(service).isNull()
+    }
+
+    @Test
+    fun `demoController returns null when recording service missing`() {
+        assertThat(beans.demoController(null)).isNull()
+    }
+
+    @Test
+    fun `demoEventListener returns null when recording service missing`() {
+        assertThat(beans.demoEventListener(null, DemoConfig())).isNull()
+    }
+
+    @Test
+    fun `aiTimelineGenerator creates generator for demo config with ai`() {
+        val demoConfig = DemoConfig(ai = DemoConfig.AiConfig(model = "free"))
+        assertThat(beans.aiTimelineGenerator(demoConfig)).isNotNull()
+    }
+
+    @Test
+    fun `targetProjectDeployer and demoFailureReporter create instances`() {
+        assertThat(beans.targetProjectDeployer(logger)).isNotNull()
+        assertThat(beans.demoFailureReporter(logger)).isNotNull()
+    }
+
+    @Test
+    fun `orphanedContainerCleanupScheduler starts and stops`() {
+        val deployer = beans.targetProjectDeployer(logger)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scheduler = beans.orphanedContainerCleanupScheduler(deployer, scope, logger)
+        try {
+            assertThat(scheduler).isInstanceOf(OrphanedContainerCleanupScheduler::class)
+        } finally {
+            scheduler.stop()
+        }
+    }
+
+    @Test
+    fun `metricsRepository creates parent directories`() {
+        val tempDir = Files.createTempDirectory("metrics-db-test")
+        try {
+            val dbPath = tempDir.resolve("nested/metrics.db").toString()
+            assertThat(beans.metricsRepository(dbPath)).isNotNull()
+            assertThat(Files.exists(tempDir.resolve("nested"))).isTrue()
+        } finally {
+            tempDir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun createOrchestratorForConfig(config: ServiceConfig): com.flexsentlabs.koncerto.orchestrator.Orchestrator {
+        val tempDir = Files.createTempDirectory("orchestrator-config-test")
+        val hookExecutor = HookExecutor { _, _ -> }
+        val workspaces = WorkspaceManager(tempDir, hookExecutor)
+        val agentRuntimeFactory = AgentRuntimeFactory(logger)
+        val gitWorkflow = GitWorkflow(config.gitConfig, logger)
+        val runtimeStates = config.projects.mapValues { RuntimeState() }
+        val circuitBreaker = AgentCircuitBreaker()
+        val errorTracker = DefaultErrorTracker()
+        val healthChecker = DefaultAgentHealthChecker()
+        val errorClassifier = PatternErrorClassifier()
+        val freeModelCycler = FreeModelCycler.createDefault(logger)
+        val logNotifier = LoggingNotifier(logger)
+        val compositeNotifier = com.flexsentlabs.koncerto.notifications.CompositeNotifier(listOf(logNotifier))
+        val linearClientFactory: (ProjectConfig) -> LinearClient = {
+            com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                "p"
+            )
+        }
+        val modelRetryHandler = com.flexsentlabs.koncerto.agent.ModelRetryHandler(
+            cycler = freeModelCycler,
+            projectConfig = config.projects.values.first(),
+            linearClient = linearClientFactory(config.projects.values.first()),
+            notifier = compositeNotifier,
+            logger = logger
+        )
+        val runner = beans.agentRunner(
+            config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
+            runtimeStates, circuitBreaker, errorTracker, healthChecker,
+            errorClassifier, freeModelCycler, modelRetryHandler
+        )
+        val workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager = { pc ->
+            WorkspaceManager(Paths.get(pc.workspace.root), hookExecutor)
+        }
+        return beans.orchestrator(
+            config = config,
+            runner = runner,
+            cache = WorkflowCache(),
+            logger = logger,
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+            linearClientFactory = linearClientFactory,
+            workspaceManagerFactory = workspaceManagerFactory,
+            runtimeStates = runtimeStates,
+            metricsRepository = SqliteMetricsRepository(":memory:"),
+            compositeNotifier = compositeNotifier,
+            subtaskOrchestrator = beans.subtaskOrchestrator(DefaultSubtaskRunner(logger, null), gitWorkflow, logger),
+            workplanParser = WorkplanParser(logger),
+            auditLogger = FileAuditLogger(Files.createTempFile("audit", ".log")),
+            demoEventListener = null
+        )
     }
 }

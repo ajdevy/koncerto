@@ -34,8 +34,8 @@ class TargetProjectDeployer(
     private val dockerfileGenerator: DockerfileGenerator,
     private val containerManager: ContainerLifecycleManager,
     private val logger: StructuredLogger
-) {
-    suspend fun deploy(config: DeployConfig): DeployResult {
+) : ProjectDeployer {
+    override suspend fun deploy(config: DeployConfig): DeployResult {
         val projectPath = config.projectPath
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
 
@@ -218,7 +218,7 @@ class TargetProjectDeployer(
         }
     }
 
-    suspend fun cleanup(config: DeployConfig) {
+    override suspend fun cleanup(config: DeployConfig) {
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
         logger.info("deploy_cleanup_start", mapOf("tag" to (tag as Any?)))
 

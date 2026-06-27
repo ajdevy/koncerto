@@ -42,7 +42,7 @@ subprojects {
         }
     }
 
-    // Coverage verification - fails if line coverage < 75%
+    // Coverage verification - fails if line coverage < 75% per module
     val hasTests = tasks.matching { it.name == "test" }.isNotEmpty()
 
     if (hasTests && jacocoEnabled) {
