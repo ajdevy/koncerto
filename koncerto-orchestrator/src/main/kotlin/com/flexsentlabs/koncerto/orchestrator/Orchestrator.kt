@@ -130,7 +130,7 @@ class Orchestrator(
         while (true) {
             if (shutdownRequested) {
                 delay(config.pollIntervalMs)
-                continue
+                return
             }
             tick()
             delay(config.pollIntervalMs)
@@ -276,9 +276,9 @@ class Orchestrator(
                 for ((slug, pr) in projects) {
                     val entry = pr.state.running[event.issueId] ?: continue
                     val nc = pr.config.notifications
-                    if (nc.onLimit.isEmpty() || pr.dispatch.notifier == null) return
+                    if (nc.onLimit.isEmpty() || pr.dispatch.notifier == null) continue
                     val errorTypeName = event.agentError.type::class.simpleName ?: "Unknown"
-                    if (!pr.limitCooldown.shouldSend(errorTypeName, event.issueId)) return
+                    if (!pr.limitCooldown.shouldSend(errorTypeName, event.issueId)) continue
                     pr.dispatch.notifier!!.send(NotificationEvent.LimitDetected(
                         projectSlug = pr.config.tracker.projectSlug,
                         issueId = event.issueId,

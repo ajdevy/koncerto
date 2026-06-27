@@ -196,7 +196,7 @@ open class GitWorkflow(
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
                 .start()
-            val output = proc.inputStream.bufferedReader().readText()
+            val output = proc.inputStream.bufferedReader().use { it.readText() }
             val exit = proc.waitFor()
             if (exit == 0) {
                 output.trim()

@@ -61,7 +61,7 @@ class FfmpegRecorder : DemoRecorder {
                 val durationMs = System.currentTimeMillis() - startTime
 
                 if (exitCode != 0) {
-                    val stderr = process.inputStream.bufferedReader().readText()
+                    val stderr = process.inputStream.bufferedReader().use { it.readText() }
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(
                             RuntimeException("ffmpeg exited with code $exitCode: $stderr")

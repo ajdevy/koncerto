@@ -75,7 +75,7 @@ class ClaudeReviewRuntime(
             }
             p.outputStream.close()
 
-            val raw = p.inputStream.bufferedReader().readText()
+            val raw = p.inputStream.bufferedReader().use { it.readText() }
             val output = raw.lines()
                 .filter { line ->
                     line !in listOf("", " ") &&
@@ -89,7 +89,13 @@ class ClaudeReviewRuntime(
                 output.lines().forEach { _output.tryEmit(it) }
             }
 
-            p.waitFor(5, TimeUnit.MINUTES)
+            val completed = p.waitFor(5, TimeUnit.MINUTES)
+            if (!completed) {
+                p.destroyForcibly()
+                logger.warn("claude_review_timed_out", mapOf("pid" to pid.toString()))
+                events.trySend(AgentEvent.TurnFailed("?", "?", "review_timed_out", pid))
+                return@withContext
+            }
             val exitCode = p.exitValue()
             logger.info("claude_review_completed", mapOf(
                 "pid" to pid.toString(),

@@ -11,6 +11,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.security.MessageDigest
+import javax.xml.parsers.DocumentBuilderFactory
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -24,7 +25,7 @@ class R2DemoStorage(
     private val bucketName: String,
     private val publicUrlBase: String,
     private val quotaLimitBytes: Long = 9L * 1024 * 1024 * 1024,
-    private val presignedUrlTtlSeconds: Long = 315360000, // 10 years — effective "never expire"; deletion is quota-driven
+    private val presignedUrlTtlSeconds: Long = 604800, // 7 days (R2 max); set R2_PUBLIC_URL_BASE for permanent URLs
     private val region: String = "auto"
 ) : DemoStorage {
 
@@ -40,7 +41,6 @@ class R2DemoStorage(
         return try {
             val storageKey = "demo-recordings/$taskId/${file.name}"
             val fileBytes = Files.readAllBytes(file.toPath())
-            val contentMd5 = MessageDigest.getInstance("MD5").digest(fileBytes)
             val contentSha256 = MessageDigest.getInstance("SHA-256").digest(fileBytes)
                 .joinToString("") { "%02x".format(it) }
 
@@ -50,7 +50,6 @@ class R2DemoStorage(
 
             val headers = mutableMapOf(
                 "content-type" to contentType,
-                "content-md5" to java.util.Base64.getEncoder().encodeToString(contentMd5),
                 "x-amz-content-sha256" to contentSha256,
                 "x-amz-date" to amzDate
             )
@@ -134,19 +133,58 @@ class R2DemoStorage(
 
     override suspend fun checkQuota(): DemoResult<DemoStorage.QuotaInfo> {
         return try {
-            val url = "$endpoint/$bucketName/?list-type=2&max-keys=1"
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Authorization", "Bearer $accessKey")
-                .GET()
-                .build()
+            var totalSize = 0L
+            var continuationToken: String? = null
+            val emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
-            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+            do {
+                val queryParts = mutableListOf("list-type=2")
+                if (continuationToken != null) {
+                    queryParts.add("continuation-token=${urlEncode(continuationToken)}")
+                }
+                val queryString = queryParts.joinToString("&")
+                val url = "$endpoint/$bucketName/?$queryString"
+                val now = Instant.now()
+                val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
+                val headers = mapOf("x-amz-date" to amzDate, "x-amz-content-sha256" to emptyHash)
+                val authHeader = buildSigV4AuthHeader("GET", "/$bucketName/", queryString, headers, emptyHash, now)
+
+                val request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("x-amz-date", amzDate)
+                    .header("x-amz-content-sha256", emptyHash)
+                    .header("Authorization", authHeader)
+                    .GET()
+                    .build()
+
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() !in 200..299) {
+                    return DemoResult.Failure(DemoError.StorageFailed(
+                        RuntimeException("R2 list failed: ${response.statusCode()} ${response.body()}")
+                    ))
+                }
+
+                val xml = response.body()
+                val factory = DocumentBuilderFactory.newInstance()
+                val doc = factory.newDocumentBuilder().parse(xml.byteInputStream())
+                val sizeNodes = doc.getElementsByTagName("Size")
+                for (i in 0 until sizeNodes.length) {
+                    totalSize += sizeNodes.item(i).textContent.toLong()
+                }
+
+                val isTruncated = doc.getElementsByTagName("IsTruncated")
+                continuationToken = if (isTruncated.length > 0 && isTruncated.item(0).textContent == "true") {
+                    val tokens = doc.getElementsByTagName("NextContinuationToken")
+                    if (tokens.length > 0) tokens.item(0).textContent else null
+                } else {
+                    null
+                }
+            } while (continuationToken != null)
 
             DemoResult.Success(DemoStorage.QuotaInfo(
-                usedBytes = 0L,
+                usedBytes = totalSize,
                 limitBytes = quotaLimitBytes,
-                availableBytes = quotaLimitBytes
+                availableBytes = (quotaLimitBytes - totalSize).coerceAtLeast(0)
             ))
         } catch (e: Exception) {
             DemoResult.Failure(DemoError.StorageFailed(e))
@@ -154,17 +192,114 @@ class R2DemoStorage(
     }
 
     override suspend fun listOldest(limit: Int): DemoResult<List<DemoStorage.StorageItem>> {
-        return DemoResult.Success(emptyList())
+        return try {
+            val items = mutableListOf<DemoStorage.StorageItem>()
+            var continuationToken: String? = null
+            val emptyHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+            do {
+                val queryParts = mutableListOf("list-type=2")
+                if (continuationToken != null) {
+                    queryParts.add("continuation-token=${urlEncode(continuationToken)}")
+                }
+                val queryString = queryParts.joinToString("&")
+                val url = "$endpoint/$bucketName/?$queryString"
+                val now = Instant.now()
+                val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
+                val headers = mapOf("x-amz-date" to amzDate, "x-amz-content-sha256" to emptyHash)
+                val authHeader = buildSigV4AuthHeader("GET", "/$bucketName/", queryString, headers, emptyHash, now)
+
+                val request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("x-amz-date", amzDate)
+                    .header("x-amz-content-sha256", emptyHash)
+                    .header("Authorization", authHeader)
+                    .GET()
+                    .build()
+
+                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() !in 200..299) {
+                    return DemoResult.Failure(DemoError.StorageFailed(
+                        RuntimeException("R2 list failed: ${response.statusCode()} ${response.body()}")
+                    ))
+                }
+
+                val xml = response.body()
+                val factory = DocumentBuilderFactory.newInstance()
+                val doc = factory.newDocumentBuilder().parse(xml.byteInputStream())
+                val contents = doc.getElementsByTagName("Contents")
+                for (i in 0 until contents.length) {
+                    val node = contents.item(i)
+                    val key = getChildText(node, "Key") ?: continue
+                    val size = getChildText(node, "Size")?.toLongOrNull() ?: 0L
+                    val lastModified = getChildText(node, "LastModified")
+                    items.add(DemoStorage.StorageItem(key, size, lastModified))
+                }
+
+                val isTruncated = doc.getElementsByTagName("IsTruncated")
+                continuationToken = if (isTruncated.length > 0 && isTruncated.item(0).textContent == "true") {
+                    val tokens = doc.getElementsByTagName("NextContinuationToken")
+                    if (tokens.length > 0) tokens.item(0).textContent else null
+                } else {
+                    null
+                }
+            } while (continuationToken != null)
+
+            items.sortBy { it.lastModified }
+            DemoResult.Success(items.take(limit))
+        } catch (e: Exception) {
+            DemoResult.Failure(DemoError.StorageFailed(e))
+        }
     }
 
     override suspend fun deleteBatch(storageKeys: List<String>): DemoResult<Int> {
         return try {
-            var deleted = 0
-            for (key in storageKeys) {
-                val result = delete(key)
-                if (result is DemoResult.Success) deleted++
+            if (storageKeys.isEmpty()) return DemoResult.Success(0)
+
+            val xmlBody = buildString {
+                append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                append("<Delete>")
+                for (key in storageKeys) {
+                    append("<Object><Key>")
+                    append(key.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+                    append("</Key></Object>")
+                }
+                append("</Delete>")
             }
-            DemoResult.Success(deleted)
+            val bodyBytes = xmlBody.toByteArray()
+            val contentSha256 = sha256Hex(xmlBody)
+            val queryString = "delete"
+            val url = "$endpoint/$bucketName/?$queryString"
+            val now = Instant.now()
+            val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
+            val headers = mapOf(
+                "x-amz-content-sha256" to contentSha256,
+                "x-amz-date" to amzDate
+            )
+            val authHeader = buildSigV4AuthHeader("POST", "/$bucketName/", queryString, headers, contentSha256, now)
+
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/xml")
+                .header("x-amz-content-sha256", contentSha256)
+                .header("x-amz-date", amzDate)
+                .header("Authorization", authHeader)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(bodyBytes))
+                .build()
+
+            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+
+            if (response.statusCode() in 200..299) {
+                val xml = response.body()
+                val factory = DocumentBuilderFactory.newInstance()
+                val doc = factory.newDocumentBuilder().parse(xml.byteInputStream())
+                val deleted = doc.getElementsByTagName("Deleted")
+                DemoResult.Success(deleted.length)
+            } else {
+                DemoResult.Failure(DemoError.StorageFailed(
+                    RuntimeException("R2 batch delete failed: ${response.statusCode()} ${response.body()}")
+                ))
+            }
         } catch (e: Exception) {
             DemoResult.Failure(DemoError.StorageFailed(e))
         }
@@ -255,6 +390,16 @@ class R2DemoStorage(
 
     private fun hmacSha256Hex(key: ByteArray, data: String): String {
         return hmacSha256(key, data).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun getChildText(parent: org.w3c.dom.Node, tagName: String): String? {
+        val children = parent.childNodes
+        for (i in 0 until children.length) {
+            if (children.item(i).nodeName == tagName) {
+                return children.item(i).textContent
+            }
+        }
+        return null
     }
 
     private fun urlEncode(value: String): String {

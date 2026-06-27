@@ -70,10 +70,12 @@ class TargetProjectDeployer(
         return try {
             when (config.type) {
                 DockerConfigType.DOCKER_COMPOSE -> {
-                    deployWithCompose(config.composeFile!!, projectPath, tag)
+                    val composeFile = requireNotNull(config.composeFile) { "DOCKER_COMPOSE config missing composeFile" }
+                    deployWithCompose(composeFile, projectPath, tag)
                 }
                 DockerConfigType.DOCKERFILE -> {
-                    deployWithDockerfile(config.dockerfile!!, projectPath, tag)
+                    val dockerfile = requireNotNull(config.dockerfile) { "DOCKERFILE config missing dockerfile" }
+                    deployWithDockerfile(dockerfile, projectPath, tag)
                 }
             }
         } catch (e: Exception) {
@@ -134,9 +136,12 @@ class TargetProjectDeployer(
                 "-f", composeFile.toString(), "up", "-d"
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText()
-            p.waitFor(120, TimeUnit.SECONDS)
-
+            val completed = p.waitFor(120, TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }
+            if (!completed) {
+                p.destroyForcibly()
+                return DeployResult.failure("docker compose up timed out")
+            }
             if (p.exitValue() != 0) {
                 return DeployResult.failure("docker compose up failed", output)
             }
@@ -146,8 +151,11 @@ class TargetProjectDeployer(
                 "-f", composeFile.toString(), "ps"
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val psP = psPb.start()
-            val psOutput = psP.inputStream.bufferedReader().readText()
-            psP.waitFor(5, TimeUnit.SECONDS)
+            val psCompleted = psP.waitFor(5, TimeUnit.SECONDS)
+            val psOutput = psP.inputStream.bufferedReader().use { it.readText() }
+            if (!psCompleted) {
+                psP.destroyForcibly()
+            }
 
             val portMatch = Regex("""(\d+)->\d+/tcp""").find(psOutput)
             val hostPort = portMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
@@ -162,33 +170,33 @@ class TargetProjectDeployer(
                 "port" to hostPort.toString(),
                 "action" to "falling_through_to_app_build"
             ))
-            val composeNetwork = resolveComposeNetwork(projectPath)
+            val composeNetwork = resolveComposeNetwork(projectPath, composeFile)
             return deployAppOnNetwork(projectPath, tag, composeNetwork)
         } catch (e: Exception) {
             return DeployResult.failure("docker compose error: ${e.message}")
         }
     }
 
-    private fun resolveComposeNetwork(projectPath: Path, projectName: String = "koncerto-demo"): String {
+    private fun resolveComposeNetwork(projectPath: Path, composeFile: Path, projectName: String = "koncerto-demo"): String {
         return try {
             val pb = ProcessBuilder(
                 "docker", "compose", "-p", projectName,
-                "-f", projectPath.resolve("docker-compose.yml").toString(),
+                "-f", composeFile.toString(),
                 "ps", "--format", "{{.Name}}"
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val p = pb.start()
-            // Filter out docker-compose structured log lines (e.g. time="..." level=warning)
-            val names = p.inputStream.bufferedReader().readText().lines()
-                .filter { it.isNotBlank() && !it.startsWith("time=") }
             p.waitFor(5, TimeUnit.SECONDS)
+            // Filter out docker-compose structured log lines (e.g. time="..." level=warning)
+            val names = p.inputStream.bufferedReader().use { it.readText() }.lines()
+                .filter { it.isNotBlank() && !it.startsWith("time=") }
             if (names.isNotEmpty()) {
                 val inspectPb = ProcessBuilder(
                     "docker", "inspect", names.last(),
                     "--format", "{{.HostConfig.NetworkMode}}"
                 ).redirectErrorStream(true)
                 val ip = inspectPb.start()
-                val network = ip.inputStream.bufferedReader().readText().trim()
                 ip.waitFor(5, TimeUnit.SECONDS)
+                val network = ip.inputStream.bufferedReader().use { it.readText() }.trim()
                 if (network.isNotBlank()) return network
             }
             "${projectName}_default"
@@ -220,7 +228,8 @@ class TargetProjectDeployer(
                 "docker", "ps", "-a", "--filter", "ancestor=$tag", "--format", "{{.ID}}"
             ).redirectErrorStream(true)
             val findP = findPb.start()
-            val ids = findP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            findP.waitFor(10, TimeUnit.SECONDS)
+            val ids = findP.inputStream.bufferedReader().use { it.readText() }.lines().filter { it.isNotBlank() }
             ids.forEach { id ->
                 try {
                     ProcessBuilder("docker", "rm", "-f", id).start().waitFor(10, TimeUnit.SECONDS)
@@ -261,7 +270,8 @@ class TargetProjectDeployer(
                 "docker", "ps", "-a", "--filter", "name=koncerto-demo", "--format", "{{.ID}}"
             ).redirectErrorStream(true)
             val findP = findPb.start()
-            val ids = findP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            findP.waitFor(10, TimeUnit.SECONDS)
+            val ids = findP.inputStream.bufferedReader().use { it.readText() }.lines().filter { it.isNotBlank() }
             if (ids.isNotEmpty()) {
                 ids.forEach { id ->
                     try {
@@ -281,7 +291,8 @@ class TargetProjectDeployer(
                 "--filter", "reference=koncerto-demo-*"
             ).redirectErrorStream(true)
             val findImgP = findImgPb.start()
-            val tags = findImgP.inputStream.bufferedReader().readText().lines().filter { it.isNotBlank() }
+            findImgP.waitFor(10, TimeUnit.SECONDS)
+            val tags = findImgP.inputStream.bufferedReader().use { it.readText() }.lines().filter { it.isNotBlank() }
             if (tags.isNotEmpty()) {
                 tags.forEach { tag ->
                     try {
@@ -300,7 +311,8 @@ class TargetProjectDeployer(
                 "docker", "compose", "ls", "--format", "{{.Name}}"
             ).redirectErrorStream(true)
             val p = pb.start()
-            val names = p.inputStream.bufferedReader().readText().lines()
+            p.waitFor(5, TimeUnit.SECONDS)
+            val names = p.inputStream.bufferedReader().use { it.readText() }.lines()
                 .filter { it.startsWith("koncerto-demo") }
             names.forEach { name ->
                 try {

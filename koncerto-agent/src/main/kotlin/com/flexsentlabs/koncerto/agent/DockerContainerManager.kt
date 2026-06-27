@@ -37,9 +37,9 @@ class DockerContainerManager(
 
             val pb = ProcessBuilder("bash", "-lc", runCmd)
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText().trim()
             val completed = p.waitFor(30, TimeUnit.SECONDS)
             val exitCode = if (completed) p.exitValue() else -1
+            val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
 
             if (exitCode != 0 || output.isBlank()) {
                 logger.warn("container_create_failed", mapOf("exit_code" to exitCode.toString()))
@@ -59,8 +59,8 @@ class DockerContainerManager(
         return try {
             val pb = ProcessBuilder("bash", "-lc", "docker inspect $containerId --format='{{.State.Status}}' 2>/dev/null")
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText().trim()
             p.waitFor(5, TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
             output == "running"
         } catch (_: Exception) {
             false
@@ -71,9 +71,9 @@ class DockerContainerManager(
         return try {
             val pb = ProcessBuilder("bash", "-lc", "docker logs $containerId 2>&1")
             val p = pb.start()
-            val logs = p.inputStream.bufferedReader().readText()
-            p.waitFor(5, TimeUnit.SECONDS)
-            if (p.exitValue() == 0 && logs.isNotBlank()) logs else null
+            val logsCompleted = p.waitFor(5, TimeUnit.SECONDS)
+            val logs = p.inputStream.bufferedReader().use { it.readText() }
+            if (logsCompleted && p.exitValue() == 0 && logs.isNotBlank()) logs else null
         } catch (_: Exception) {
             null
         }
@@ -115,8 +115,8 @@ class DockerContainerManager(
         return try {
             val pb = ProcessBuilder("bash", "-lc", "free -b | awk '/Mem:/ {print \$7}'")
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText().trim()
             p.waitFor(5, TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
             output.toLongOrNull() ?: Runtime.getRuntime().maxMemory()
         } catch (_: Exception) {
             Runtime.getRuntime().maxMemory()
@@ -144,8 +144,8 @@ class DockerContainerManager(
                     "docker ps -a --filter name=koncerto-agent- --format '{{.ID}}|{{.CreatedAt}}' 2>/dev/null"
                 )
                 val p = pb.start()
-                val output = p.inputStream.bufferedReader().readText().trim()
                 p.waitFor(10, TimeUnit.SECONDS)
+                val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
 
                 if (output.isBlank()) {
                     logger.debug("container_prune_no_candidates", emptyMap())

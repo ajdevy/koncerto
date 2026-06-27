@@ -985,4 +985,253 @@ class ServiceConfigTest {
         )
         assertThat(config.project().agent.docker!!.enabled).isEqualTo(false)
     }
+
+    @Test
+    fun `rate limiter config parsed`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(),
+                    "rate_limiter" to mapOf(
+                        "requests_per_second" to 5,
+                        "max_burst" to 10
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val rl = config.project().rateLimiter
+        assertThat(rl).isNotNull()
+        assertThat(rl!!.requestsPerSecond).isEqualTo(5)
+        assertThat(rl.maxBurst).isEqualTo(10)
+    }
+
+    @Test
+    fun `circuit breaker config parsed`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(),
+                    "circuit_breaker" to mapOf(
+                        "failure_threshold" to 3,
+                        "reset_timeout_ms" to 15000
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val cb = config.project().circuitBreaker
+        assertThat(cb).isNotNull()
+        assertThat(cb!!.failureThreshold).isEqualTo(3)
+        assertThat(cb.resetTimeoutMs).isEqualTo(15000)
+    }
+
+    @Test
+    fun `notifications config with all channels`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(),
+                    "notifications" to mapOf(
+                        "on_completed" to true,
+                        "on_failed" to true,
+                        "on_stalled" to false,
+                        "on_clarification" to true,
+                        "on_limit" to listOf("linear"),
+                        "limit_cooldown_ms" to 600000,
+                        "telegram" to mapOf(
+                            "bot_token" to "tg_bot_token",
+                            "chat_id" to "-100123"
+                        ),
+                        "email" to mapOf(
+                            "smtp_host" to "smtp.example.com",
+                            "smtp_port" to 587,
+                            "username" to "user",
+                            "password" to "smtp_pass",
+                            "from" to "bot@example.com",
+                            "to" to "admin@example.com"
+                        ),
+                        "webhook" to mapOf(
+                            "url" to "https://hooks.example.com/alert",
+                            "headers" to mapOf(
+                                "Authorization" to "wh_secret"
+                            )
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val n = config.project().notifications
+        assertThat(n.onCompleted).isEqualTo(true)
+        assertThat(n.onFailed).isEqualTo(true)
+        assertThat(n.onStalled).isEqualTo(false)
+        assertThat(n.onClarification).isEqualTo(true)
+        assertThat(n.onLimit).containsExactly("linear")
+        assertThat(n.limitCooldownMs).isEqualTo(600000)
+        assertThat(n.telegram).isNotNull()
+        assertThat(n.telegram!!.botToken).isEqualTo("tg_bot_token")
+        assertThat(n.telegram.chatId).isEqualTo("-100123")
+        assertThat(n.email).isNotNull()
+        assertThat(n.email!!.smtpHost).isEqualTo("smtp.example.com")
+        assertThat(n.email.smtpPort).isEqualTo(587)
+        assertThat(n.email.username).isEqualTo("user")
+        assertThat(n.email.from).isEqualTo("bot@example.com")
+        assertThat(n.email.to).isEqualTo("admin@example.com")
+        assertThat(n.webhook).isNotNull()
+        assertThat(n.webhook!!.url).isEqualTo("https://hooks.example.com/alert")
+    }
+
+    @Test
+    fun `notifications defaults when not specified`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val n = config.project().notifications
+        assertThat(n.onCompleted).isEqualTo(false)
+        assertThat(n.onFailed).isEqualTo(false)
+        assertThat(n.telegram).isNull()
+        assertThat(n.email).isNull()
+        assertThat(n.webhook).isNull()
+    }
+
+    @Test
+    fun `notifications infers true when channels present`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(),
+                    "notifications" to mapOf(
+                        "telegram" to mapOf("bot_token" to "t", "chat_id" to "c")
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val n = config.project().notifications
+        assertThat(n.onCompleted).isEqualTo(true)
+        assertThat(n.onFailed).isEqualTo(true)
+    }
+
+    @Test
+    fun `demo recording config parsed`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                    "demo_recording" to mapOf(
+                        "enabled" to true,
+                        "trigger" to "review_passed",
+                        "target_url" to "http://localhost:3000",
+                        "cleanup_interval_hours" to 48,
+                    "platform" to mapOf("web" to "playwright", "terminal" to "asciinema"),
+                    "quality" to mapOf("resolution" to "1920x1080", "fps" to 15, "codec" to "h264"),
+                    "storage" to mapOf(
+                        "r2_endpoint" to "https://r2.example.com",
+                        "r2_bucket" to "my-bucket",
+                        "r2_access_key" to "ak",
+                        "r2_secret_key" to "sk",
+                        "public_url_base" to "https://pub.example.com",
+                        "presigned_url_ttl" to 86400,
+                        "region" to "us-east-1"
+                    ),
+                    "ai" to mapOf("model" to "claude", "timeline" to true, "repro_steps" to true),
+                    "retry" to mapOf("max_attempts" to 5, "backoff" to "linear"),
+                    "error" to mapOf("on_failure" to "retry")
+                ),
+                "projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        val dr = config.demoRecording
+        assertThat(dr.enabled).isEqualTo(true)
+        assertThat(dr.trigger).isEqualTo("review_passed")
+        assertThat(dr.targetUrl).isEqualTo("http://localhost:3000")
+        assertThat(dr.cleanupIntervalHours).isEqualTo(48)
+        assertThat(dr.platform.web).isEqualTo("playwright")
+        assertThat(dr.platform.terminal).isEqualTo("asciinema")
+        assertThat(dr.quality.resolution).isEqualTo("1920x1080")
+        assertThat(dr.quality.fps).isEqualTo(15)
+        assertThat(dr.quality.codec).isEqualTo("h264")
+        assertThat(dr.storage).isNotNull()
+        assertThat(dr.storage!!.r2Endpoint).isEqualTo("https://r2.example.com")
+        assertThat(dr.storage.r2Bucket).isEqualTo("my-bucket")
+        assertThat(dr.storage.r2AccessKey).isEqualTo("ak")
+        assertThat(dr.storage.region).isEqualTo("us-east-1")
+        assertThat(dr.storage.presignedUrlTtl).isEqualTo(86400)
+        assertThat(dr.ai.model).isEqualTo("claude")
+        assertThat(dr.ai.timeline).isEqualTo(true)
+        assertThat(dr.retry.maxAttempts).isEqualTo(5)
+        assertThat(dr.retry.backoff).isEqualTo("linear")
+        assertThat(dr.error.onFailure).isEqualTo("retry")
+    }
+
+    @Test
+    fun `demo recording defaults when not specified`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.demoRecording.enabled).isEqualTo(false)
+        assertThat(config.demoRecording.trigger).isEqualTo("review_passed")
+        assertThat(config.demoRecording.quality.resolution).isEqualTo("1280x720")
+    }
+
+    @Test
+    fun `hooks config accessed from service config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.hooks.timeoutMs).isEqualTo(60000)
+    }
+
+    @Test
+    fun `admin api key accessed from service config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "admin" to mapOf("apiKey" to "secret-123"),
+                "projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.adminApiKey).isEqualTo("secret-123")
+    }
 }

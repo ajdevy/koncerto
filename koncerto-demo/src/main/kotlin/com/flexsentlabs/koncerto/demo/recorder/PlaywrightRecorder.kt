@@ -46,13 +46,17 @@ class PlaywrightRecorder : DemoRecorder {
                 pwScript.deleteOnExit()
 
                 shellScript = File.createTempFile("pw-record-", ".sh")
-                shellScript.writeText(buildShellScript(config, outputFile.absolutePath, pwScript.absolutePath, scenarioArg))
+                shellScript.writeText(buildShellScript(config, outputFile.absolutePath, scenarioArg))
                 shellScript.setExecutable(true)
                 shellScript.deleteOnExit()
 
-                val process = ProcessBuilder("bash", shellScript.absolutePath)
+                val pb = ProcessBuilder("bash", shellScript.absolutePath)
                     .redirectErrorStream(true)
-                    .start()
+                val env = pb.environment()
+                env["TARGET_URL"] = config.targetUrl
+                env["SCENARIO_PATH"] = scenarioArg
+                env["PW_SCRIPT_PATH"] = pwScript.absolutePath
+                val process = pb.start()
 
                 val maxWaitSec = config.maxDurationSeconds + 60L
                 val completed = process.waitFor(maxWaitSec, TimeUnit.SECONDS)
@@ -67,7 +71,7 @@ class PlaywrightRecorder : DemoRecorder {
                 }
 
                 val exitCode = process.exitValue()
-                val output = process.inputStream.bufferedReader().readText()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
 
                 if (exitCode == 2) {
                     runCleanup()
@@ -105,7 +109,7 @@ class PlaywrightRecorder : DemoRecorder {
             }
         }
 
-    private fun buildShellScript(config: RecordingConfig, outputPath: String, pwScriptPath: String, scenarioPath: String = ""): String = """#!/bin/bash
+    private fun buildShellScript(config: RecordingConfig, outputPath: String, scenarioPath: String = ""): String = """#!/bin/bash
 set -e
 export DISPLAY=:99
 
@@ -131,11 +135,11 @@ XVFB_PID=${'$'}!
 sleep 1
 
 SCENARIO_ARGS=""
-if [ -n "${scenarioPath}" ] && [ -f "${scenarioPath}" ]; then
-  SCENARIO_ARGS="${scenarioPath}"
+if [ -n "${'$'}{SCENARIO_PATH}" ] && [ -f "${'$'}{SCENARIO_PATH}" ]; then
+  SCENARIO_ARGS="${'$'}{SCENARIO_PATH}"
 fi
 
-node "${pwScriptPath}" "${config.targetUrl}" "${'$'}{READY_FILE}" ${'$'}{SCENARIO_ARGS} &
+node "${'$'}{PW_SCRIPT_PATH}" "${'$'}{TARGET_URL}" "${'$'}{READY_FILE}" ${'$'}{SCENARIO_ARGS} &
 NODE_PID=${'$'}!
 
 for i in $(seq 1 30); do
@@ -451,7 +455,7 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
         console.error('[scenario] empty or invalid scenario (no steps)');
       }
     } catch (e) {
-      console.error('[scenario] parse/execution error: ' + e.message);
+      console.error('[scenario] parse/execution error: ' + (e.message || 'unknown') + ' (file: ' + scenarioFile + ')');
     }
   }
 
@@ -465,10 +469,12 @@ function parseScenarioYaml(raw) {
   const lines = raw.split('\n');
   let inScenario = false;
   let yamlLines = [];
+  let foundDemoScenario = false;
   for (const line of lines) {
     const trimmed = line.trimEnd();
     if (trimmed === 'demo_scenario:') {
       inScenario = true;
+      foundDemoScenario = true;
       continue;
     }
     if (inScenario) {
@@ -481,13 +487,24 @@ function parseScenarioYaml(raw) {
       yamlLines.push(line);
     }
   }
+  if (!foundDemoScenario) {
+    console.error('[scenario] missing required key: demo_scenario:');
+    return null;
+  }
   const yaml = yamlLines.join('\n');
-  if (!yaml.trim()) return null;
+  if (!yaml.trim()) {
+    console.error('[scenario] demo_scenario section is empty (no steps defined)');
+    return null;
+  }
   try {
     const parsed = parseSimpleYaml(yaml);
+    if (!parsed || !parsed.steps || parsed.steps.length === 0) {
+      console.error('[scenario] parsed scenario has no valid steps — check indentation and format');
+      return null;
+    }
     return parsed;
   } catch (e) {
-    console.error('YAML parse error: ' + e.message);
+    console.error('[scenario] YAML parse error at line ~' + (e.lineNumber || '?') + ': ' + (e.message || 'unknown syntax'));
     return null;
   }
 }
@@ -496,7 +513,9 @@ function parseSimpleYaml(yaml) {
   const result = { steps: [] };
   let currentStep = null;
   const lines = yaml.split('\n');
-  for (const line of lines) {
+  let stepIndex = 0;
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const trimmed = line.trimEnd();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const indent = line.search(/\S/);
@@ -508,19 +527,27 @@ function parseSimpleYaml(yaml) {
     }
 
     if (trimmed.startsWith('- action:')) {
+      const actionVal = trimmed.slice('- action:'.length).trim();
+      if (!actionVal) {
+        throw new Error('empty action at line ' + (li + 1) + ' — expected: - action: <name>');
+      }
       currentStep = {};
       result.steps.push(currentStep);
-      currentStep.action = trimmed.slice('- action:'.length).trim();
+      stepIndex = result.steps.length;
+      currentStep.action = actionVal;
       continue;
     }
 
     if (currentStep && trimmed.startsWith('- ')) {
       currentStep = {};
       result.steps.push(currentStep);
+      stepIndex = result.steps.length;
       const val = trimmed.slice(2).trim();
       const colonIdx = val.indexOf(':');
       if (colonIdx > 0) {
         currentStep[val.slice(0, colonIdx).trim()] = val.slice(colonIdx + 1).trim();
+      } else {
+        console.error('[scenario:warn] step ' + stepIndex + ', line ' + (li + 1) + ': list entry without key:value — "' + val + '"');
       }
       continue;
     }
@@ -528,6 +555,10 @@ function parseSimpleYaml(yaml) {
     if (currentStep && trimmed.includes(':')) {
       const colonIdx = trimmed.indexOf(':');
       const key = trimmed.slice(0, colonIdx).trim();
+      if (!key) {
+        console.error('[scenario:warn] step ' + stepIndex + ', line ' + (li + 1) + ': empty key before colon');
+        continue;
+      }
       let val = trimmed.slice(colonIdx + 1).trim();
       if (key === 'description' && !currentStep.description) {
         result.description = val;
@@ -549,6 +580,9 @@ function parseSimpleYaml(yaml) {
     if (trimmed.startsWith('description:') && !result.description && !currentStep) {
       result.description = trimmed.slice('description:'.length).trim().replace(/^["']|["']$/g, '');
     }
+  }
+  if (result.steps.length === 0) {
+    throw new Error('no action steps found — each step must start with - action: <type>');
   }
   return result;
 }

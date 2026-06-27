@@ -70,7 +70,7 @@ object AgentAuthChecker {
                 p.destroyForcibly()
                 return false
             }
-            val output = p.inputStream.bufferedReader().readText()
+            val output = p.inputStream.bufferedReader().use { it.readText() }
             return p.exitValue() == 0 && output.contains("\"loggedIn\": true")
         } catch (_: Exception) {
             return false

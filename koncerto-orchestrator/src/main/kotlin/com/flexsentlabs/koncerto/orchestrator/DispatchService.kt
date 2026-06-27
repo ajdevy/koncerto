@@ -31,7 +31,6 @@ import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
-import java.io.File
 import java.nio.file.Path
 import java.time.Instant
 import java.util.Collections
@@ -148,12 +147,12 @@ class DispatchService(
     }
 
     suspend fun scheduleRetry(issue: Issue, error: String, onFailureState: String? = null) {
-        state.running.remove(issue.id)
         val previousAttempt = state.retryAttempts[issue.id]?.attempt ?: 0
         val nextAttempt = previousAttempt + 1
         val maxRetries = projectConfig.agent.maxRetries
 
         if (nextAttempt > maxRetries) {
+            state.running.remove(issue.id)
             state.retryAttempts.remove(issue.id)
             logger.warn(
                 "retry_exhausted",
@@ -182,6 +181,7 @@ class DispatchService(
             return
         }
 
+        state.running.remove(issue.id)
         val entry = retryExecutor.createEntry(issue.id, issue.identifier, previousAttempt, error)
         state.retryAttempts[issue.id] = entry
         logger.info(
@@ -304,17 +304,11 @@ class DispatchService(
 
     private fun resolveStageOverride(issue: Issue): String? {
         if (issue.normalizedState != "todo") return null
-        val workspacePath = findGitWorkspacePath() ?: return null
+        val ws = workspaces ?: return null
         val gw = gitWorkflow ?: return null
+        val workspacePath = runCatching { ws.ensureWorkspace(issue.identifier).path }.getOrNull() ?: return null
         val branch = gw.branchName(issue.identifier)
         return if (gw.remoteBranchExists(branch, workspacePath)) "in review" else null
-    }
-
-    private fun findGitWorkspacePath(): Path? {
-        val root = workspaces?.absoluteRoot ?: return null
-        if (root.resolve(".git").toFile().exists()) return root
-        val dirs = root.toFile().listFiles { f -> f.isDirectory && File(f, ".git").exists() } ?: return null
-        return dirs.firstOrNull()?.toPath()
     }
 
     private suspend fun handleNormalCompletion(
@@ -447,51 +441,56 @@ class DispatchService(
 
         if (!state.tryClaim(issue.id)) return null
 
-        // Check quota atomically with claim — null quotaConfig means no limit
-        val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectConfig.tracker.projectSlug, quotaConfig) == true
-        if (!quotaAcquired) {
-            state.releaseClaim(issue.id)
-            return null
-        }
+        try {
+            // Check quota atomically with claim — null quotaConfig means no limit
+            val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectConfig.tracker.projectSlug, quotaConfig) == true
+            if (!quotaAcquired) {
+                state.releaseClaim(issue.id)
+                return null
+            }
 
-        // Transition Linear state to In Progress for normal dispatch path
-        if (stageNameOverride == null && issue.normalizedState == "todo") {
-            try {
-                val inProgressId = linear.resolveStateId(projectConfig.tracker.projectSlug, "In Progress")
-                if (inProgressId != null) {
-                    linear.updateIssueState(issue.id, inProgressId)
-                    logger.info("state_transitioned", mapOf(
+            // Transition Linear state to In Progress for normal dispatch path
+            if (stageNameOverride == null && issue.normalizedState == "todo") {
+                try {
+                    val inProgressId = linear.resolveStateId(projectConfig.tracker.projectSlug, "In Progress")
+                    if (inProgressId != null) {
+                        linear.updateIssueState(issue.id, inProgressId)
+                        logger.info("state_transitioned", mapOf(
+                            "issue_id" to issue.id,
+                            "to_state" to "In Progress"
+                        ))
+                    }
+                } catch (e: Exception) {
+                    logger.warn("state_transition_failed", mapOf(
                         "issue_id" to issue.id,
-                        "to_state" to "In Progress"
+                        "target_state" to "In Progress"
                     ))
                 }
-            } catch (e: Exception) {
-                logger.warn("state_transition_failed", mapOf(
-                    "issue_id" to issue.id,
-                    "target_state" to "In Progress"
-                ))
             }
+
+            val entry = RunningEntry(
+                issue = issue,
+                threadId = threadId,
+                turnId = turnId,
+                startedAt = Instant.now(),
+                lastHeartbeatAt = null,
+                tenantContext = tenantContext
+            )
+            state.running[issue.id] = entry
+            auditLogger?.log(AuditEvent(
+                timestamp = System.currentTimeMillis(),
+                type = AuditEventType.AGENT_DISPATCHED,
+                projectSlug = projectConfig.tracker.projectSlug,
+                issueId = issue.id,
+                issueIdentifier = issue.identifier,
+                agentKind = resolved.kind
+            ))
+
+            return DispatchExecutionData(effectiveStageConfig, prompt, resolved, threadId, turnId, attempt)
+        } catch (e: Exception) {
+            state.releaseClaim(issue.id)
+            throw e
         }
-
-        val entry = RunningEntry(
-            issue = issue,
-            threadId = threadId,
-            turnId = turnId,
-            startedAt = Instant.now(),
-            lastHeartbeatAt = null,
-            tenantContext = tenantContext
-        )
-        state.running[issue.id] = entry
-        auditLogger?.log(AuditEvent(
-            timestamp = System.currentTimeMillis(),
-            type = AuditEventType.AGENT_DISPATCHED,
-            projectSlug = projectConfig.tracker.projectSlug,
-            issueId = issue.id,
-            issueIdentifier = issue.identifier,
-            agentKind = resolved.kind
-        ))
-
-        return DispatchExecutionData(effectiveStageConfig, prompt, resolved, threadId, turnId, attempt)
     }
 
     private suspend fun runIssueExecution(scope: CoroutineScope, data: DispatchExecutionData, issue: Issue) {
@@ -820,33 +819,48 @@ class DispatchService(
     suspend fun handleClarification(issueId: String, clarificationContent: String) {
         val issue = withContext(Dispatchers.IO) {
             val fetched = linear.fetchIssueById(issueId) ?: return@withContext null
-            linear.createComment(issueId, clarificationContent)
 
-            val blockedStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
-            if (blockedStateId != null) {
-                linear.updateIssueState(issueId, blockedStateId)
-                logger.info("state_transitioned", mapOf(
-                    "issue_id" to issueId,
-                    "from_state" to fetched.state,
-                    "to_state" to projectConfig.tracker.blockedState
-                ))
-            } else {
-                logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+            try {
+                linear.createComment(issueId, clarificationContent)
+            } catch (e: Exception) {
+                logger.failure("clarification_comment_failed", mapOf("issue_id" to issueId), e)
+                return@withContext null
             }
 
-            val creator = fetched.creator
-            val assigneeId = when {
-                creator != null && !creator.isBot -> creator.id
-                projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
-                else -> null
+            try {
+                val blockedStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
+                if (blockedStateId != null) {
+                    linear.updateIssueState(issueId, blockedStateId)
+                    logger.info("state_transitioned", mapOf(
+                        "issue_id" to issueId,
+                        "from_state" to fetched.state,
+                        "to_state" to projectConfig.tracker.blockedState
+                    ))
+                } else {
+                    logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+                }
+            } catch (e: Exception) {
+                logger.failure("clarification_state_update_failed", mapOf("issue_id" to issueId), e)
             }
-            if (assigneeId != null) {
-                linear.updateIssueAssignee(issueId, assigneeId)
-                logger.info("assignee_updated", mapOf(
-                    "issue_id" to issueId,
-                    "assignee_id" to assigneeId
-                ))
+
+            try {
+                val creator = fetched.creator
+                val assigneeId = when {
+                    creator != null && !creator.isBot -> creator.id
+                    projectConfig.tracker.projectAdmin != null -> projectConfig.tracker.projectAdmin
+                    else -> null
+                }
+                if (assigneeId != null) {
+                    linear.updateIssueAssignee(issueId, assigneeId)
+                    logger.info("assignee_updated", mapOf(
+                        "issue_id" to issueId,
+                        "assignee_id" to assigneeId
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.failure("clarification_assignee_update_failed", mapOf("issue_id" to issueId), e)
             }
+
             fetched
         } ?: return
 

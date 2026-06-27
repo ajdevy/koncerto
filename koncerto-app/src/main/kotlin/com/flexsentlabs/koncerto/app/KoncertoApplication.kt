@@ -10,6 +10,7 @@ import kotlinx.coroutines.withTimeout
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
+import java.io.File
 import java.io.FileInputStream
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -83,7 +84,8 @@ private fun buildDockerAgentImage(config: ServiceConfig, logger: StructuredLogge
 
     try {
         logger.info("docker_image_build_starting", mapOf("dockerfile" to dockerfile, "image" to image))
-        val pb = ProcessBuilder("bash", "-lc", "cd /config && docker build -f $dockerfile -t $image .")
+        val pb = ProcessBuilder("docker", "build", "-f", dockerfile, "-t", image, ".")
+            .directory(File("/config"))
         pb.inheritIO()
         val p = pb.start()
         val buildCompleted = p.waitFor(1800, TimeUnit.SECONDS)

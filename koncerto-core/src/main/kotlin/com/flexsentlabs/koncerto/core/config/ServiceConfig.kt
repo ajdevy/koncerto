@@ -100,6 +100,9 @@ data class ServiceConfig(
                 throw IllegalStateException("tracker.api_key is required")
             }
             val projectSlug = map?.get("project_slug") as? String ?: ""
+            if (projectSlug.isBlank()) {
+                throw IllegalStateException("tracker.project_slug is required")
+            }
             val requiredLabels = (map?.get("required_labels") as? List<*>)
                 ?.filterIsInstance<String>()
                 ?.map { it.trim() }

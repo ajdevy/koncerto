@@ -36,8 +36,6 @@ class DemoRecordingService(
     private val auditLogger: DemoAuditLogger,
     private val aiTimelineGenerator: AiTimelineGenerator? = null
 ) {
-    @Volatile
-    private var pendingTargetUrlOverride: String? = null
     suspend fun createTask(
         issueId: String, issueIdentifier: String, projectSlug: String?,
         platform: DemoPlatform, trigger: DemoTrigger
@@ -58,7 +56,7 @@ class DemoRecordingService(
         }
     }
 
-    suspend fun executeTask(taskId: String): DemoResult<DemoTask> {
+    suspend fun executeTask(taskId: String, targetUrl: String? = null): DemoResult<DemoTask> {
         val task = taskRepository.findById(taskId)
             ?: return DemoResult.Failure(DemoError.TaskNotFound(taskId))
         if (task.status != DemoStatus.PENDING) {
@@ -72,7 +70,7 @@ class DemoRecordingService(
             return preflight as DemoResult.Failure
         }
 
-        return executeWithRetry(task)
+        return executeWithRetry(task, targetUrl)
     }
 
     suspend fun requestRecording(
@@ -80,7 +78,6 @@ class DemoRecordingService(
         platform: DemoPlatform?, trigger: DemoTrigger,
         targetUrl: String? = null
     ): DemoResult<DemoTask> {
-        pendingTargetUrlOverride = targetUrl
         val resolvedPlatform = platform ?: resolvePlatform()
         if (resolvedPlatform == null) {
             return DemoResult.Failure(DemoError.RecorderNotAvailable("no_platform_available"))
@@ -91,7 +88,7 @@ class DemoRecordingService(
 
         val createResult = createTask(issueId, issueIdentifier, projectSlug, resolvedPlatform, trigger)
         if (createResult is DemoResult.Failure) return createResult
-        return executeTask((createResult as DemoResult.Success).value.id)
+        return executeTask((createResult as DemoResult.Success).value.id, targetUrl)
     }
 
     suspend fun deleteOldRecordings(): Int {
@@ -109,8 +106,7 @@ class DemoRecordingService(
         val keysToDelete = oldTasks.mapNotNull { it.storageKey }
         val r2Result = storage.deleteBatch(keysToDelete)
         if (r2Result is DemoResult.Failure) {
-            val deleted = taskRepository.deleteOlderThan(cutoff, keysToDelete.size)
-            return DemoResult.Success(deleted)
+            return r2Result as DemoResult<Int>
         }
         val deleted = taskRepository.deleteOlderThan(cutoff, oldTasks.size)
         auditLogger.logCleanup(deleted)
@@ -197,7 +193,7 @@ class DemoRecordingService(
         }
     }
 
-    private suspend fun executeWithRetry(task: DemoTask): DemoResult<DemoTask> {
+    private suspend fun executeWithRetry(task: DemoTask, targetUrl: String? = null): DemoResult<DemoTask> {
         var currentTask = task
         var lastError: DemoError? = null
 
@@ -205,7 +201,7 @@ class DemoRecordingService(
             taskRepository.updateStatus(currentTask.id, DemoStatus.RECORDING)
             auditLogger.logRecordingStarted(currentTask)
             metrics.recordAttempt(currentTask.platform.name, DemoStatus.RECORDING, 0)
-            val result = performRecording(currentTask)
+            val result = performRecording(currentTask, targetUrl)
 
             when (result) {
                 is DemoResult.Success -> {
@@ -307,18 +303,20 @@ class DemoRecordingService(
             durationMs = task.durationMs, fileSizeBytes = storageResult.sizeBytes
         )
 
+        partialFile.delete()
+
         val updatedTask = taskRepository.findById(task.id)
             ?: return DemoResult.Failure(DemoError.TaskNotFound(task.id))
         reporter.report(updatedTask, storageResult.url)
         return DemoResult.Success(updatedTask)
     }
 
-    private suspend fun performRecording(task: DemoTask): DemoResult<DemoTask> {
+    private suspend fun performRecording(task: DemoTask, targetUrl: String? = null): DemoResult<DemoTask> {
         val recorderResult = recorderFactory.findRecorder(task.platform)
         if (recorderResult is DemoResult.Failure) return recorderResult as DemoResult<DemoTask>
 
         val recorder = (recorderResult as DemoResult.Success).value
-        val effectiveTargetUrl = pendingTargetUrlOverride?.takeIf { it.isNotBlank() } ?: config.targetUrl
+        val effectiveTargetUrl = targetUrl?.takeIf { it.isNotBlank() } ?: config.targetUrl
         val scenarioPath = resolveScenarioPath(task)
         val recordingConfig = RecordingConfig(
             platform = task.platform,

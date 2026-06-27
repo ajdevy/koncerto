@@ -28,6 +28,7 @@ class CircuitBreaker(
     }
 
     fun recordSuccess() {
+        if (state.get() != State.HALF_OPEN.ordinal) return
         state.set(State.CLOSED.ordinal)
         failureCount.set(0)
     }

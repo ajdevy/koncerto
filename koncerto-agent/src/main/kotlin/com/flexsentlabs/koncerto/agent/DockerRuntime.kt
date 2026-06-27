@@ -222,8 +222,8 @@ class DockerRuntime(
         return try {
             val pb = ProcessBuilder("docker", "inspect", containerId, "--format={{.State.Status}}")
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText().trim()
             p.waitFor(5, TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
             output == "running"
         } catch (_: Exception) {
             false
@@ -345,8 +345,8 @@ class DockerRuntime(
             val pb = ProcessBuilder("docker", "stats", "--no-stream", containerId)
                 .redirectErrorStream(true)
             val p = pb.start()
-            val stats = p.inputStream.bufferedReader().readText()
             p.waitFor(5, TimeUnit.SECONDS)
+            val stats = p.inputStream.bufferedReader().use { it.readText() }
             if (stats.isNotBlank()) {
                 stats.lines().filter { it.isNotBlank() }.forEach { line ->
                     _output.tryEmit("[container-stats] $line")
@@ -367,8 +367,8 @@ class DockerRuntime(
             val pb = ProcessBuilder("docker", "logs", containerId)
                 .redirectErrorStream(true)
             val p = pb.start()
-            val logs = p.inputStream.bufferedReader().readText()
             p.waitFor(5, TimeUnit.SECONDS)
+            val logs = p.inputStream.bufferedReader().use { it.readText() }
             if (logs.isNotBlank()) {
                 logs.lines().filter { it.isNotBlank() }.forEach { line ->
                     _output.tryEmit("[container-log] $line")

@@ -11,7 +11,9 @@ class RecorderFactory(
         if (available != null) return DemoResult.Success(available)
         val unavailable = recorders.firstOrNull { it.platform == platform }
         return if (unavailable != null) {
-            DemoResult.Success(unavailable)
+            DemoResult.Failure(
+                com.flexsentlabs.koncerto.demo.model.DemoError.RecorderNotAvailable("${platform.name} found but unavailable")
+            )
         } else {
             DemoResult.Failure(
                 com.flexsentlabs.koncerto.demo.model.DemoError.RecorderNotAvailable(platform.name)

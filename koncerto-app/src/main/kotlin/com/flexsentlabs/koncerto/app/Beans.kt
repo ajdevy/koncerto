@@ -153,7 +153,8 @@ class Beans {
         config: ServiceConfig,
         shellHookExecutor: com.flexsentlabs.koncerto.workspace.ShellHookExecutor
     ): WorkspaceManager {
-        val firstProject = config.projects.values.first()
+        val firstProject = config.projects.values.firstOrNull()
+            ?: throw IllegalStateException("At least one project must be configured")
         return WorkspaceManager(Paths.get(firstProject.workspace.root), shellHookExecutor)
     }
 
@@ -583,8 +584,11 @@ class Beans {
             val configFile = gitDir.resolve("config")
             if (!Files.exists(configFile)) return null
             val content = Files.readString(configFile)
-            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
-                .find(content, content.indexOf("[remote \"origin\"]"))
+            val originIdx = content.indexOf("[remote \"origin\"]")
+            val match = if (originIdx >= 0) {
+                Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
+                    .find(content, originIdx)
+            } else null
             match?.groupValues?.get(1)
         } catch (_: Exception) { null }
     }

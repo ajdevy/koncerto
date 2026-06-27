@@ -65,7 +65,9 @@ class AutoReviewOrchestrator(
         if (reviewOutputPath != null && Files.exists(reviewOutputPath) && detailedReviewPath != null) {
             try {
                 Files.copy(reviewOutputPath, detailedReviewPath, StandardCopyOption.REPLACE_EXISTING)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                logger.warn("review_backup_copy_failed", mapOf("error" to (e.message ?: "unknown")))
+            }
         }
 
         val rawReviewPrompt = stage.prompt ?: buildDefaultReviewPrompt(issue)
@@ -174,9 +176,9 @@ class AutoReviewOrchestrator(
                     .directory(ws.path.toFile())
                     .redirectErrorStream(true)
                 val proc = pb.start()
-                val output = proc.inputStream.bufferedReader().readText()
-                val exitCode = proc.waitFor()
-                if (exitCode == 0) {
+                proc.waitFor()
+                val output = proc.inputStream.bufferedReader().use { it.readText() }
+                if (proc.exitValue() == 0) {
                     val commentUrl = output.trim().ifBlank { "(no url)" }
                     logger.info("pr_review_comment_posted", mapOf(
                         "issue_id" to issue.id,
@@ -298,14 +300,13 @@ class AutoReviewOrchestrator(
         }
     }
 
-    private fun readReviewStatus(workspacePath: Path): Boolean {
+    private suspend fun readReviewStatus(workspacePath: Path): Boolean {
         val statusFile = workspacePath.resolve(".review-status")
         return try {
             if (!Files.exists(statusFile)) return false
-            // Retry once on empty content to tolerate slow filesystem flushes
             val content = Files.readString(statusFile).trim()
             if (content.isEmpty()) {
-                Thread.sleep(100)
+                kotlinx.coroutines.delay(100)
                 Files.readString(statusFile).trim().lowercase() == "pass"
             } else {
                 content.lowercase() == "pass"
@@ -350,7 +351,7 @@ class AutoReviewOrchestrator(
         return try {
             val result = deployer.deploy(deployConfig)
             if (result.success) {
-                logger.info("deploy_target_project_ok", mapOf("url" to result.url!!))
+                logger.info("deploy_target_project_ok", mapOf("url" to (result.url ?: "unknown")))
                 result
             } else {
                 val prNumber = resolvePrNumber(ws.path)
@@ -359,7 +360,7 @@ class AutoReviewOrchestrator(
                 null
             }
         } catch (e: Exception) {
-            logger.warn("deploy_target_project_error", mapOf("issue_id" to issue.id), "error" to (e.message ?: "unknown"))
+            logger.warn("deploy_target_project_error", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
             null
         }
     }
@@ -388,7 +389,7 @@ class AutoReviewOrchestrator(
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
                 .start()
-            val output = pb.inputStream.bufferedReader().readText()
+            val output = pb.inputStream.bufferedReader().use { it.readText() }
             if (pb.waitFor() == 0) {
                 val match = Regex(""""number":(\d+)""").find(output)
                 match?.groupValues?.get(1)?.toIntOrNull()

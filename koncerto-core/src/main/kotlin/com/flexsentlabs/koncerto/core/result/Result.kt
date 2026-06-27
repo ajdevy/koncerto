@@ -26,9 +26,9 @@ sealed class Result<out T, out E : Throwable> {
 
 typealias EmptyResult<E> = Result<Unit, E>
 
+@Suppress("UNCHECKED_CAST")
 inline fun <T, E : Throwable> runCatchingResult(block: () -> T): Result<T, E> = try {
     Result.Success(block())
 } catch (e: Throwable) {
-    @Suppress("UNCHECKED_CAST")
     Result.Failure(e as E)
 }

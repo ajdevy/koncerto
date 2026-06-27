@@ -10,6 +10,6 @@ import reactor.core.publisher.Mono
 class DashboardController {
     @GetMapping("/", produces = [MediaType.TEXT_HTML_VALUE])
     fun dashboard(): Mono<String> = Mono.just(
-        ClassPathResource("templates/dashboard.html").inputStream.bufferedReader().readText()
+        ClassPathResource("templates/dashboard.html").inputStream.bufferedReader().use { it.readText() }
     )
 }

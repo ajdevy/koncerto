@@ -23,7 +23,7 @@ class ShellHookExecutor(
         // Drain stdout on a separate thread before waitFor to prevent OS pipe-buffer deadlock
         // when hook output exceeds ~64 KB.
         val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
-            proc.inputStream.bufferedReader().readText()
+            proc.inputStream.bufferedReader().use { it.readText() }
         }
         val finished = proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
         if (!finished) {

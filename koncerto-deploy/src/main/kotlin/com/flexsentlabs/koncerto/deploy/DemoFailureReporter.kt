@@ -33,9 +33,12 @@ class DemoFailureReporter(
                 "--body", body
             )
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText()
-            p.waitFor(10, TimeUnit.SECONDS)
-            if (p.exitValue() == 0) {
+            val completed = p.waitFor(10, TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }
+            if (!completed) {
+                p.destroyForcibly()
+                logger.warn("demo_failure_comment_timed_out", mapOf("pr" to prNumber.toString()))
+            } else if (p.exitValue() == 0) {
                 logger.info("demo_failure_comment_posted", mapOf("pr" to prNumber.toString()))
             } else {
                 logger.warn("demo_failure_comment_failed", mapOf("output" to output.take(200)))

@@ -11,11 +11,15 @@ class TokenBucketRateLimiter(
     private val tokens = AtomicLong(maxTokens.toLong())
     private val lastRefillMs = AtomicLong(System.currentTimeMillis())
 
+    private val ACQUIRE_TIMEOUT_MS = 30_000L
+
     suspend fun acquire() {
-        while (true) {
+        val deadline = System.currentTimeMillis() + ACQUIRE_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadline) {
             if (tryAcquire()) return
-            delay(refillIntervalMs)
+            delay(refillIntervalMs.coerceAtMost(1000L))
         }
+        throw RuntimeException("TokenBucketRateLimiter.acquire timed out after ${ACQUIRE_TIMEOUT_MS}ms")
     }
 
     fun tryAcquire(): Boolean {

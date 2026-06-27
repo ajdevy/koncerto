@@ -17,8 +17,8 @@ class GitHubPRQueryImpl(
                 "--limit", "50"
             )
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText()
             val ok = p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0
+            val output = p.inputStream.bufferedReader().use { it.readText() }
             if (!ok) {
                 logger.warn("gh_pr_list_failed", mapOf("repo" to repoFullName, "output" to output.take(200)))
                 return emptyList()
@@ -38,8 +38,8 @@ class GitHubPRQueryImpl(
                 "--json", "files"
             )
             val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText()
             val ok = p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0
+            val output = p.inputStream.bufferedReader().use { it.readText() }
             if (!ok) return emptyList()
             parseFileList(output)
         } catch (_: Exception) {
@@ -48,31 +48,34 @@ class GitHubPRQueryImpl(
     }
 
     private fun parsePRList(json: String): List<PRInfo> {
-        val prs = mutableListOf<PRInfo>()
         val numberRegex = Regex(""""number":(\d+)""")
         val titleRegex = Regex(""""title":"([^"]+)""")
         val headRegex = Regex(""""headRefName":"([^"]+)""")
         val baseRegex = Regex(""""baseRefName":"([^"]+)""")
-
-        val numbers = numberRegex.findAll(json).map { it.groupValues[1].toInt() }.toList()
-        val titles = titleRegex.findAll(json).map { it.groupValues[1] }.toList()
-        val heads = headRegex.findAll(json).map { it.groupValues[1] }.toList()
-        val bases = baseRegex.findAll(json).map { it.groupValues[1] }.toList()
-
         val labelRegex = Regex(""""name":"([^"]+)"}""")
-        val labelMatches = labelRegex.findAll(json).map { it.groupValues[1] }.toList()
 
-        for (i in numbers.indices) {
-            prs.add(PRInfo(
-                number = numbers.getOrElse(i) { 0 },
-                title = titles.getOrElse(i) { "" },
-                headBranch = heads.getOrElse(i) { "" },
-                baseBranch = bases.getOrElse(i) { "" },
-                labels = labelMatches,
-                checksPassing = true
-            ))
+        val prObjects = extractJsonObjects(json)
+        return prObjects.map { obj ->
+            val number = numberRegex.find(obj)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+            val title = titleRegex.find(obj)?.groupValues?.get(1) ?: ""
+            val head = headRegex.find(obj)?.groupValues?.get(1) ?: ""
+            val base = baseRegex.find(obj)?.groupValues?.get(1) ?: ""
+            val labels = labelRegex.findAll(obj).map { it.groupValues[1] }.toList()
+            PRInfo(number, title, head, base, labels, checksPassing = true)
         }
-        return prs
+    }
+
+    private fun extractJsonObjects(json: String): List<String> {
+        val objects = mutableListOf<String>()
+        var depth = 0
+        var start = -1
+        for (i in json.indices) {
+            when (json[i]) {
+                '{' -> { if (depth == 0) start = i; depth++ }
+                '}' -> { depth--; if (depth == 0 && start >= 0) { objects.add(json.substring(start, i + 1)); start = -1 } }
+            }
+        }
+        return objects
     }
 
     private fun parseFileList(json: String): List<String> {

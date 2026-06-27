@@ -15,8 +15,9 @@ class AdbRecorder : DemoRecorder {
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         try {
             val check = ProcessBuilder("adb", "devices").start()
-            val output = check.inputStream.bufferedReader().readText()
-            check.waitFor(5, TimeUnit.SECONDS) && check.exitValue() == 0 && output.contains("device")
+            val checkCompleted = check.waitFor(5, TimeUnit.SECONDS)
+            val output = if (checkCompleted) check.inputStream.bufferedReader().use { it.readText() } else ""
+            checkCompleted && check.exitValue() == 0 && output.contains("device")
         } catch (_: Exception) {
             false
         }
@@ -49,7 +50,7 @@ class AdbRecorder : DemoRecorder {
                 }
 
                 if (recordProcess.exitValue() != 0) {
-                    val stderr = recordProcess.inputStream.bufferedReader().readText()
+                    val stderr = recordProcess.inputStream.bufferedReader().use { it.readText() }
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(
                             RuntimeException("adb screenrecord exited with code ${recordProcess.exitValue()}: $stderr")
