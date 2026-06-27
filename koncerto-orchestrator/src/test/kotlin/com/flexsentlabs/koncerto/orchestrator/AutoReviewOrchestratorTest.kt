@@ -83,6 +83,27 @@ class AutoReviewOrchestratorTest {
         labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
     )
 
+    private val validScenarioYaml = """
+        demo_scenario:
+          description: "Test"
+          steps:
+            - action: wait
+              ms: 1000
+    """.trimIndent()
+
+    private fun trackingScenarioGenerator(): Pair<DemoScenarioGenerator, () -> Int> {
+        var callCount = 0
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { _, _, _ ->
+                callCount++
+                validScenarioYaml
+            }
+        )
+        return gen to { callCount }
+    }
+
     private fun fakeRunner(succeed: Boolean = true): AgentRunner = object : AgentRunner {
         private val flow = MutableSharedFlow<AgentEvent>()
         override fun events() = flow.asSharedFlow()
@@ -278,5 +299,61 @@ class AutoReviewOrchestratorTest {
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision !is AutoReviewOrchestrator.ReviewDecision.Pass).isTrue()
         assertThat(invoked).isFalse()
+    }
+
+    @Test
+    fun `demoScenarioGenerator generate is called when review passes`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val (gen, callCount) = trackingScenarioGenerator()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = gen
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(callCount()).isEqualTo(1)
+    }
+
+    @Test
+    fun `demoScenarioGenerator generate is NOT called when review fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "fail")
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val (gen, callCount) = trackingScenarioGenerator()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = gen
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(callCount()).isEqualTo(0)
     }
 }
