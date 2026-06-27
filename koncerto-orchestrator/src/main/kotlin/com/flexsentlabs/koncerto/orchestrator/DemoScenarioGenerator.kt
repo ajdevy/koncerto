@@ -16,7 +16,47 @@ class DemoScenarioGenerator(
     }
 
     fun generate(issue: Issue, workspace: Workspace): String? {
-        TODO("implement in Task 3")
+        val prompt = buildPrompt(issue, workspace)
+        val output = runWithFallback(prompt, workspace.path.toFile()) ?: return null
+        val block = extractScenarioBlock(output) ?: run {
+            logger.warn("demo_scenario_extract_failed", mapOf("issue_id" to issue.id))
+            return null
+        }
+        return saveScenario(issue, block)
+    }
+
+    private fun runWithFallback(prompt: String, workDir: File): String? {
+        val models = listOf("opencode-free-1", "opencode-free-2", "opencode-free-3")
+        for (model in models) {
+            val cmd = opencodeCommand.split(" ") + listOf("run", "--model", model, prompt)
+            val output = processRunner.run(cmd, workDir, 60)
+            if (output != null) return output
+            logger.warn("demo_scenario_model_failed", mapOf("model" to model))
+        }
+        logger.warn("demo_scenario_all_models_failed", mapOf("models" to models.joinToString(",")))
+        return null
+    }
+
+    private fun saveScenario(issue: Issue, block: String): String? {
+        val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
+        return try {
+            java.nio.file.Files.createDirectories(scenarioDir)
+            val uuidPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
+            val identPath = scenarioDir.resolve("${issue.identifier}-scenario.yaml")
+            java.nio.file.Files.writeString(uuidPath, block)
+            java.nio.file.Files.writeString(identPath, block)
+            logger.info("demo_scenario_saved", mapOf(
+                "issue_id" to issue.id,
+                "issue_identifier" to issue.identifier
+            ))
+            uuidPath.toString()
+        } catch (e: Exception) {
+            logger.warn("demo_scenario_save_failed", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            null
+        }
     }
 
     internal fun buildPrompt(issue: Issue, workspace: Workspace): String {

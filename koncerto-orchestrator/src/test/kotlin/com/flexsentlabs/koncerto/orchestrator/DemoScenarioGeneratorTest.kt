@@ -6,8 +6,10 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.nio.file.Path
 
 class DemoScenarioGeneratorTest {
@@ -142,5 +144,93 @@ class DemoScenarioGeneratorTest {
         )
         val prompt = generator().buildPrompt(issue, workspace)
         assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
+    }
+
+    private fun generatorWithRunner(runner: DemoScenarioGenerator.ProcessRunner) =
+        DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), processRunner = runner)
+
+    private val validScenarioOutput = """
+        Here is your demo scenario:
+        demo_scenario:
+          description: "Checkout flow"
+          steps:
+            - action: click
+              selector: "text=Checkout"
+            - action: wait
+              ms: 1000
+    """.trimIndent()
+
+    @Test
+    fun `generate returns scenario path when opencode succeeds on first model`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "Add checkout", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val calledModels = mutableListOf<String>()
+        val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
+            calledModels += cmd[cmd.indexOf("--model") + 1]
+            validScenarioOutput
+        }
+        val gen = generatorWithRunner(runner)
+        val result = gen.generate(issue, workspace)
+
+        assertThat(result).isNotNull()
+        assertThat(calledModels).isEqualTo(listOf("opencode-free-1"))
+        val savedFile = File("/tmp/koncerto-demo/issue-1-scenario.yaml")
+        assertThat(savedFile.exists()).isEqualTo(true)
+        assertThat(savedFile.readText().contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
+    fun `generate falls back to second model when first fails`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-2", identifier = "T-2", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val calledModels = mutableListOf<String>()
+        val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
+            val model = cmd[cmd.indexOf("--model") + 1]
+            calledModels += model
+            if (model == "opencode-free-1") null else validScenarioOutput
+        }
+        val gen = generatorWithRunner(runner)
+        val result = gen.generate(issue, workspace)
+
+        assertThat(result).isNotNull()
+        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2"))
+    }
+
+    @Test
+    fun `generate returns null when all models fail`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-3", identifier = "T-3", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val runner = DemoScenarioGenerator.ProcessRunner { _, _, _ -> null }
+        val gen = generatorWithRunner(runner)
+        val result = gen.generate(issue, workspace)
+
+        assertThat(result).isNull()
+    }
+
+    @Test
+    fun `generate returns null when output has no demo_scenario block`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-4", identifier = "T-4", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val runner = DemoScenarioGenerator.ProcessRunner { _, _, _ -> "Sorry, I cannot help with that." }
+        val gen = generatorWithRunner(runner)
+        val result = gen.generate(issue, workspace)
+
+        assertThat(result).isNull()
     }
 }
