@@ -4,8 +4,6 @@ import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.workspace.Workspace
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
 
 class DemoScenarioGenerator(
