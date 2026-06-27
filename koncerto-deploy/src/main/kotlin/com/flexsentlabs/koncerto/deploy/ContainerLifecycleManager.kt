@@ -61,7 +61,7 @@ class ContainerLifecycleManager(
             ).redirectErrorStream(true)
             val p = pb.start()
             val output = p.inputStream.bufferedReader().readText()
-            val ok = p.waitFor(120, TimeUnit.SECONDS) && p.exitValue() == 0
+            val ok = p.waitFor(600, TimeUnit.SECONDS) && p.exitValue() == 0
             if (ok) {
                 logger.info("docker_build_ok", mapOf("tag" to (tag as Any?)))
                 Result.success(Unit)

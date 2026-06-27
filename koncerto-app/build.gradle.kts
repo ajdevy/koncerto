@@ -5,6 +5,10 @@ plugins {
     id("io.spring.dependency-management")
 }
 
+springBoot {
+    mainClass.set("com.flexsentlabs.koncerto.app.KoncertoApplicationKt")
+}
+
 dependencies {
     implementation(project(":koncerto-core"))
     implementation(project(":koncerto-logging"))
@@ -49,4 +53,13 @@ tasks.register<Test>("uiTest") {
     }
     group = "verification"
     description = "Runs Playwright UI tests against the dashboard"
+}
+
+tasks.register<JavaExec>("recordDemo") {
+    group = "demo"
+    description = "Record a demo for the given issue identifier (e.g. FLE-51)"
+    mainClass.set("com.flexsentlabs.koncerto.app.DemoRecordingTrigger")
+    classpath = sourceSets.main.get().runtimeClasspath
+    systemProperty("spring.main.web-application-type", "none")
+    args = project.findProperty("demoArgs")?.toString()?.split(" ") ?: emptyList()
 }
