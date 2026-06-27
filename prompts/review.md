@@ -66,24 +66,3 @@ List categories reviewed with no issues found.
 
 ---
 End with a summary verdict: "✅ Review PASSED" or "❌ Review FAILED — found blocking issue(s)".
-
-## Demo Scenario (if review passed)
-
-If the review passes, generate a demo scenario for the Playwright screen recorder. Read `prompts/demo-scenario.md` for the full schema — **only use actions documented there**. Output as:
-
-```yaml demo_scenario
-description: "What this scenario demonstrates"
-steps:
-  - action: navigate
-    url: "/"
-  - action: wait
-    ms: 1000
-```
-
-Rules:
-- Only use actions from the schema doc (`scroll`, `click`, `type`, `select`, `wait`, `wait_for_selector`, `scroll_to`, `set_viewport`, `highlight`, `assert`, `navigate`, `hover`, `keypress`, `screenshot`)
-- Each step must have only fields listed in that action's spec — extra fields are silently ignored
-- Use exact selector values that match the PR's actual markup
-- **`navigate` URLs must be relative** (e.g. `/pricing`). Never use `http://localhost:PORT` — the app runs on a dynamic port
-- 5-40 steps, natural pacing with waits between interactions
-- Demonstrate real changes in this PR, not generic page exploration
