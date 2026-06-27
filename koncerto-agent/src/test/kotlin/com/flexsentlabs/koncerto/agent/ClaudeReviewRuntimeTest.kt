@@ -1,11 +1,17 @@
 package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
+import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Test
 
 class ClaudeReviewRuntimeTest {
@@ -78,5 +84,67 @@ class ClaudeReviewRuntimeTest {
         val runtime = ClaudeReviewRuntime("echo ok", ws, noopLogger())
         // Old .filter{isDigit()} would extract "042" = 42 > 0 → wrongly return true
         assertThat(runtime.hasNonZeroCritical("**Critical:** 0 issues (42 hints)")).isFalse()
+    }
+
+    @Test
+    fun `send turn start runs review and writes pass status`() = runBlocking {
+        val ws = Files.createTempDirectory("claude-review-")
+        val runtime = ClaudeReviewRuntime("cat", ws, noopLogger())
+        runtime.start(null)
+
+        val events = AgentRuntimeTestSupport.collectEventsDuring(runtime, timeoutMs = 10_000) {
+            runtime.send(
+                "turn/start",
+                buildJsonObject { put("input", JsonPrimitive("Review this change")) },
+            )
+        }
+        runtime.stop()
+
+        assertThat(events.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()).isNotNull()
+        assertThat(Files.readString(ws.resolve(".review-status"))).isEqualTo("pass")
+        assertThat(Files.exists(ws.resolve(".review-output"))).isTrue()
+    }
+
+    @Test
+    fun `send turn start with fail marker writes fail status`() = runBlocking {
+        val ws = Files.createTempDirectory("claude-review-fail-")
+        val runtime = ClaudeReviewRuntime("""bash -lc 'printf "%s\n" "❌ FAIL" "issue found"'""", ws, noopLogger())
+        runtime.start(null)
+
+        AgentRuntimeTestSupport.collectEventsDuring(runtime, timeoutMs = 10_000) {
+            runtime.send(
+                "turn/start",
+                buildJsonObject { put("input", JsonPrimitive("Review this change")) },
+            )
+        }
+        runtime.stop()
+
+        assertThat(Files.readString(ws.resolve(".review-status"))).isEqualTo("fail")
+    }
+
+    @Test
+    fun `send turn start without input does not crash`() = runBlocking {
+        val ws = Files.createTempDirectory("claude-review-no-input-")
+        val runtime = ClaudeReviewRuntime("cat", ws, noopLogger())
+        runtime.start(null)
+        runtime.send("turn/start", null)
+        runtime.stop()
+    }
+
+    @Test
+    fun `send non turn start method returns ok without spawning`() {
+        val ws = Files.createTempDirectory("claude-review-other-")
+        val runtime = ClaudeReviewRuntime("cat", ws, noopLogger())
+        val id = runtime.send("initialize", null)
+        assertThat(id).isEqualTo("ok")
+        runtime.stop()
+    }
+
+    @Test
+    fun `isAlive false before review starts`() {
+        val ws = Files.createTempDirectory("claude-review-alive-")
+        val runtime = ClaudeReviewRuntime("cat", ws, noopLogger())
+        assertThat(runtime.isAlive()).isFalse()
+        runtime.stop()
     }
 }

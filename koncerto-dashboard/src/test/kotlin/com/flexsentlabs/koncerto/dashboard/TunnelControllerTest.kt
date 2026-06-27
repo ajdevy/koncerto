@@ -110,4 +110,29 @@ class TunnelControllerTest {
             server.stop(0)
         }
     }
+
+    @Test
+    fun `tunnel returns inactive when tunnel has null config`() {
+        val server = HttpServer.create(InetSocketAddress(0), 0)
+        server.createContext("/api/tunnels") { exchange ->
+            val json = """{"tunnels":[{"public_url":"https://abc.ngrok.io","config":null}]}"""
+            val bytes = json.toByteArray(Charsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.write(bytes)
+            exchange.responseBody.close()
+        }
+        server.executor = null
+        server.start()
+        try {
+            val port = server.address.port
+            val controller = TunnelController(ngrokApiUrl = "http://localhost:$port")
+            val response = controller.getTunnel().block()
+            assertThat(response).isNotNull()
+            assertThat(response!!.status).isEqualTo("inactive")
+            assertThat(response.url).isNull()
+        } finally {
+            server.stop(0)
+        }
+    }
 }

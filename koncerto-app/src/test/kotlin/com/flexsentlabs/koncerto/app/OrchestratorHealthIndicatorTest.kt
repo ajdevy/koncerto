@@ -84,33 +84,65 @@ class OrchestratorHealthIndicatorTest {
         assertThat((health.details["uptimeMs"] as Number).toLong() > 0L).isTrue()
     }
 
+    @Test
+    fun `health aggregates counts across multiple projects`() {
+        val stateA = RuntimeState().apply {
+            running["1"] = runningEntry("1", "ABC-1")
+            addBlocked("blocked-a")
+        }
+        val stateB = RuntimeState().apply {
+            running["2"] = runningEntry("2", "ABC-2")
+            running["3"] = runningEntry("3", "ABC-3")
+            retryAttempts["r1"] = RetryEntry(
+                issueId = "r1", identifier = "ABC-4",
+                attempt = 1, dueAtMs = System.currentTimeMillis() + 60_000, error = "timeout"
+            )
+        }
+        val orch = createOrchestrator(
+            runtimeStates = mapOf("proj-a" to stateA, "proj-b" to stateB),
+            projectSlugs = listOf("proj-a", "proj-b")
+        )
+        val health = OrchestratorHealthIndicator(orch).health()
+
+        assertThat(health.details["runningAgents"]).isEqualTo(3)
+        assertThat(health.details["blockedIssues"]).isEqualTo(1)
+        assertThat(health.details["retryingIssues"]).isEqualTo(1)
+    }
+
     // ── helpers ────────────────────────────────────────────────
 
-    private fun createOrchestrator(state: RuntimeState = RuntimeState()): Orchestrator {
+    private fun createOrchestrator(state: RuntimeState = RuntimeState()): Orchestrator =
+        createOrchestrator(mapOf("proj" to state), listOf("proj"))
+
+    private fun createOrchestrator(
+        runtimeStates: Map<String, RuntimeState>,
+        projectSlugs: List<String> = runtimeStates.keys.toList()
+    ): Orchestrator {
         val root = Files.createTempDirectory("health-test-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val projects = projectSlugs.associateWith { slug ->
+            ProjectConfig(
+                tracker = TrackerConfig(
+                    kind = "linear", endpoint = "x", apiKey = "k", projectSlug = slug
+                ),
+                workspace = WorkspaceConfig(root = "/tmp"),
+                agent = AgentProjectConfig(
+                    kind = "codex", command = "codex app-server",
+                    maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
+                    turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
+                    stages = emptyMap()
+                )
+            )
+        }
         return Orchestrator(
-            config = ServiceConfig(
-                projects = mapOf("proj" to ProjectConfig(
-                    tracker = TrackerConfig(
-                        kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p"
-                    ),
-                    workspace = WorkspaceConfig(root = "/tmp"),
-                    agent = AgentProjectConfig(
-                        kind = "codex", command = "codex app-server",
-                        maxConcurrentAgents = 10, maxTurns = 1, maxRetryBackoffMs = 300000,
-                        turnTimeoutMs = 3600000, readTimeoutMs = 5000, stallTimeoutMs = 300000,
-                        stages = emptyMap()
-                    )
-                ))
-            ),
+            config = ServiceConfig(projects = projects),
             linearClientFactory = { FakeLinearClient() },
             workspaceManagerFactory = { mgr },
             agentRunner = FakeAgentRunner(),
             workflowCache = WorkflowCache(),
             logger = StructuredLogger(emptyList()),
             scope = CoroutineScope(Dispatchers.Unconfined),
-            runtimeStates = mapOf("proj" to state)
+            runtimeStates = runtimeStates
         )
     }
 

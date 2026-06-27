@@ -9,15 +9,20 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-class AdbRecorder : DemoRecorder {
+class AdbRecorder(
+    private val processStarter: ProcessStarter = { cmd, redirect ->
+        ProcessBuilder(cmd).apply { if (redirect) redirectErrorStream(true) }.start()
+    }
+) : DemoRecorder {
     override val platform: DemoPlatform = DemoPlatform.ADB
 
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         try {
-            val check = ProcessBuilder("adb", "devices").start()
+            val check = processStarter(listOf("adb", "devices"), false)
             val checkCompleted = check.waitFor(5, TimeUnit.SECONDS)
             val output = if (checkCompleted) check.inputStream.bufferedReader().use { it.readText() } else ""
-            checkCompleted && check.exitValue() == 0 && output.contains("device")
+            checkCompleted && check.exitValue() == 0 &&
+                Regex("""^\S+\s+device\s*$""", RegexOption.MULTILINE).containsMatchIn(output)
         } catch (_: Exception) {
             false
         }
@@ -33,13 +38,16 @@ class AdbRecorder : DemoRecorder {
                 val devicePath = "/sdcard/${outputFile.name}"
                 val startTime = System.currentTimeMillis()
 
-                val recordProcess = ProcessBuilder(
-                    "adb", "shell", "screenrecord",
-                    "--bit-rate", "2000000",
-                    "--size", "${config.width}x${config.height}",
-                    "--time-limit", config.maxDurationSeconds.toString(),
-                    devicePath
-                ).redirectErrorStream(true).start()
+                val recordProcess = processStarter(
+                    listOf(
+                        "adb", "shell", "screenrecord",
+                        "--bit-rate", "2000000",
+                        "--size", "${config.width}x${config.height}",
+                        "--time-limit", config.maxDurationSeconds.toString(),
+                        devicePath
+                    ),
+                    true
+                )
 
                 val completed = recordProcess.waitFor(config.maxDurationSeconds + 30L, TimeUnit.SECONDS)
                 if (!completed) {
@@ -58,9 +66,10 @@ class AdbRecorder : DemoRecorder {
                     )
                 }
 
-                val pullProcess = ProcessBuilder(
-                    "adb", "pull", devicePath, outputFile.absolutePath
-                ).redirectErrorStream(true).start()
+                val pullProcess = processStarter(
+                    listOf("adb", "pull", devicePath, outputFile.absolutePath),
+                    true
+                )
 
                 val pullCompleted = pullProcess.waitFor(30, TimeUnit.SECONDS)
                 if (!pullCompleted || pullProcess.exitValue() != 0) {
@@ -70,8 +79,10 @@ class AdbRecorder : DemoRecorder {
                     )
                 }
 
-                val deleteProcess = ProcessBuilder("adb", "shell", "rm", "-f", devicePath)
-                    .redirectErrorStream(true).start()
+                val deleteProcess = processStarter(
+                    listOf("adb", "shell", "rm", "-f", devicePath),
+                    true
+                )
                 deleteProcess.waitFor(5, TimeUnit.SECONDS)
 
                 val durationMs = System.currentTimeMillis() - startTime

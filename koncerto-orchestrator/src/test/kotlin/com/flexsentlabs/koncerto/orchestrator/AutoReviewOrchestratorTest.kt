@@ -19,6 +19,9 @@ import com.flexsentlabs.koncerto.core.model.UserRef
 import com.flexsentlabs.koncerto.core.result.EmptyResult
 import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.core.tracker.TrackerClient
+import com.flexsentlabs.koncerto.deploy.DeployConfig
+import com.flexsentlabs.koncerto.deploy.DeployResult
+import com.flexsentlabs.koncerto.deploy.ProjectDeployer
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
@@ -487,5 +490,190 @@ class AutoReviewOrchestratorTest {
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
         assertThat(notified).isTrue()
+    }
+
+    private fun initGitOrigin(workspace: Path, repo: String = "owner/repo") {
+        Files.createDirectories(workspace.resolve(".git"))
+        Files.writeString(
+            workspace.resolve(".git/config"),
+            """
+            [remote "origin"]
+                url = git@github.com:$repo.git
+            """.trimIndent()
+        )
+    }
+
+    private class RecordingProjectDeployer(
+        var deployResult: DeployResult = DeployResult.success("http://localhost:8080")
+    ) : ProjectDeployer {
+        val deployCalls = mutableListOf<DeployConfig>()
+        val cleanupCalls = mutableListOf<DeployConfig>()
+
+        override suspend fun deploy(config: DeployConfig): DeployResult {
+            deployCalls.add(config)
+            return deployResult
+        }
+
+        override suspend fun cleanup(config: DeployConfig) {
+            cleanupCalls.add(config)
+        }
+    }
+
+    private fun reviewStage() = StageAgentConfig(
+        prompt = null, model = "claude-sonnet", effort = null, maxConcurrent = null,
+        agentKind = "claude", command = "claude",
+        onCompleteState = "Done", onFailureState = "In Progress",
+        maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+    )
+
+    private fun passingReviewOrchestrator(
+        workspaceDir: Path,
+        deployer: RecordingProjectDeployer? = null,
+        deployRepoFullName: String? = null,
+        ghProcessRunner: GhProcessRunner? = null,
+        onReviewPassed: (suspend (Issue, String?) -> String?)? = null
+    ): AutoReviewOrchestrator {
+        val issueDir = workspaceDir.resolve("T-1")
+        Files.createDirectories(issueDir)
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        return AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            targetProjectDeployer = deployer,
+            deployRepoFullName = deployRepoFullName,
+            ghProcessRunner = ghProcessRunner ?: { _, _ -> GhProcessResult(0, "") },
+            onReviewPassed = onReviewPassed
+        )
+    }
+
+    @Test
+    fun `writeReviewExhaustionFile writes json marker on max attempts`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(
+                stages = mapOf("in review" to reviewStage().copy(maxReviewAttempts = 1)),
+                workspaceRoot = workspaceDir.toString()
+            ),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+        val exhaustionFile = workspaceDir.resolve("T-1").resolve(".review-exhausted")
+        assertThat(Files.exists(exhaustionFile)).isTrue()
+        val content = Files.readString(exhaustionFile)
+        assertThat(content.contains("issue-1")).isTrue()
+        assertThat(content.contains("total_attempts")).isTrue()
+        assertThat(content.contains("Review gate failed")).isTrue()
+    }
+
+    @Test
+    fun `resolveRepoFullName reads owner repo from workspace git config`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `resolveRepoFullName falls back to deployRepoFullName when git config missing`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(
+            workspaceDir,
+            deployer = deployer,
+            deployRepoFullName = "fallback/repo"
+        ).onCodingComplete(issue())
+        assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("fallback/repo")
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment posts stripped review body via gh runner`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(
+            issueDir.resolve(".review-output-detailed"),
+            """
+            Claude configuration file not found at: /missing
+            ---
+            ✅ PASS
+            Looks good to merge.
+            """.trimIndent()
+        )
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, workDir ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> {
+                    val bodyFileIndex = command.indexOf("--body-file")
+                    if (bodyFileIndex >= 0) {
+                        capturedBody = Files.readString(Path.of(command[bodyFileIndex + 1]))
+                    }
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        passingReviewOrchestrator(
+            workspaceDir,
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ -> "https://demo.example/rec" }
+        ).onCodingComplete(issue())
+
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!.contains("Claude Review #1")).isTrue()
+        assertThat(capturedBody!!.contains("Looks good to merge.")).isTrue()
+        assertThat(capturedBody!!.contains("Watch Demo Recording")).isTrue()
+    }
+
+    @Test
+    fun `deployTargetProject and cleanupDemoDeploy run on successful review pass`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        val deployer = RecordingProjectDeployer(
+            deployResult = DeployResult.success("http://localhost:32768", tag = "koncerto-demo-t-1")
+        )
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue(id = "issue-1", identifier = "T-1"))
+
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
+        assertThat(deployer.deployCalls.single().prBranch).isEqualTo("T-1")
+        assertThat(deployer.cleanupCalls.size).isEqualTo(1)
+        assertThat(deployer.cleanupCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `deployTargetProject skips cleanup when deploy fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        val deployer = RecordingProjectDeployer(
+            deployResult = DeployResult.failure("build failed", logs = "error log")
+        )
+        val decision = passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
+        assertThat(deployer.cleanupCalls.size).isEqualTo(0)
     }
 }

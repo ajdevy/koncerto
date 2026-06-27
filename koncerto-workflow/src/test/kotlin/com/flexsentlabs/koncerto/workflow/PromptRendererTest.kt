@@ -2,8 +2,8 @@ package com.flexsentlabs.koncerto.workflow
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
-import liqp.Template
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.assertThrows
 
 class PromptRendererTest {
@@ -67,5 +67,23 @@ class PromptRendererTest {
     fun `Instant value renders`() {
         val out = PromptRenderer.render("{{ ts }}", mapOf("ts" to java.time.Instant.parse("2025-01-01T00:00:00Z")))
         assertThat(out).isEqualTo("2025-01-01T00:00:00Z")
+    }
+
+    @Test
+    fun `blank template returns empty string`() {
+        val out = PromptRenderer.render("   \t\n  ", emptyMap())
+        assertThat(out).isEqualTo("")
+    }
+
+    @Test
+    fun `List value renders`() {
+        val out = PromptRenderer.render("{{ tags }}", mapOf("tags" to listOf("alpha", "beta")))
+        assertEquals("alphabeta", out)
+    }
+
+    @Test
+    fun `null nested in map stringifies to empty`() {
+        val out = PromptRenderer.render("{{ data }}", mapOf("data" to mapOf("present" to "yes", "absent" to null)))
+        assertThat(out).isEqualTo("{present=yes, absent=}")
     }
 }

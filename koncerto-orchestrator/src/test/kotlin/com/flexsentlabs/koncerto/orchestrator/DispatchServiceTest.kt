@@ -22,6 +22,9 @@ import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkplanConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
 import com.flexsentlabs.koncerto.core.config.WorkflowDefinition
+import com.flexsentlabs.koncerto.core.config.GitConfig
+import com.flexsentlabs.koncerto.core.quota.QuotaConfig
+import com.flexsentlabs.koncerto.core.quota.QuotaEnforcer
 import com.flexsentlabs.koncerto.orchestrator.RetryEntry
 import com.flexsentlabs.koncerto.core.model.BlockerRef
 import com.flexsentlabs.koncerto.core.model.Issue
@@ -35,11 +38,15 @@ import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
+import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 
@@ -665,13 +672,25 @@ class DispatchServiceTest {
         candidates: List<Issue>? = null,
         runner: AgentRunner = CollectingAgentRunner(),
         cache: WorkflowCache? = null,
-        workspaces: WorkspaceManager? = null
+        workspaces: WorkspaceManager? = null,
+        gitWorkflow: GitWorkflow? = null,
+        quotaEnforcer: QuotaEnforcer? = null,
+        quotaConfig: QuotaConfig? = null,
+        subtaskOrchestrator: SubtaskOrchestrator? = null,
+        workplanParser: WorkplanParser? = null
     ): DispatchService {
         val cfg = projectConfig ?: DispatchServiceTest.config()
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
         val logger = StructuredLogger(emptyList())
         val client = linear ?: candidates?.let { SimpleLinear(it) } ?: SimpleLinear(emptyList())
-        return DispatchService(cfg, state, client, runner, wc, logger, workspaces)
+        return DispatchService(
+            cfg, state, client, runner, wc, logger, workspaces,
+            quotaEnforcer = quotaEnforcer,
+            quotaConfig = quotaConfig,
+            subtaskOrchestrator = subtaskOrchestrator,
+            workplanParser = workplanParser,
+            gitWorkflow = gitWorkflow
+        )
     }
 
     private fun createServiceWithState(
@@ -1080,6 +1099,161 @@ class DispatchServiceTest {
         assertThat(trackingLinear.createdIssueTitle).isEqualTo("Follow-up: ENG-1")
         assertThat(trackingLinear.linkedSourceId).isNull()
     }
+
+    @Test
+    fun `scheduleRetry exhaustion clears retry and transitions to blocked`() = runBlocking {
+        val projectConfig = config().copy(
+            agent = config().agent.copy(maxRetries = 2),
+            tracker = config().tracker.copy(blockedState = "Blocked")
+        )
+        val trackingLinear = TrackingLinearClient()
+        val state = RuntimeState()
+        val svc = createService(projectConfig = projectConfig, state = state, linear = trackingLinear)
+        val testIssue = issue("1", "A-1", "Todo")
+        svc.scheduleRetry(testIssue, "err1")
+        svc.scheduleRetry(testIssue, "err2")
+        svc.scheduleRetry(testIssue, "err3")
+        assertThat(state.retryAttempts.containsKey("1")).isFalse()
+        assertThat(trackingLinear.transitionedIssueId).isEqualTo("1")
+        assertThat(trackingLinear.transitionedStateId).isEqualTo("done-id")
+    }
+
+    @Test
+    fun `resolveStageOverride dispatches todo issue to in review when remote branch exists`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        workspaces.ensureWorkspace("A-1")
+        val stages = mapOf(
+            "todo" to StageAgentConfig(
+                prompt = "todo-prompt", model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null
+            ),
+            "in review" to StageAgentConfig(
+                prompt = "review-prompt", model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null
+            )
+        )
+        val runner = CollectingAgentRunner()
+        val gitWorkflow = FakeGitWorkflowForDispatch(remoteExists = true)
+        val svc = createService(
+            projectConfig = config(stages = stages),
+            runner = runner,
+            workspaces = workspaces,
+            gitWorkflow = gitWorkflow,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatch(svc)
+        assertThat(runner.runArgs.first().prompt).isEqualTo("review-prompt")
+    }
+
+    @Test
+    fun `resolveStageOverride ignored for non-todo issues`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        workspaces.ensureWorkspace("A-1")
+        val stages = mapOf(
+            "in progress" to StageAgentConfig(
+                prompt = "progress-prompt", model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null
+            ),
+            "in review" to StageAgentConfig(
+                prompt = "review-prompt", model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = null
+            )
+        )
+        val runner = CollectingAgentRunner()
+        val gitWorkflow = FakeGitWorkflowForDispatch(remoteExists = true)
+        val projectConfig = config(stages = stages).copy(
+            tracker = config().tracker.copy(activeStates = listOf("Todo", "In Progress"))
+        )
+        val svc = createService(
+            projectConfig = projectConfig,
+            runner = runner,
+            workspaces = workspaces,
+            gitWorkflow = gitWorkflow,
+            candidates = listOf(issue("1", "A-1", "In Progress"))
+        )
+        runDispatch(svc)
+        assertThat(runner.runArgs.first().prompt).isEqualTo("progress-prompt")
+    }
+
+    @Test
+    fun `handleWorkplanIfPresent launches subtask orchestrator on completion`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = workspaces.ensureWorkspace("A-1")
+        val workplanDir = workspace.path.resolve("_koncerto")
+        Files.createDirectories(workplanDir)
+        val manifest = SubtaskManifest(
+            issueId = "A-1",
+            subtasks = listOf(SubtaskDef(id = "step-1", description = "Step", prompt = "do-work", dependsOn = emptyList()))
+        )
+        Files.writeString(workplanDir.resolve("workplan.json"), Json.encodeToString(manifest))
+
+        val executed = AtomicInteger(0)
+        val subtaskOrchestrator = SubtaskOrchestrator(
+            subtaskRunner = FakeSubtaskRunnerForDispatch { executed.incrementAndGet(); Result.Success(Unit) },
+            gitWorkflow = FakeGitWorkflowForDispatch(remoteExists = false),
+            logger = StructuredLogger(emptyList())
+        )
+        val projectConfig = config().copy(
+            agent = config().agent.copy(
+                workplan = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.SEQUENTIAL)
+            )
+        )
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            projectConfig = projectConfig,
+            runner = runner,
+            workspaces = workspaces,
+            subtaskOrchestrator = subtaskOrchestrator,
+            workplanParser = WorkplanParser(),
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        runBlocking { svc.awaitBackgroundJobs() }
+        assertThat(executed.get()).isEqualTo(1)
+    }
+
+    @Test
+    fun `agent messaging wrappers route and acknowledge messages`() {
+        val (svc, _) = createServiceWithState()
+        svc.registerAgent("agent-1", "issue-1")
+        val messageId = svc.sendAgentMessage("agent-2", "agent-1", "hello")
+        assertThat(svc.getAgentMessages("agent-1").single().payload).isEqualTo("hello")
+        assertThat(svc.ackAgentMessage(messageId)).isTrue()
+        assertThat(svc.getAgentMessages("agent-1").size).isEqualTo(0)
+        assertThat(svc.resolveAgentIdToIssueId("agent-1")).isEqualTo("issue-1")
+        svc.unregisterAgent("agent-1")
+        assertThat(svc.resolveAgentIdToIssueId("agent-1")).isNull()
+    }
+
+    @Test
+    fun `dispatch skipped when quota enforcer has no remaining capacity`() {
+        val enforcer = QuotaEnforcer()
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo")),
+            quotaEnforcer = enforcer,
+            quotaConfig = QuotaConfig(maxConcurrentAgents = 0)
+        )
+        runDispatch(svc)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(enforcer.getActiveCount("p")).isEqualTo(0)
+    }
+
+    @Test
+    fun `quota enforcer releases capacity after successful dispatch`() {
+        val enforcer = QuotaEnforcer()
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo")),
+            quotaEnforcer = enforcer,
+            quotaConfig = QuotaConfig(maxConcurrentAgents = 1)
+        )
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+        assertThat(enforcer.getActiveCount("p")).isEqualTo(0)
+    }
 }
 
 private class SimpleLinear(private val candidates: List<Issue>) : LinearClient {
@@ -1231,5 +1405,27 @@ private class FailingRunner(private val errorMsg: String) : AgentRunner {
         stallTimeoutMs: Long?
     ): EmptyResult<IllegalStateException> {
         return Result.Failure(IllegalStateException(errorMsg))
+    }
+}
+
+private class FakeGitWorkflowForDispatch(
+    private val remoteExists: Boolean
+) : GitWorkflow(GitConfig(enabled = true), StructuredLogger(emptyList())) {
+    override fun remoteBranchExists(branchName: String, workspacePath: Path): Boolean = remoteExists
+}
+
+private class FakeSubtaskRunnerForDispatch(
+    private val block: suspend () -> Unit
+) : SubtaskRunner {
+    override suspend fun runSubtask(
+        workspacePath: Path,
+        prompt: String,
+        kind: String,
+        command: String?,
+        turnTimeoutMs: Long,
+        stallTimeoutMs: Long
+    ): EmptyResult<IllegalStateException> {
+        block()
+        return Result.Success(Unit)
     }
 }

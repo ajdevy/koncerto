@@ -22,6 +22,7 @@ import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
 import com.flexsentlabs.koncerto.core.config.WorkflowDefinition
+import com.flexsentlabs.koncerto.core.config.NotificationsConfig
 import com.flexsentlabs.koncerto.core.model.BlockerRef
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.result.EmptyResult
@@ -32,6 +33,7 @@ import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
+import java.time.Instant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -1114,6 +1116,102 @@ class OrchestratorTest {
         assertThat(runner.dispatched.map { it.id }.toSet()).isEqualTo(setOf("1", "2"))
     }
 
+    @Test
+    fun `reconcile detectZombies clears stale in progress agents`() = runBlocking {
+        val root = Files.createTempDirectory("orch-zombie-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val pc = sampleProjectConfig().copy(
+            agent = sampleProjectConfig().agent.copy(heartbeatTimeoutMs = 1_000)
+        )
+        val config = ServiceConfig(projects = mapOf(defaultProjectSlug to pc))
+        val state = RuntimeState()
+        val staleStart = Instant.now().minusSeconds(120)
+        state.running["1"] = runningEntry("1", "A-1").copy(
+            issue = runningEntry("1", "A-1").issue.copy(state = "In Progress"),
+            startedAt = staleStart,
+            lastHeartbeatAt = null
+        )
+        state.claimed["1"] = true
+        val linear = ZombieTrackingLinear()
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
+        assertThat(state.running.containsKey("1")).isEqualTo(false)
+        assertThat(state.isClaimed("1")).isEqualTo(false)
+        assertThat(linear.resetIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `reconcile stalled non-active state sends notification when configured`() = runBlocking {
+        val root = Files.createTempDirectory("orch-stalled-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        var stalledNotified = false
+        val notifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                if (event is NotificationEvent.AgentStalled) stalledNotified = true
+            }
+        }))
+        val pc = sampleProjectConfig().copy(
+            notifications = NotificationsConfig(onCompleted = false, onFailed = false, onStalled = true, onClarification = false)
+        )
+        val config = ServiceConfig(projects = mapOf(defaultProjectSlug to pc))
+        val state = RuntimeState()
+        state.running["1"] = runningEntry("1", "A-1")
+        state.claimed["1"] = true
+        val linear = FakeLinearClientWithStates(mapOf("1" to "Blocked"))
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { linear },
+            workspaceManagerFactory = { mgr },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state),
+            notifier = notifier
+        )
+        orch.reconcile(defaultProjectSlug, orch.projects.values.first())
+        assertThat(state.running.containsKey("1")).isEqualTo(false)
+        assertThat(stalledNotified).isTrue()
+    }
+
+    @Test
+    fun `start stop and restart lifecycle clears runtime state`() = runBlocking {
+        val root = Files.createTempDirectory("orch-lifecycle-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig()
+        val state = RuntimeState()
+        state.running["1"] = runningEntry("1", "A-1")
+        state.claimed["1"] = true
+        val orch = Orchestrator(
+            config = config,
+            linearClientFactory = { FakeLinearClient(emptyList()) },
+            workspaceManagerFactory = { mgr },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        orch.start()
+        orch.stop()
+        orch.shutdownRequested = true
+        orch.restart()
+        yield()
+        assertThat(orch.shutdownRequested).isEqualTo(false)
+        assertThat(state.running).isEmpty()
+        assertThat(state.isClaimed("1")).isEqualTo(false)
+        orch.stop()
+    }
+
     private fun sampleIssue(id: String, identifier: String, state: String) = Issue(
         id = id, identifier = identifier, title = "t", description = null,
         priority = 5, state = state, branchName = null, url = null,
@@ -1193,6 +1291,28 @@ class FakeLinearClientWithStates(private val stateMap: Map<String, String>) : Li
     override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
 
     override suspend fun updateIssueState(issueId: String, stateId: String) {}
+    override suspend fun createComment(issueId: String, body: String) {}
+    override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+    override suspend fun fetchIssueCreator(issueId: String): com.flexsentlabs.koncerto.core.model.UserRef? = null
+    override suspend fun createIssue(
+        projectSlug: String, title: String, state: String,
+        description: String?, labels: List<String>
+    ): Issue? = null
+    override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = false
+}
+
+class ZombieTrackingLinear : LinearClient {
+    var resetIssueId: String? = null
+
+    override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue> = emptyList()
+    override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> = emptyList()
+    override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> = emptyMap()
+    override suspend fun fetchIssueById(issueId: String): Issue? = null
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? =
+        if (stateName.equals("Todo", ignoreCase = true)) "todo-id" else null
+    override suspend fun updateIssueState(issueId: String, stateId: String) {
+        if (stateId == "todo-id") resetIssueId = issueId
+    }
     override suspend fun createComment(issueId: String, body: String) {}
     override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
     override suspend fun fetchIssueCreator(issueId: String): com.flexsentlabs.koncerto.core.model.UserRef? = null

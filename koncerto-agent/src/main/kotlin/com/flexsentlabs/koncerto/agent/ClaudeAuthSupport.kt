@@ -21,6 +21,10 @@ object ClaudeAuthSupport {
         Files.writeString(path, clean)
     }
 
+    fun clearToken() {
+        runCatching { Files.deleteIfExists(tokenPath()) }
+    }
+
     fun extractToken(output: String): String? {
         val lines = output.lineSequence().toList()
         val markerIndex = lines.indexOfFirst { it.contains("Your OAuth token") }

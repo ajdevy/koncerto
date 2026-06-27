@@ -98,4 +98,22 @@ class AgentHealthCheckerTest {
         val checker = DefaultAgentHealthChecker()
         assertThat(checker.getAllStatuses()).isEmpty()
     }
+
+    @Test
+    fun `heartbeat accumulates uptime across beats`() {
+        val checker = DefaultAgentHealthChecker(staleThresholdMs = 60_000)
+        checker.reportHeartbeat("agent-1", 100L)
+        Thread.sleep(25)
+        checker.reportHeartbeat("agent-1", 100L)
+        val status = checker.getStatus("agent-1")
+        assertThat(status).isNotNull()
+        assertThat(status!!.uptimeMs >= 20).isTrue()
+    }
+
+    @Test
+    fun `markUnhealthy on unknown agent is no-op`() {
+        val checker = DefaultAgentHealthChecker()
+        checker.markUnhealthy("missing", "error")
+        assertThat(checker.getStatus("missing")).isNull()
+    }
 }

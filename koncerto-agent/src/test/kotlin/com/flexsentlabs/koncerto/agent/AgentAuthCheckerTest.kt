@@ -87,6 +87,13 @@ class AgentAuthCheckerTest {
     }
 
     @Test
+    fun `markUnauthenticated overrides cached auth state`() {
+        AgentAuthChecker.markAuthenticated("claude")
+        AgentAuthChecker.markUnauthenticated("claude")
+        assertThat(AgentAuthChecker.isAuthenticated("claude")).isFalse()
+    }
+
+    @Test
     fun `concurrent isAuthenticated calls do not throw ConcurrentModificationException`() {
         val threadCount = 20
         val pool = Executors.newFixedThreadPool(threadCount)

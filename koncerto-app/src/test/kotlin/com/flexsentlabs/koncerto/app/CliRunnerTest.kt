@@ -214,4 +214,90 @@ class CliRunnerTest {
         val runner = CliRunner(createOrchestrator())
         runner.run("nonexistent")
     }
+
+    @Test
+    fun `status command is case insensitive`() {
+        val runner = CliRunner(createOrchestrator())
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            runner.run("STATUS")
+            assertThat(out.toString()).contains("Projects: 0")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
+    fun `agents command is case insensitive`() {
+        val runner = CliRunner(createOrchestratorWithProject())
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            runner.run("AGENTS")
+            assertThat(out.toString()).contains("ABC-1")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
+    fun `restart command is case insensitive`() {
+        val orchestrator = createOrchestrator()
+        orchestrator.shutdownRequested = true
+        CliRunner(orchestrator).run("RESTART")
+        assertThat(orchestrator.shutdownRequested).isFalse()
+    }
+
+    @Test
+    fun `help command is case insensitive`() {
+        val runner = CliRunner(createOrchestrator())
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            runner.run("HELP")
+            assertThat(out.toString()).contains("Koncerto CLI")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
+    fun `status prints token totals when present`() {
+        val orchestrator = createOrchestratorWithProject()
+        orchestrator.projects.values.first().state.addTokenTotals(100, 50, 150)
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            CliRunner(orchestrator).run("status")
+            val output = out.toString()
+            assertThat(output).contains("Tokens: in=100 out=50 total=150")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
+
+    @Test
+    fun `status aggregates blocked and retrying counts across projects`() {
+        val orchestrator = createOrchestratorWithProject()
+        val state = orchestrator.projects.values.first().state
+        state.addBlocked("blocked-1")
+        state.retryAttempts["retry-1"] = com.flexsentlabs.koncerto.orchestrator.RetryEntry(
+            issueId = "retry-1",
+            identifier = "ABC-2",
+            attempt = 1,
+            dueAtMs = System.currentTimeMillis() + 60_000,
+            error = "timeout"
+        )
+        val out = ByteArrayOutputStream()
+        System.setOut(PrintStream(out))
+        try {
+            CliRunner(orchestrator).run("status")
+            val output = out.toString()
+            assertThat(output).contains("Blocked: 1")
+            assertThat(output).contains("Retrying: 1")
+        } finally {
+            System.setOut(System.out)
+        }
+    }
 }

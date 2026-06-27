@@ -29,8 +29,8 @@ class FfmpegRecorder : DemoRecorder {
                 }
 
                 val startTime = System.currentTimeMillis()
-                val inputArgs = detectInputArgs(config)
-                val filterComplex = buildFilterComplex(config)
+                val inputArgs = ffmpegDetectInputArgs(config)
+                val filterComplex = ffmpegBuildFilterComplex(config)
 
                 val args = mutableListOf(
                     "ffmpeg", "-y"
@@ -80,20 +80,21 @@ class FfmpegRecorder : DemoRecorder {
             }
         }
 
-    private fun detectInputArgs(config: RecordingConfig): List<String> {
-        val osName = System.getProperty("os.name").lowercase()
-        return when {
-            osName.contains("mac") -> listOf("-f", "avfoundation", "-i", config.captureInputIndex)
-            osName.contains("linux") -> listOf("-f", "x11grab", "-i", config.captureInputIndex)
-            osName.contains("win") -> listOf("-f", "gdigrab", "-i", config.captureInputIndex)
-            else -> listOf("-f", "avfoundation", "-i", "1")
-        }
-    }
+}
 
-    private fun buildFilterComplex(config: RecordingConfig): String = buildString {
-        append("fps=${config.frameRate}")
-        if (config.timestampOverlay) {
-            append(",drawtext=text='%{localtime\\:%T}':fontcolor=white:fontsize=24:x=10:y=10")
-        }
+internal fun ffmpegDetectInputArgs(
+    config: RecordingConfig,
+    osName: String = System.getProperty("os.name").lowercase()
+): List<String> = when {
+    osName.contains("mac") -> listOf("-f", "avfoundation", "-i", config.captureInputIndex)
+    osName.contains("linux") -> listOf("-f", "x11grab", "-i", config.captureInputIndex)
+    osName.contains("win") -> listOf("-f", "gdigrab", "-i", config.captureInputIndex)
+    else -> listOf("-f", "avfoundation", "-i", "1")
+}
+
+internal fun ffmpegBuildFilterComplex(config: RecordingConfig): String = buildString {
+    append("fps=${config.frameRate}")
+    if (config.timestampOverlay) {
+        append(",drawtext=text='%{localtime\\:%T}':fontcolor=white:fontsize=24:x=10:y=10")
     }
 }

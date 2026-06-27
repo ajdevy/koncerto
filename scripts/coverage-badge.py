@@ -1,6 +1,24 @@
 import csv, glob, os, sys, json
 from pathlib import Path
 
+# Classes excluded from aggregate coverage:
+# - CLI / Spring Boot entry points
+# - OS-dependent recorder coroutine continuations
+# - Kotlin compiler-generated lambda/coroutine synthetic classes
+EXCLUDED_CLASS_PATTERNS = (
+    "DemoRecordingTrigger",
+    "KoncertoApplicationKt",
+    "Recorder.record.new Function2",
+    "Recorder.isAvailable.new Function2",
+    "new Function2()",
+    "new Function3()",
+    "new FlowCollector()",
+    "new Comparator()",
+)
+
+def is_excluded(class_name: str) -> bool:
+    return any(pattern in class_name for pattern in EXCLUDED_CLASS_PATTERNS)
+
 total_missed = 0
 total_covered = 0
 branches_missed = 0
@@ -10,6 +28,8 @@ for f in glob.glob('koncerto-*/build/reports/jacoco/test/jacocoTestReport.csv'):
     with open(f) as csvfile:
         reader = csv.DictReader(csvfile)
         for row in reader:
+            if is_excluded(row['CLASS']):
+                continue
             total_missed += int(row['LINE_MISSED'])
             total_covered += int(row['LINE_COVERED'])
             branches_missed += int(row['BRANCH_MISSED'])
@@ -30,3 +50,6 @@ Path('.badges/jacoco.svg').write_text(svg)
 Path('.badges/coverage-summary.json').write_text(json.dumps({'branches': round(branch_pct, 2), 'coverage': round(line_pct, 2)}))
 
 print(f'Badge generated: {line_pct:.1f}%')
+if line_pct < 85.0:
+    print(f'ERROR: Coverage {line_pct:.1f}% is below 85% target', file=sys.stderr)
+    sys.exit(1)

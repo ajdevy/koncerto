@@ -2,16 +2,14 @@ package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
-import java.util.Collections
-import kotlin.concurrent.thread
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.cancel
 import org.junit.jupiter.api.Test
 
 class CodexRuntimeTest {
@@ -20,32 +18,17 @@ class CodexRuntimeTest {
         override fun write(line: String) {}
     }))
 
-    private fun collectEvents(client: CodexRuntime, timeoutMs: Long = 5_000): List<AgentEvent> {
-        val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
-        val collector = thread(start = true, isDaemon = true, name = "codex-events") {
-            runBlocking {
-                client.events().collect { ev ->
-                    collected += ev
-                    cancel()
-                }
-            }
-        }
-        collector.join(timeoutMs)
-        if (collector.isAlive) collector.interrupt()
-        return collected.toList()
-    }
-
     @Test
     fun `client spawns and receives stdout as events`() {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { assertThat(client.start()).isEqualTo(true) }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            assertThat(client.start()).isEqualTo(true)
+        }
         client.stop()
         assertThat(collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()).isNotNull()
     }
@@ -55,12 +38,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":100,"output_tokens":50,"total_tokens":150}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -74,12 +57,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/failed","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -91,12 +74,15 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/cancelled","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(
+            client,
+            until = { events -> events.any { it is AgentEvent.TurnCancelled } },
+        ) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCancelled>().firstOrNull()
         assertThat(event).isNotNull()
@@ -108,12 +94,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/input_required","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         assertThat(collected.filterIsInstance<AgentEvent.TurnInputRequired>().firstOrNull()).isNotNull()
     }
@@ -123,12 +109,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"approval/auto_approved","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         assertThat(collected.filterIsInstance<AgentEvent.ApprovalAutoApproved>().firstOrNull()).isNotNull()
     }
@@ -138,12 +124,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"unsupported_tool_call","params":{}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         assertThat(collected.filterIsInstance<AgentEvent.UnsupportedToolCall>().firstOrNull()).isNotNull()
     }
@@ -153,12 +139,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"custom/unknown_event","params":{"foo":"bar"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.Notification>().firstOrNull()
         assertThat(event).isNotNull()
@@ -170,12 +156,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"session/started","thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -187,12 +173,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/completed","thread_id":"t1","turn_id":"u1","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -205,12 +191,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/failed","thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -221,12 +207,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"turn/cancelled","thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCancelled>().firstOrNull()
         assertThat(event).isNotNull()
@@ -237,12 +223,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"method":"custom/result","data":"x"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.OtherMessage>().firstOrNull()
         assertThat(event).isNotNull()
@@ -253,12 +239,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             echo 'this is not valid json {{{'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.Malformed>().firstOrNull()
         assertThat(event).isNotNull()
@@ -269,10 +255,9 @@ class CodexRuntimeTest {
     fun `startup failure emits StartupFailed event`() {
         val ws = java.nio.file.Path.of("/nonexistent/workspace/path/that/does/not/exist")
         val client = CodexRuntime("echo hello", ws, noopLogger())
-        val started = runBlocking { client.start() }
-        assertThat(started).isEqualTo(false)
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            assertThat(client.start()).isEqualTo(false)
+        }
         client.stop()
         assertThat(collected.filterIsInstance<AgentEvent.StartupFailed>().firstOrNull()).isNotNull()
     }
@@ -287,8 +272,7 @@ class CodexRuntimeTest {
         val client = CodexRuntime(script, ws, noopLogger())
         runBlocking { client.start() }
         client.stop()
-        val collected = collectEvents(client, timeoutMs = 2_000)
-        assertThat(collected).isNotNull()
+        assertThat(client.isAlive()).isFalse()
     }
 
     @Test
@@ -296,12 +280,15 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":30,"output_tokens":20}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(
+            client,
+            until = { events -> events.any { it is AgentEvent.TurnCompleted } },
+        ) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -314,12 +301,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1","usage":{"input_tokens":"abc","output_tokens":"def"}}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -333,12 +320,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"session/started","params":{"turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()
         assertThat(event).isNotNull()
@@ -351,12 +338,12 @@ class CodexRuntimeTest {
         val ws = Files.createTempDirectory("agent-test-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","id":"1","result":{"data":"no method here"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         val event = collected.filterIsInstance<AgentEvent.OtherMessage>().firstOrNull()
         assertThat(event).isNotNull()
@@ -383,12 +370,12 @@ class CodexRuntimeTest {
             echo ''
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo ''
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val client = CodexRuntime(script, ws, noopLogger())
-        runBlocking { client.start() }
-
-        val collected = collectEvents(client)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(client) {
+            client.start()
+        }
         client.stop()
         assertThat(collected.size).isEqualTo(1)
         assertThat(collected[0] is AgentEvent.SessionStarted).isEqualTo(true)
