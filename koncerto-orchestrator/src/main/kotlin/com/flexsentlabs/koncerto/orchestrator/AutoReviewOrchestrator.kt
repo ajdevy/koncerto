@@ -34,7 +34,8 @@ class AutoReviewOrchestrator(
     private val onReviewPassed: (suspend (Issue, targetUrl: String?) -> String?)? = null,
     private val targetProjectDeployer: TargetProjectDeployer? = null,
     private val deployRepoFullName: String? = null,
-    private val demoFailureReporter: DemoFailureReporter? = null
+    private val demoFailureReporter: DemoFailureReporter? = null,
+    private val demoScenarioGenerator: DemoScenarioGenerator? = null
 ) {
     private val reviewStage: StageAgentConfig?
         get() = projectConfig.agent.stages["in review"]
@@ -89,7 +90,7 @@ class AutoReviewOrchestrator(
             logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
             runtimeState.reviewAttempts.remove(issue.id)
 
-            saveDemoScenario(issue, workspace)
+            demoScenarioGenerator?.generate(issue, workspace)
             val deployResult = deployTargetProject(issue, workspace)
             val deployUrl = deployResult?.url
             val demoUrl = onReviewPassed?.invoke(issue, deployUrl)
@@ -197,73 +198,6 @@ class AutoReviewOrchestrator(
             }
         } catch (e: Exception) {
             logger.warn("pr_review_comment_error", mapOf(
-                "issue_id" to issue.id,
-                "error" to (e.message ?: "unknown")
-            ))
-        }
-    }
-
-    private fun extractScenarioBlock(raw: String): String? {
-        val fenceMatch = Regex("""```(?:yaml|yml)\s+demo_scenario\s*\n(.*?)\n```""", RegexOption.DOT_MATCHES_ALL).find(raw)
-        if (fenceMatch != null) {
-            val yamlContent = fenceMatch.groupValues[1].trim()
-            return "demo_scenario:\n" + yamlContent.lines().joinToString("\n") { line ->
-                if (line.startsWith("  ")) line else "  $line"
-            }
-        }
-        val rawMatch = Regex("""demo_scenario:\s*\n(?:[ \t].*\n?)*""").find(raw)
-        if (rawMatch != null) {
-            val block = rawMatch.value.trimEnd()
-            val lines = block.lines()
-            return lines.joinToString("\n")
-        }
-        return null
-    }
-
-    private fun saveDemoScenario(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?) {
-        val ws = workspace ?: run {
-            logger.warn("demo_scenario_no_workspace", mapOf("issue_id" to issue.id))
-            return
-        }
-        val detailedPath = ws.path.resolve(".review-output-detailed")
-        val outputPath = ws.path.resolve(".review-output")
-
-        val raw = try {
-            when {
-                Files.exists(detailedPath) -> Files.readString(detailedPath)
-                Files.exists(outputPath) -> Files.readString(outputPath)
-                else -> null
-            }
-        } catch (e: Exception) {
-            logger.warn("demo_scenario_read_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
-            return
-        }
-        if (raw.isNullOrBlank()) return
-
-        val scenarioBlock = extractScenarioBlock(raw)
-        if (scenarioBlock == null) {
-            logger.warn("demo_scenario_extract_failed", mapOf(
-                "issue_id" to issue.id,
-                "raw_length" to raw.length.toString(),
-                "has_fence" to raw.contains("```yaml").toString(),
-                "has_demo_scenario" to raw.contains("demo_scenario").toString()
-            ))
-            return
-        }
-
-        val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
-        try {
-            java.nio.file.Files.createDirectories(scenarioDir)
-            val uuidPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
-            Files.writeString(uuidPath, scenarioBlock)
-            val identPath = scenarioDir.resolve("${issue.identifier}-scenario.yaml")
-            Files.writeString(identPath, scenarioBlock)
-            logger.info("demo_scenario_saved", mapOf(
-                "issue_id" to issue.id,
-                "issue_identifier" to issue.identifier
-            ))
-        } catch (e: Exception) {
-            logger.warn("demo_scenario_save_failed", mapOf(
                 "issue_id" to issue.id,
                 "error" to (e.message ?: "unknown")
             ))
