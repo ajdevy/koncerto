@@ -914,6 +914,172 @@ class DispatchServiceTest {
         val resolved = svc.resolveAgent(issue, stageConfig = null)
         assertThat(resolved.kind).isEqualTo("opencode")
     }
+
+    @Test
+    fun `dispatchDueRetries logs warning when fetchIssueById fails`() {
+        val state = RuntimeState()
+        val pastDue = System.currentTimeMillis() - 10_000
+        state.retryAttempts["1"] = RetryEntry("1", "A-1", 2, pastDue, "timeout")
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            state = state,
+            runner = runner,
+            linear = ThrowingLinearClient()
+        )
+        runBlocking {
+            svc.dispatchDueRetries(CoroutineScope(coroutineContext))
+        }
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `dispatchDueRetries reschedules when issue already running`() {
+        val state = RuntimeState()
+        val pastDue = System.currentTimeMillis() - 10_000
+        state.retryAttempts["1"] = RetryEntry("1", "A-1", 2, pastDue, "timeout")
+        state.running["1"] = runningEntry("1", "A-1")
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            state = state,
+            runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runBlocking {
+            svc.dispatchDueRetries(CoroutineScope(coroutineContext))
+        }
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(state.retryAttempts.containsKey("1")).isTrue()
+    }
+
+    @Test
+    fun `handleClarification with bot creator assigns project admin`() {
+        val root = Files.createTempDirectory("clarify-bot-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val botCreator = UserRef("bot-1", "Bot", true)
+            val testIssue = issue("1", "A-1", "Todo").copy(creator = botCreator)
+            trackingLinear.addIssue(testIssue)
+
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.createDirectories(workspace.path.resolve(".koncerto"))
+            Files.writeString(workspace.path.resolve(".koncerto").resolve("clarification.md"), "Need specs")
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            val projectConfig = config().copy(tracker = config().tracker.copy(
+                blockedState = "Blocked",
+                projectAdmin = "admin-1"
+            ))
+            val svc = createService(
+                projectConfig = projectConfig,
+                state = state,
+                linear = trackingLinear,
+                workspaces = workspaces,
+                candidates = listOf(testIssue),
+                runner = runner
+            )
+            runDispatchAwait(svc)
+
+            assertThat(trackingLinear.assignedUserId).isEqualTo("admin-1")
+            assertThat(state.isBlocked("1")).isTrue()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `resolveAgent uses routing rule matching state`() {
+        val agents = mapOf("state-agent" to AgentProviderConfig(kind = "codex", model = "claude"))
+        val rules = listOf(RoutingRule(ifState = "In Progress", useAgent = "state-agent", priority = 10))
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "In Progress", labels = listOf("bug"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+        assertThat(resolved.model).isEqualTo("claude")
+    }
+
+    @Test
+    fun `resolveAgent routing rule references missing agent falls through`() {
+        val agents = emptyMap<String, AgentProviderConfig>()
+        val rules = listOf(RoutingRule(ifLabel = "frontend", useAgent = "nonexistent", priority = 10))
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", labels = listOf("frontend"))
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `resolveAgent uses routing rule matching priority`() {
+        val agents = mapOf("high-prio" to AgentProviderConfig(kind = "codex"))
+        val rules = listOf(RoutingRule(ifPriority = 1, useAgent = "high-prio"))
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", priority = 1)
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `resolveAgent uses routing rule matching priority max`() {
+        val agents = mapOf("low-prio" to AgentProviderConfig(kind = "opencode"))
+        val rules = listOf(RoutingRule(ifPriorityMax = 3, useAgent = "low-prio"))
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", priority = 3)
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("opencode")
+    }
+
+    @Test
+    fun `resolveAgent routing rule with priority max excludes higher priority`() {
+        val agents = mapOf("low-prio" to AgentProviderConfig(kind = "opencode"))
+        val rules = listOf(RoutingRule(ifPriorityMax = 2, useAgent = "low-prio"))
+        val (svc, _) = createServiceWithState(DispatchServiceTest.config(
+            agents = agents, routingRules = rules
+        ))
+        val issue = DispatchServiceTest.issue("a", "ENG-1", "Todo", priority = 5)
+        val resolved = svc.resolveAgent(issue, stageConfig = null)
+        assertThat(resolved.kind).isEqualTo("codex")
+    }
+
+    @Test
+    fun `transitionOnComplete handles followUp with blank linkType`() {
+        val trackingLinear = TrackingLinearClient()
+        trackingLinear.createIssueResult = issue("b", "ENG-2", "Todo")
+        val stages = mapOf(
+            "in progress" to StageAgentConfig(
+                prompt = null, model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = "Done",
+                followUp = FollowUpConfig(
+                    titleTemplate = "Follow-up: {{ issue.identifier }}",
+                    state = "Todo",
+                    linkType = ""
+                )
+            )
+        )
+        val state = RuntimeState()
+        val svc = createService(
+            projectConfig = config(stages = stages),
+            state = state,
+            linear = trackingLinear,
+            candidates = listOf(issue("a", "ENG-1", "In Progress"))
+        )
+        val stage = svc.projectConfig.agent.stages["in progress"]
+        runBlocking {
+            svc.transitionOnComplete(issue("a", "ENG-1", "In Progress"), stage)
+        }
+
+        assertThat(trackingLinear.transitionedIssueId).isEqualTo("a")
+        assertThat(trackingLinear.createdIssueTitle).isEqualTo("Follow-up: ENG-1")
+        assertThat(trackingLinear.linkedSourceId).isNull()
+    }
 }
 
 private class SimpleLinear(private val candidates: List<Issue>) : LinearClient {

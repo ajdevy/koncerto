@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.demo
 
 import com.flexsentlabs.koncerto.demo.config.DemoConfig
+import com.flexsentlabs.koncerto.demo.model.DemoError
 import com.flexsentlabs.koncerto.demo.model.DemoPlatform
 import com.flexsentlabs.koncerto.demo.model.DemoResult
 import com.flexsentlabs.koncerto.demo.model.DemoStatus
@@ -18,6 +19,7 @@ import com.flexsentlabs.koncerto.demo.service.DemoRecordingService
 import com.flexsentlabs.koncerto.demo.storage.DemoStorage
 import java.io.File
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
@@ -186,6 +188,233 @@ class DemoRecordingServiceTest {
         val task = (result as DemoResult.Success).value
         assert(task.status == DemoStatus.COMPLETED)
     }
+
+    @Test
+    fun `enforceRetentionPolicy deletes old completed tasks`() = runTest {
+        val oldTime = Instant.now().minus(100, ChronoUnit.DAYS).toString()
+        val now = Instant.now().toString()
+        val oldTask = DemoTask(
+            id = "old-task-1", issueId = "issue-old", issueIdentifier = "OLD-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = oldTime, updatedAt = oldTime,
+            storageKey = "old/storage/key"
+        )
+        val recentTask = DemoTask(
+            id = "recent-task-1", issueId = "issue-recent", issueIdentifier = "REC-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.PENDING, trigger = DemoTrigger.MANUAL,
+            createdAt = now, updatedAt = now
+        )
+        taskRepository.save(oldTask)
+        taskRepository.save(recentTask)
+
+        val result = service.enforceRetentionPolicy()
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value >= 1)
+        assert(taskRepository.findById("old-task-1") == null)
+        assert(taskRepository.findById("recent-task-1") != null)
+    }
+
+    @Test
+    fun `enforceRetentionPolicy returns zero when nothing to delete`() = runTest {
+        val now = Instant.now().toString()
+        val task = DemoTask(
+            id = "fresh-task", issueId = "issue-fresh", issueIdentifier = "FRESH-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.PENDING, trigger = DemoTrigger.MANUAL,
+            createdAt = now, updatedAt = now
+        )
+        taskRepository.save(task)
+
+        val result = service.enforceRetentionPolicy()
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value == 0)
+    }
+
+    @Test
+    fun `enforceRetentionPolicy returns failure when storage delete fails`() = runTest {
+        val failingStorage = FakeFailingStorage()
+        val serviceWithFailingStorage = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = failingStorage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val oldTime = Instant.now().minus(100, ChronoUnit.DAYS).toString()
+        val oldTask = DemoTask(
+            id = "fail-old-task", issueId = "issue-fail", issueIdentifier = "FAIL-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = oldTime, updatedAt = oldTime,
+            storageKey = "old/storage/key"
+        )
+        taskRepository.save(oldTask)
+
+        val result = serviceWithFailingStorage.enforceRetentionPolicy()
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `executeTask returns failure for non-existent task`() = runTest {
+        val result = service.executeTask("nonexistent")
+        assert(result is DemoResult.Failure)
+        val error = (result as DemoResult.Failure).error
+        assert(error is DemoError.TaskNotFound)
+    }
+
+    @Test
+    fun `executeTask returns failure for non-pending task`() = runTest {
+        val completedTask = DemoTask(
+            id = "completed-task", issueId = "issue-c", issueIdentifier = "C-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = Instant.now().toString(), updatedAt = Instant.now().toString()
+        )
+        taskRepository.save(completedTask)
+
+        val result = service.executeTask("completed-task")
+        assert(result is DemoResult.Failure)
+        val error = (result as DemoResult.Failure).error
+        assert(error is DemoError.InvalidConfig)
+    }
+
+    @Test
+    fun `toggleKeep returns failure for missing task`() = runTest {
+        val result = service.toggleKeep("missing-task", true)
+        assert(result is DemoResult.Failure)
+        assert((result as DemoResult.Failure).error is DemoError.TaskNotFound)
+    }
+
+    @Test
+    fun `markBlocked succeeds for existing task`() = runTest {
+        val create = service.createTask("issue-9", "KONC-106", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL)
+        val taskId = (create as DemoResult.Success).value.id
+
+        val result = service.markBlocked(taskId)
+        assert(result is DemoResult.Success)
+    }
+
+    @Test
+    fun `markBlocked returns failure for missing task`() = runTest {
+        val result = service.markBlocked("nonexistent")
+        assert(result is DemoResult.Failure)
+        assert((result as DemoResult.Failure).error is DemoError.TaskNotFound)
+    }
+
+    @Test
+    fun `deleteOldRecordings returns count`() = runTest {
+        val oldTime = Instant.now().minus(100, ChronoUnit.DAYS).toString()
+        val oldTask = DemoTask(
+            id = "old-to-delete", issueId = "issue-del", issueIdentifier = "DEL-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = oldTime, updatedAt = oldTime
+        )
+        taskRepository.save(oldTask)
+
+        val count = service.deleteOldRecordings()
+        assert(count >= 1)
+        assert(taskRepository.findById("old-to-delete") == null)
+    }
+
+    @Test
+    fun `requestRecording with null platform resolves from available`() = runTest {
+        val result = service.requestRecording(
+            issueId = "issue-auto", issueIdentifier = "KONC-AUTO",
+            projectSlug = "test", platform = null, trigger = DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        val task = (result as DemoResult.Success).value
+        assert(task.platform == DemoPlatform.PLAYWRIGHT)
+    }
+
+    @Test
+    fun `requestRecording returns failure when no platform available`() = runTest {
+        val emptyFactory = RecorderFactory(emptyList())
+        val serviceNoRecorder = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            taskRepository = taskRepository,
+            recorderFactory = emptyFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = serviceNoRecorder.requestRecording(
+            issueId = "issue-null", issueIdentifier = "KONC-NULL",
+            projectSlug = "test", platform = null, trigger = DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `createTask with empty issueId still succeeds`() = runTest {
+        val result = service.createTask(
+            issueId = "", issueIdentifier = "KONC-EMPTY",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT, trigger = DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.issueId == "")
+    }
+
+    @Test
+    fun `getTasksByIssue returns empty list for unknown issue`() = runTest {
+        val tasks = service.getTasksByIssue("nonexistent-issue")
+        assert(tasks.isEmpty())
+    }
+
+    @Test
+    fun `getPendingTasks returns empty when no pending tasks`() = runTest {
+        val completedTask = DemoTask(
+            id = "non-pending", issueId = "issue-np", issueIdentifier = "NP-1",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = Instant.now().toString(), updatedAt = Instant.now().toString()
+        )
+        taskRepository.save(completedTask)
+
+        val pending = service.getPendingTasks()
+        assert(pending.isEmpty())
+    }
+
+    @Test
+    fun `createTask with null projectSlug succeeds`() = runTest {
+        val result = service.createTask(
+            issueId = "issue-null-slug", issueIdentifier = "KONC-NULL-SLUG",
+            projectSlug = null, platform = DemoPlatform.PLAYWRIGHT, trigger = DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.projectSlug == null)
+    }
+}
+
+class FakeFailingStorage : DemoStorage {
+    override suspend fun upload(taskId: String, file: File, contentType: String): DemoResult<DemoStorage.StorageResult> =
+        DemoResult.Success(DemoStorage.StorageResult("key", "url", 0L))
+
+    override suspend fun uploadWithTags(taskId: String, file: File, contentType: String, tags: Map<String, String>): DemoResult<DemoStorage.StorageResult> =
+        DemoResult.Success(DemoStorage.StorageResult("key", "url", 0L))
+
+    override suspend fun delete(storageKey: String): DemoResult<Unit> = DemoResult.Success(Unit)
+
+    override suspend fun generateUrl(storageKey: String, expiresInSeconds: Long): DemoResult<String> =
+        DemoResult.Success("https://cdn.example.com/$storageKey")
+
+    override suspend fun checkQuota(): DemoResult<DemoStorage.QuotaInfo> =
+        DemoResult.Success(DemoStorage.QuotaInfo(0L, 9L * 1024 * 1024 * 1024, 9L * 1024 * 1024 * 1024))
+
+    override suspend fun listOldest(limit: Int): DemoResult<List<DemoStorage.StorageItem>> =
+        DemoResult.Success(emptyList())
+
+    override suspend fun deleteBatch(storageKeys: List<String>): DemoResult<Int> =
+        DemoResult.Failure(DemoError.StorageFailed(RuntimeException("batch_delete_failed")))
 }
 
 class FakeRecorder2 : DemoRecorder {

@@ -356,4 +356,136 @@ class AutoReviewOrchestratorTest {
         orchestrator.onCodingComplete(issue())
         assertThat(callCount()).isEqualTo(0)
     }
+
+    @Test
+    fun `review exhaustion sends notification to notifier`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        var notified = false
+        var capturedEvent: NotificationEvent? = null
+        val trackingNotifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                notified = true
+                capturedEvent = event
+            }
+        }))
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = trackingNotifier,
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(notified).isTrue()
+        assertThat(capturedEvent).isNotNull()
+    }
+
+    @Test
+    fun `readReviewStatus returns false for empty status file after delay`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "")
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision is AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).isTrue()
+    }
+
+    @Test
+    fun `backup copies review output before auto-review`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-output"), "prior review content")
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(Files.exists(issueDir.resolve(".review-output-detailed"))).isTrue()
+    }
+
+    @Test
+    fun `review exhaustion when blocked state not found`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        val nullStateTracker = object : TrackerClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String): Issue? = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
+            override suspend fun updateIssueState(issueId: String, stateId: String) {}
+            override suspend fun createComment(issueId: String, body: String) {}
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String): UserRef? = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>) = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) = false
+        }
+
+        var notified = false
+        val trackingNotifier = CompositeNotifier(listOf(object : Notifier {
+            override suspend fun send(event: NotificationEvent) { notified = true }
+        }))
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = nullStateTracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = trackingNotifier,
+            logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(notified).isTrue()
+    }
 }
