@@ -32,7 +32,7 @@ class ClaudeReviewRuntime(
     private var process: Process? = null
     private var workerJob: Job? = null
     private val events = Channel<AgentEvent>(Channel.BUFFERED)
-    private val _output = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    private val _output = MutableSharedFlow<String>(replay = 32, extraBufferCapacity = 64)
     override val output: SharedFlow<String> = _output.asSharedFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pid: Long? = null
