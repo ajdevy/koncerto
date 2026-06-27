@@ -113,6 +113,7 @@ class AutoReviewOrchestrator(
             if (deployResult != null) {
                 cleanupDemoDeploy(issue, workspace, deployResult)
             }
+            workspace?.let { cleanupReviewFiles(it.path) }
             ReviewDecision.Pass(stage.onCompleteState)
         } else if (currentAttempt < maxAttempts) {
             logger.info(
@@ -122,6 +123,7 @@ class AutoReviewOrchestrator(
                     "max_attempts" to maxAttempts.toString()
                 )
             )
+            workspace?.let { cleanupReviewFiles(it.path) }
             ReviewDecision.RetryWithCoding(stage.onFailureState)
         } else {
             logger.warn(
@@ -132,7 +134,23 @@ class AutoReviewOrchestrator(
             )
             runtimeState.reviewAttempts.remove(issue.id)
             handleReviewExhaustion(issue, currentAttempt)
+            workspace?.let { cleanupReviewFiles(it.path) }
             ReviewDecision.Blocked
+        }
+    }
+
+    private fun cleanupReviewFiles(workspacePath: Path) {
+        listOf(
+            ".review-status",
+            ".review-output",
+            ".review-output-detailed",
+            ".review-attempt",
+        ).forEach { name ->
+            try {
+                Files.deleteIfExists(workspacePath.resolve(name))
+            } catch (e: Exception) {
+                logger.warn("review_cleanup_failed", mapOf("file" to name, "error" to (e.message ?: "unknown")))
+            }
         }
     }
 
