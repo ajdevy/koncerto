@@ -143,6 +143,7 @@ class Orchestrator(
                 reconcile(slug, pr)
                 runPreflight(pr)
                 pr.dispatch.dispatchDueRetries(scope)
+                pr.dispatch.dispatchDueLimitPauses(scope)
                 pr.dispatch.fetchAndDispatch(scope)
             } catch (e: Exception) {
                 logger.failure("tick_failed", mapOf("project" to slug), e)

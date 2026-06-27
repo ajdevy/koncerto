@@ -162,6 +162,7 @@ data class ServiceConfig(
             val agents = parseAgents(map)
             val routingRules = parseRoutingRules(map)
             val docker = parseDockerConfig(map)
+            val limitPause = parseLimitPauseConfig(map?.get("limit_pause") as? Map<*, *>)
 
             return AgentProjectConfig(
                 kind = kind,
@@ -179,7 +180,20 @@ data class ServiceConfig(
                 stages = stages,
                 agents = agents,
                 routingRules = routingRules,
-                docker = docker
+                docker = docker,
+                limitPause = limitPause
+            )
+        }
+
+        internal fun parseLimitPauseConfig(map: Map<*, *>?): LimitPauseConfig {
+            if (map == null) return LimitPauseConfig()
+            return LimitPauseConfig(
+                enabled = map["enabled"] as? Boolean ?: true,
+                claudeDefaultResumeMs = (map["claude_default_resume_ms"] as? Number)?.toLong()
+                    ?: LimitPauseConfig.DEFAULT_RESUME_MS,
+                codexDefaultResumeMs = (map["codex_default_resume_ms"] as? Number)?.toLong()
+                    ?: LimitPauseConfig.DEFAULT_RESUME_MS,
+                linearComments = map["linear_comments"] as? Boolean ?: true
             )
         }
 

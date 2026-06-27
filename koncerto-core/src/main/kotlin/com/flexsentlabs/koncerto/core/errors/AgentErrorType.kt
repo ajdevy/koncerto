@@ -19,6 +19,12 @@ sealed class AgentErrorType {
         val tokensRequested: Long? = null
     ) : AgentErrorType()
 
+    data class SubscriptionLimitError(
+        val details: String = "",
+        val provider: String? = null,
+        val resetAtMs: Long? = null
+    ) : AgentErrorType()
+
     data class AuthError(
         val details: String = ""
     ) : AgentErrorType()

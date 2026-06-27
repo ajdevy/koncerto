@@ -36,6 +36,11 @@ projects:
         enabled: false
       max_turns: 5
       max_review_attempts: 3
+      limit_pause:
+        enabled: true
+        linear_comments: true
+        claude_default_resume_ms: 18000000
+        codex_default_resume_ms: 18000000
       stages:
         Todo:
           prompt: prompts/implement.md

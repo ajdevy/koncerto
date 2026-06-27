@@ -21,7 +21,20 @@ class PatternErrorClassifier(
         val RATE_LIMIT_PATTERN = Regex("""429|rate.limit(?:ed)?|too many requests""", RegexOption.IGNORE_CASE)
         val RETRY_AFTER_PATTERN = Regex("""retry.after.?[:\s]+(\d+)""", RegexOption.IGNORE_CASE)
 
+        val SUBSCRIPTION_USAGE_PATTERN = Regex(
+            """hit your usage limit|purchase more credits|API Error:\s*Rate limit reached""",
+            RegexOption.IGNORE_CASE
+        )
+
         val DEFAULT_PATTERNS: List<ClassificationPattern> = listOf(
+            ClassificationPattern(
+                regex = SUBSCRIPTION_USAGE_PATTERN
+            ) { match, message ->
+                AgentErrorType.SubscriptionLimitError(
+                    details = "Subscription limit: ${match.value}",
+                    provider = inferProvider(message)
+                )
+            },
             ClassificationPattern(
                 regex = RATE_LIMIT_PATTERN
             ) { match, message ->
@@ -52,5 +65,13 @@ class PatternErrorClassifier(
                 AgentErrorType.PermanentError(details = "Permanent error: ${match.value}")
             }
         )
+
+        private fun inferProvider(message: String): String? = when {
+            message.contains("codex", ignoreCase = true) -> "codex"
+            message.contains("claude", ignoreCase = true) -> "claude"
+            message.contains("hit your usage limit", ignoreCase = true) -> "codex"
+            message.contains("API Error", ignoreCase = true) -> "claude"
+            else -> null
+        }
     }
 }

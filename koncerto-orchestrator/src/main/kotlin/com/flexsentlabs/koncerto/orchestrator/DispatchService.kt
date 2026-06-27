@@ -4,7 +4,8 @@ import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.model.TokenUsage
-import com.flexsentlabs.koncerto.core.lifecycle.IssueLifecycle
+import com.flexsentlabs.koncerto.core.errors.LimitResetParser
+import com.flexsentlabs.koncerto.core.errors.SubscriptionLimitException
 import com.flexsentlabs.koncerto.core.audit.AuditEvent
 import com.flexsentlabs.koncerto.core.audit.AuditEventType
 import com.flexsentlabs.koncerto.core.audit.AuditLogger
@@ -101,6 +102,7 @@ class DispatchService(
         val graph = DependencyGraph.build(candidates, projectConfig.tracker.terminalStates)
         val sorted = graph.frontier
             .filter { !state.running.containsKey(it.id) && !state.isClaimed(it.id) }
+            .filter { !state.limitPauses.containsKey(it.id) }
             .filter { matchesRequiredLabels(it) }
             .filter { it.children.isEmpty() }
             .filter { !isBlockedForTodo(it) }
@@ -142,6 +144,114 @@ class DispatchService(
                 dispatchSequential(issue, scope, stageNameOverride = stageOverride)
             } else {
                 dispatch(issue, scope, stageNameOverride = stageOverride)
+            }
+        }
+    }
+
+    suspend fun scheduleLimitPause(
+        issue: Issue,
+        error: String,
+        provider: String,
+        resumeAtMs: Long,
+        stageName: String,
+        agentKind: String
+    ) {
+        val cfg = projectConfig.agent.limitPause
+        if (!cfg.enabled) {
+            scheduleRetry(issue, error, null)
+            return
+        }
+
+        state.running.remove(issue.id)
+        state.retryAttempts.remove(issue.id)
+        state.limitPauses[issue.id] = LimitPauseEntry(
+            issueId = issue.id,
+            identifier = issue.identifier,
+            stageName = stageName,
+            agentKind = agentKind,
+            provider = provider,
+            error = error,
+            resumeAtMs = resumeAtMs
+        )
+        logger.info(
+            "limit_pause_scheduled",
+            mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
+            "provider" to provider,
+            "resume_at_ms" to resumeAtMs.toString(),
+            "stage" to stageName
+        )
+        auditLogger?.log(AuditEvent(
+            timestamp = System.currentTimeMillis(),
+            type = AuditEventType.AGENT_RETRY_SCHEDULED,
+            projectSlug = projectConfig.tracker.projectSlug,
+            issueId = issue.id,
+            issueIdentifier = issue.identifier,
+            error = "limit_pause: $error"
+        ))
+        if (cfg.linearComments) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val body = LimitPauseComments.pauseBody(
+                        issue.identifier, provider, resumeAtMs, error
+                    )
+                    linear.createComment(issue.id, body)
+                    logger.info("limit_pause_linear_comment_posted", mapOf("issue_id" to issue.id))
+                } catch (e: Exception) {
+                    logger.warn(
+                        "limit_pause_linear_comment_failed",
+                        mapOf("issue_id" to issue.id),
+                        "error" to (e.message ?: "unknown")
+                    )
+                }
+            }
+        }
+    }
+
+    suspend fun dispatchDueLimitPauses(scope: CoroutineScope) {
+        val now = System.currentTimeMillis()
+        val dueIds = state.limitPauses.entries
+            .filter { it.value.resumeAtMs <= now }
+            .map { it.key }
+            .toList()
+
+        for (issueId in dueIds) {
+            scope.coroutineContext.ensureActive()
+            if (state.availableSlots() <= 0) break
+            if (state.running.containsKey(issueId) || state.isClaimed(issueId)) continue
+
+            val pauseEntry = state.limitPauses.remove(issueId) ?: continue
+
+            val issue = try {
+                scope.coroutineContext.ensureActive()
+                linear.fetchIssueById(issueId)
+            } catch (_: Exception) {
+                state.limitPauses[pauseEntry.issueId] = pauseEntry
+                null
+            } ?: continue
+
+            if (projectConfig.agent.limitPause.linearComments) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        val body = LimitPauseComments.resumeBody(issue.identifier, pauseEntry.provider)
+                        linear.createComment(issue.id, body)
+                        logger.info("limit_resume_linear_comment_posted", mapOf("issue_id" to issue.id))
+                    } catch (e: Exception) {
+                        logger.warn(
+                            "limit_resume_linear_comment_failed",
+                            mapOf("issue_id" to issue.id),
+                            "error" to (e.message ?: "unknown")
+                        )
+                    }
+                }
+            }
+
+            val success = if (projectConfig.agent.sequentialMode) {
+                dispatchSequential(issue, scope, stageNameOverride = pauseEntry.stageName)
+            } else {
+                dispatch(issue, scope, stageNameOverride = pauseEntry.stageName)
+            }
+            if (!success) {
+                state.limitPauses.computeIfAbsent(issueId) { pauseEntry }
             }
         }
     }
@@ -393,7 +503,9 @@ class DispatchService(
         val resolved: ResolvedAgent,
         val threadId: String,
         val turnId: String,
-        val attempt: Int?
+        val attempt: Int?,
+        val stageName: String,
+        val agentKind: String
     )
 
     private suspend fun prepareDispatch(issue: Issue, attempt: Int?, stageNameOverride: String? = null): DispatchExecutionData? {
@@ -486,7 +598,16 @@ class DispatchService(
                 agentKind = resolved.kind
             ))
 
-            return DispatchExecutionData(effectiveStageConfig, prompt, resolved, threadId, turnId, attempt)
+            return DispatchExecutionData(
+                effectiveStageConfig,
+                prompt,
+                resolved,
+                threadId,
+                turnId,
+                attempt,
+                effectiveStage,
+                resolved.kind
+            )
         } catch (e: Exception) {
             state.releaseClaim(issue.id)
             throw e
@@ -579,15 +700,35 @@ class DispatchService(
                     issueIdentifier = issue.identifier,
                     error = err.message
                 ))
-                scheduleRetry(issue, err.message ?: "unknown", data.stageConfig?.onFailureState)
-                if (notificationsConfig?.onFailed == true && notifier != null) {
-                    notifier.send(NotificationEvent.AgentFailed(
-                        projectSlug = projectConfig.tracker.projectSlug,
-                        issueId = issue.id,
-                        issueIdentifier = issue.identifier,
-                        title = issue.title,
-                        error = err.message ?: "unknown"
-                    ))
+                when (val limitErr = err as? SubscriptionLimitException) {
+                    null -> {
+                        scheduleRetry(issue, err.message ?: "unknown", data.stageConfig?.onFailureState)
+                        if (notificationsConfig?.onFailed == true && notifier != null) {
+                            notifier.send(NotificationEvent.AgentFailed(
+                                projectSlug = projectConfig.tracker.projectSlug,
+                                issueId = issue.id,
+                                issueIdentifier = issue.identifier,
+                                title = issue.title,
+                                error = err.message ?: "unknown"
+                            ))
+                        }
+                    }
+                    else -> {
+                        val resumeAtMs = LimitResetParser.resolveResumeAtMs(
+                            message = limitErr.rawMessage,
+                            provider = limitErr.provider,
+                            claudeDefaultMs = projectConfig.agent.limitPause.claudeDefaultResumeMs,
+                            codexDefaultMs = projectConfig.agent.limitPause.codexDefaultResumeMs
+                        )
+                        scheduleLimitPause(
+                            issue = issue,
+                            error = limitErr.message ?: limitErr.rawMessage,
+                            provider = limitErr.provider,
+                            resumeAtMs = resumeAtMs,
+                            stageName = data.stageName,
+                            agentKind = data.agentKind
+                        )
+                    }
                 }
                 quotaEnforcer?.release(projectConfig.tracker.projectSlug)
             }

@@ -13,6 +13,7 @@ import com.flexsentlabs.koncerto.agent.SubtaskRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
 import com.flexsentlabs.koncerto.core.config.AgentProviderConfig
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
+import com.flexsentlabs.koncerto.core.config.NotificationsConfig
 import com.flexsentlabs.koncerto.core.config.RoutingRule
 import com.flexsentlabs.koncerto.core.config.FollowUpConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
@@ -25,7 +26,9 @@ import com.flexsentlabs.koncerto.core.config.WorkflowDefinition
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.quota.QuotaConfig
 import com.flexsentlabs.koncerto.core.quota.QuotaEnforcer
+import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.orchestrator.RetryEntry
+import com.flexsentlabs.koncerto.core.errors.SubscriptionLimitException
 import com.flexsentlabs.koncerto.core.model.BlockerRef
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.model.UserRef
@@ -45,6 +48,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.jupiter.api.Test
@@ -168,6 +172,77 @@ class DispatchServiceTest {
     @Test
     fun `dispatch skips already running issues`() {
         val state = RuntimeState().also { it.running["1"] = runningEntry("1", "A-1") }
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            state = state, runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatch(svc)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `scheduleLimitPause stores entry and posts linear comment without state change`() = runBlocking {
+        val linear = TrackingLinearClient()
+        val issue = issue("1", "A-1", "In Progress")
+        linear.addIssue(issue)
+        val state = RuntimeState()
+        val svc = createService(state = state, linear = linear)
+        val resumeAt = System.currentTimeMillis() + 60_000
+        svc.scheduleLimitPause(
+            issue = issue,
+            error = "You've hit your usage limit",
+            provider = "codex",
+            resumeAtMs = resumeAt,
+            stageName = "in progress",
+            agentKind = "codex"
+        )
+        val pause = state.limitPauses["1"]
+        assertThat(pause).isNotNull()
+        assertThat(pause!!.resumeAtMs).isEqualTo(resumeAt)
+        assertThat(state.retryAttempts.containsKey("1")).isFalse()
+        assertThat(linear.transitionedIssueId).isNull()
+        assertThat(linear.commentedIssueId).isEqualTo("1")
+        assertThat(linear.commentedBody!!.contains("paused", ignoreCase = true)).isTrue()
+        assertThat(linear.commentedBody!!.contains("In Progress")).isTrue()
+    }
+
+    @Test
+    fun `dispatchDueLimitPauses resumes and posts resume comment`() = runBlocking {
+        val linear = TrackingLinearClient()
+        val testIssue = issue("1", "A-1", "Todo")
+        linear.addIssue(testIssue)
+        val state = RuntimeState()
+        state.limitPauses["1"] = LimitPauseEntry(
+            issueId = "1",
+            identifier = "A-1",
+            stageName = "todo",
+            agentKind = "codex",
+            provider = "codex",
+            error = "limit",
+            resumeAtMs = System.currentTimeMillis() - 1
+        )
+        val runner = CollectingAgentRunner()
+        val svc = createService(state = state, linear = linear, runner = runner)
+        svc.dispatchDueLimitPauses(CoroutineScope(coroutineContext))
+        yield()
+        assertThat(state.limitPauses.containsKey("1")).isFalse()
+        assertThat(linear.commentedBody!!.contains("resuming", ignoreCase = true)).isTrue()
+        assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
+    }
+
+    @Test
+    fun `fetchAndDispatch skips limit paused issues`() {
+        val state = RuntimeState()
+        state.limitPauses["1"] = LimitPauseEntry(
+            issueId = "1",
+            identifier = "A-1",
+            stageName = "todo",
+            agentKind = "codex",
+            provider = "codex",
+            error = "limit",
+            resumeAtMs = System.currentTimeMillis() + 60_000
+        )
         val runner = CollectingAgentRunner()
         val svc = createService(
             state = state, runner = runner,
@@ -1253,6 +1328,142 @@ class DispatchServiceTest {
         runDispatchAwait(svc)
         assertThat(runner.dispatched.size).isEqualTo(1)
         assertThat(enforcer.getActiveCount("p")).isEqualTo(0)
+    }
+
+    @Test
+    fun `dispatch skipped when agent not authenticated`() {
+        AgentAuthChecker.markUnauthenticated("codex")
+        try {
+            val runner = CollectingAgentRunner()
+            val svc = createService(
+                runner = runner,
+                candidates = listOf(issue("1", "A-1", "Todo"))
+            )
+            runDispatch(svc)
+            assertThat(runner.dispatched.size).isEqualTo(0)
+        } finally {
+            AgentAuthChecker.markAuthenticated("codex")
+        }
+    }
+
+    @Test
+    fun `subscription limit failure schedules limit pause instead of retry`() = runBlocking {
+        val linear = TrackingLinearClient()
+        val testIssue = issue("1", "A-1", "Todo")
+        linear.addIssue(testIssue)
+        val state = RuntimeState()
+        val runner = LimitFailureRunner(
+            SubscriptionLimitException("usage limit", provider = "codex", rawMessage = "You've hit your usage limit")
+        )
+        val svc = createService(
+            state = state,
+            linear = linear,
+            runner = runner,
+            candidates = listOf(testIssue)
+        )
+        runDispatchAwait(svc)
+        assertThat(state.limitPauses.containsKey("1")).isTrue()
+        assertThat(state.retryAttempts.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `completion sends notification when configured`() = runBlocking {
+        var notified = false
+        val notifier = CompositeNotifier(listOf(object : com.flexsentlabs.koncerto.notifications.Notifier {
+            override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
+                if (event is com.flexsentlabs.koncerto.notifications.NotificationEvent.AgentCompleted) {
+                    notified = true
+                }
+            }
+        }))
+        val projectConfig = config().copy(
+            notifications = com.flexsentlabs.koncerto.core.config.NotificationsConfig(onCompleted = true)
+        )
+        val runner = CollectingAgentRunner()
+        val svc = DispatchService(
+            projectConfig = projectConfig,
+            state = RuntimeState(),
+            linear = SimpleLinear(listOf(issue("1", "A-1", "Todo"))),
+            agentRunner = runner,
+            workflowCache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) },
+            logger = StructuredLogger(emptyList()),
+            notifier = notifier,
+            notificationsConfig = projectConfig.notifications
+        )
+        runDispatchAwait(svc)
+        assertThat(notified).isTrue()
+    }
+
+    @Test
+    fun `workplan parse failure is logged without crashing dispatch`(@TempDir root: Path) = runBlocking {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        workspaces.ensureWorkspace("A-1")
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            workspaces = workspaces,
+            workplanParser = WorkplanParser(),
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `sequential mode dispatches eligible issues`() {
+        val projectConfig = config().copy(
+            agent = config().agent.copy(sequentialMode = true)
+        )
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            projectConfig = projectConfig,
+            runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatch(svc)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `fetchAndDispatch returns immediately when shutdown requested`() {
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        svc.shutdownRequested = true
+        runDispatch(svc)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `resolveStageOverride returns null when remote branch missing`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        workspaces.ensureWorkspace("A-1")
+        val gitWorkflow = FakeGitWorkflowForDispatch(remoteExists = false)
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            workspaces = workspaces,
+            gitWorkflow = gitWorkflow,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatch(svc)
+        assertThat(runner.runArgs.first().prompt).isEqualTo("Hi")
+    }
+}
+
+private class LimitFailureRunner(private val error: Throwable) : AgentRunner {
+    private val flow = MutableSharedFlow<com.flexsentlabs.koncerto.agent.AgentEvent>()
+    override fun events() = flow.asSharedFlow()
+    override suspend fun run(
+        issue: Issue, attempt: Int?, prompt: String,
+        agentKindOverride: String?, commandOverride: String?,
+        modelOverride: String?, effortOverride: String?,
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+    ): EmptyResult<IllegalStateException> {
+        @Suppress("UNCHECKED_CAST")
+        return Result.Failure(error) as Result.Failure<IllegalStateException>
     }
 }
 

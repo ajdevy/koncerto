@@ -12,6 +12,18 @@ class PatternErrorClassifierTest {
     private val classifier = PatternErrorClassifier()
 
     @Test
+    fun `classify subscription limit for codex usage message`() {
+        val error = classifier.classify("stdout", "You've hit your usage limit. try again at 3:51 PM")
+        assertThat(error).isInstanceOf(AgentErrorType.SubscriptionLimitError::class)
+    }
+
+    @Test
+    fun `classify subscription limit for claude api error`() {
+        val error = classifier.classify("stderr", "API Error: Rate limit reached")
+        assertThat(error).isInstanceOf(AgentErrorType.SubscriptionLimitError::class)
+    }
+
+    @Test
     fun `classify rate limit by status code`() {
         val error = classifier.classify("stderr", "HTTP 429 Too Many Requests")
         assertThat(error).isInstanceOf(AgentErrorType.RateLimitError::class)
