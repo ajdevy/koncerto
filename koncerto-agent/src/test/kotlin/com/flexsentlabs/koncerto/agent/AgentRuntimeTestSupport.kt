@@ -1,8 +1,10 @@
 package com.flexsentlabs.koncerto.agent
 
 import java.util.Collections
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -26,10 +28,13 @@ object AgentRuntimeTestSupport {
         action: suspend () -> Unit,
     ): List<AgentEvent> = coroutineScope {
         val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
+        val subscribed = CompletableDeferred<Unit>()
         val collector = launch {
-            runner.events().collect { collected += it }
+            runner.events()
+                .onStart { subscribed.complete(Unit) }
+                .collect { collected += it }
         }
-        delay(50)
+        subscribed.await()
         action()
         awaitUntil(timeoutMs) { until(collected) }
         delay(300)

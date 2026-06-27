@@ -32,9 +32,10 @@ class AgentRunnerLimitDetectionTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            sleep 0.3
             echo "rate limit exceeded" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.1
         """.trimIndent()
         val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(
@@ -63,9 +64,10 @@ class AgentRunnerLimitDetectionTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            sleep 0.3
             echo "Unauthorized: invalid API key" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.1
         """.trimIndent()
         val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(
@@ -94,9 +96,10 @@ class AgentRunnerLimitDetectionTest {
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            sleep 0.3
             echo "normal diagnostic info" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
-            sleep 0.2
+            sleep 0.1
         """.trimIndent()
         val config = sampleConfig(command = script, agentKind = "opencode")
         val runner = DefaultAgentRunner(
