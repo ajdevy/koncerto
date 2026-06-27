@@ -22,7 +22,47 @@ class DemoScenarioGenerator(
     }
 
     internal fun buildPrompt(issue: Issue, workspace: Workspace): String {
-        TODO("implement in Task 2")
+        val systemPromptFile = workspace.path.resolve("prompts/demo-scenario.md").toFile()
+        val systemPrompt = if (systemPromptFile.exists()) systemPromptFile.readText() else ""
+
+        val readmeFile = workspace.path.resolve("README.md").toFile()
+        val readme = if (readmeFile.exists()) readmeFile.readText().take(3000) else ""
+
+        val diff = runGitDiff(workspace.path.toFile())?.take(8000) ?: ""
+
+        return buildString {
+            if (systemPrompt.isNotBlank()) {
+                appendLine(systemPrompt)
+                appendLine()
+            }
+            appendLine("## Issue")
+            appendLine("${issue.title}: ${issue.description ?: ""}")
+            appendLine()
+            if (readme.isNotBlank()) {
+                appendLine("## Project README")
+                appendLine(readme)
+                appendLine()
+            }
+            if (diff.isNotBlank()) {
+                appendLine("## PR Changes")
+                appendLine(diff)
+                appendLine()
+            }
+            append("Generate the demo_scenario YAML now.")
+        }
+    }
+
+    private fun runGitDiff(workDir: File): String? = try {
+        val pb = ProcessBuilder("git", "diff", "main...HEAD")
+            .directory(workDir)
+            .redirectErrorStream(true)
+        val process = pb.start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        process.waitFor(30, TimeUnit.SECONDS)
+        output.takeIf { it.isNotBlank() }
+    } catch (e: Exception) {
+        logger.warn("demo_scenario_git_diff_failed", mapOf("error" to (e.message ?: "unknown")))
+        null
     }
 
     internal fun extractScenarioBlock(raw: String): String? {

@@ -7,6 +7,8 @@ import assertk.assertions.isNull
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Path
 
 class DemoScenarioGeneratorTest {
 
@@ -85,5 +87,60 @@ class DemoScenarioGeneratorTest {
         assertThat(descLine.startsWith("  ")).isEqualTo(true)
         val stepsLine = lines.first { it.trimStart().startsWith("steps:") }
         assertThat(stepsLine.startsWith("  ")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt includes issue title and description`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1",
+            title = "Add checkout button", description = "Users need a checkout button",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Add checkout button")).isEqualTo(true)
+        assertThat(prompt.contains("Users need a checkout button")).isEqualTo(true)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt includes README when present`(@TempDir tmpDir: Path) {
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "# My App\nThis app does cool things.")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("My App")).isEqualTo(true)
+        assertThat(prompt.contains("This app does cool things.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt works without README`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt includes demo-scenario system prompt when present`(@TempDir tmpDir: Path) {
+        val promptsDir = tmpDir.resolve("prompts").also { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.writeString(promptsDir.resolve("demo-scenario.md"), "You are a demo scenario generator.")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
     }
 }
