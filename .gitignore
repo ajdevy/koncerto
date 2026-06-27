@@ -40,3 +40,6 @@ config/ngrok.yml
 
 # Env file (contains secrets)
 .env
+
+# Cloudflare Wrangler local cache
+.wrangler/
