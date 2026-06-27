@@ -39,9 +39,7 @@ class DemoScenarioGenerator(
         }
         val rawMatch = Regex("""demo_scenario:\s*\n(?:[ \t].*\n?)+""").find(raw)
         if (rawMatch != null) {
-            val block = rawMatch.value.trimEnd()
-            if (block.lines().drop(1).all { it.isBlank() }) return null
-            return block
+            return rawMatch.value.trimEnd()
         }
         return null
     }

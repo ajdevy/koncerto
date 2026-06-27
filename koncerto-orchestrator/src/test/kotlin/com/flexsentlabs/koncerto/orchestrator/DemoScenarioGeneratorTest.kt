@@ -65,4 +65,25 @@ class DemoScenarioGeneratorTest {
         val raw = "demo_scenario:\n\nsome other content"
         assertThat(generator().extractScenarioBlock(raw)).isNull()
     }
+
+    @Test
+    fun `extractScenarioBlock fenced block wraps top-level keys under demo_scenario`() {
+        val raw = """
+            ```yaml demo_scenario
+            description: "Checkout flow"
+            steps:
+              - action: click
+                selector: "text=Submit"
+            ```
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)!!
+        val lines = result.lines()
+        // First line is the wrapper key
+        assertThat(lines[0]).isEqualTo("demo_scenario:")
+        // Top-level keys (description, steps) must be indented under demo_scenario:
+        val descLine = lines.first { it.trimStart().startsWith("description:") }
+        assertThat(descLine.startsWith("  ")).isEqualTo(true)
+        val stepsLine = lines.first { it.trimStart().startsWith("steps:") }
+        assertThat(stepsLine.startsWith("  ")).isEqualTo(true)
+    }
 }
