@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.agent
 
 import java.util.Collections
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -16,6 +17,24 @@ object AgentRuntimeTestSupport {
         while (!condition() && System.currentTimeMillis() < deadline) {
             delay(pollMs)
         }
+    }
+
+    suspend fun collectRunnerEventsDuring(
+        runner: AgentRunner,
+        timeoutMs: Long = 10_000,
+        until: (List<AgentEvent>) -> Boolean = { it.isNotEmpty() },
+        action: suspend () -> Unit,
+    ): List<AgentEvent> = coroutineScope {
+        val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
+        val collector = launch {
+            runner.events().collect { collected += it }
+        }
+        delay(50)
+        action()
+        awaitUntil(timeoutMs) { until(collected) }
+        delay(300)
+        collector.cancel()
+        collected.toList()
     }
 
     fun collectEventsDuring(
