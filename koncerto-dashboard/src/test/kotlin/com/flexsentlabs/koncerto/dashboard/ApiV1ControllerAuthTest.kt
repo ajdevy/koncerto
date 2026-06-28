@@ -5,6 +5,7 @@ import assertk.assertions.hasSize
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.ClaudeAuthSupport
@@ -164,6 +165,7 @@ class ApiV1ControllerAuthTest {
 
     @AfterEach
     fun tearDown() {
+        ApiV1Controller.testLoginProcessFactory = null
         LoginTestHelper.reset()
         AgentAuthChecker.reset()
     }
@@ -418,5 +420,85 @@ class ApiV1ControllerAuthTest {
 
         assertThat(response.statusCodeValue).isEqualTo(200)
         assertThat(controller.getClaudeLoginStatus().body!!.state).isEqualTo("idle")
+    }
+
+    @Test
+    fun `withTimeout reads output containing one-time code phrase`() {
+        val controller = createController()
+        val method = ApiV1Controller::class.java.getDeclaredMethod(
+            "withTimeout", java.io.InputStream::class.java, Long::class.javaPrimitiveType
+        )
+        method.isAccessible = true
+        val input = java.io.ByteArrayInputStream("Enter your one-time code below\n".toByteArray())
+        val text = method.invoke(controller, input, 1000L) as String
+        assertThat(text.contains("one-time code")).isTrue()
+    }
+
+    @Test
+    fun `testLoginProcessFactory seam roundtrips`() {
+        ApiV1Controller.testLoginProcessFactory = { cmd ->
+            ProcessBuilder("bash", "-c", "echo seam:$cmd")
+        }
+        assertThat(ApiV1Controller.testLoginProcessFactory).isNotNull()
+        ApiV1Controller.testLoginProcessFactory = null
+        assertThat(ApiV1Controller.testLoginProcessFactory).isNull()
+    }
+
+    @Test
+    fun `startCodexLogin extracts url and code from login output`() {
+        ApiV1Controller.testLoginProcessFactory = { _ ->
+            ProcessBuilder(
+                "bash", "-c",
+                "echo 'Visit https://auth.example.com/device and enter code ABCD-1234'; sleep 0.2"
+            )
+        }
+        val controller = createController()
+        val response = controller.startCodexLogin().block()!!
+
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(response.body!!.state).isEqualTo("pending")
+        assertThat(response.body!!.url).isEqualTo("https://auth.example.com/device")
+        assertThat(response.body!!.code).isEqualTo("ABCD-1234")
+    }
+
+    @Test
+    fun `startClaudeLogin extracts localhost callback port from output`() {
+        ApiV1Controller.testLoginProcessFactory = { _ ->
+            ProcessBuilder(
+                "bash", "-c",
+                "echo 'Open http://localhost:8765/callback with code CLDE-9999 https://claude.example.com'; sleep 0.2"
+            )
+        }
+        val controller = createController()
+        val response = controller.startClaudeLogin().block()!!
+
+        assertThat(response.statusCodeValue).isEqualTo(200)
+        assertThat(response.body!!.state).isEqualTo("pending")
+        assertThat(response.body!!.code).isEqualTo("CLDE-9999")
+        assertThat(ApiV1Controller.getClaudeCallbackPort()).isEqualTo(8765)
+    }
+
+    @Test
+    fun `startCodexLogin returns error when login process fails to start`() {
+        ApiV1Controller.testLoginProcessFactory = { _ ->
+            throw RuntimeException("login failed")
+        }
+        val controller = createController()
+        val response = controller.startCodexLogin().block()!!
+
+        assertThat(response.statusCodeValue).isEqualTo(500)
+        assertThat(response.body!!.state).isEqualTo("error")
+    }
+
+    @Test
+    fun `withTimeout stops early when https url appears in stream`() {
+        val controller = createController()
+        val method = ApiV1Controller::class.java.getDeclaredMethod(
+            "withTimeout", java.io.InputStream::class.java, Long::class.javaPrimitiveType
+        )
+        method.isAccessible = true
+        val input = java.io.ByteArrayInputStream("Go to https://device.example.com now\n".toByteArray())
+        val text = method.invoke(controller, input, 5000L) as String
+        assertThat(text.contains("https://device.example.com")).isTrue()
     }
 }

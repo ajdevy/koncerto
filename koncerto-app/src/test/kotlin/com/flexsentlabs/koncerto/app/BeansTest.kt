@@ -827,6 +827,47 @@ class BeansTest {
     }
 
     @Test
+    fun `demoConfig maps r2 storage and ai settings from service config`() {
+        val config = ServiceConfig(
+            demoRecording = DemoRecordingConfig(
+                enabled = true,
+                targetUrl = "http://demo.example.com",
+                storage = DemoRecordingConfig.StorageConfig(
+                    r2Endpoint = "https://r2.example.com",
+                    r2Bucket = "demos",
+                    r2AccessKey = "access",
+                    r2SecretKey = "secret",
+                    publicUrlBase = "https://cdn.example.com",
+                    presignedUrlTtl = 3600,
+                    region = "auto"
+                ),
+                ai = DemoRecordingConfig.AiConfig(
+                    model = "claude-sonnet",
+                    timeline = true,
+                    reproSteps = true
+                ),
+                retry = DemoRecordingConfig.RetryConfig(maxAttempts = 5),
+                platform = DemoRecordingConfig.PlatformConfig(web = "playwright", terminal = "asciinema")
+            )
+        )
+        val demoConfig = beans.demoConfig(config)
+        assertThat(demoConfig.r2).isNotNull()
+        assertThat(demoConfig.r2!!.endpoint).isEqualTo("https://r2.example.com")
+        assertThat(demoConfig.r2!!.bucketName).isEqualTo("demos")
+        assertThat(demoConfig.ai!!.model).isEqualTo("claude-sonnet")
+        assertThat(demoConfig.ai!!.timelineEnabled).isTrue()
+        assertThat(demoConfig.ai!!.reproStepsEnabled).isTrue()
+        assertThat(demoConfig.maxRetries).isEqualTo(5)
+        assertThat(demoConfig.defaultPlatform).isEqualTo("playwright")
+    }
+
+    @Test
+    fun `demoCleanupScheduler returns null when recording service missing`() {
+        val scope = CoroutineScope(Dispatchers.Unconfined + SupervisorJob())
+        assertThat(beans.demoCleanupScheduler(null, DemoConfig(enabled = true), scope)).isNull()
+    }
+
+    @Test
     fun `demoStorage returns null without r2 config`() {
         assertThat(beans.demoStorage(DemoConfig(enabled = false))).isNull()
     }

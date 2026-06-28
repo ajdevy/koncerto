@@ -13,6 +13,12 @@ open class GitWorkflow(
     private val config: GitConfig,
     private val logger: StructuredLogger
 ) {
+    companion object {
+        /** Test seam: overrides GH_TOKEN for authenticated remote URL setup. */
+        @JvmStatic
+        var testGhTokenOverride: String? = null
+    }
+
     fun branchName(identifier: String): String = "${config.branchPrefix}$identifier"
 
     open fun remoteBranchExists(branchName: String, workspacePath: Path): Boolean {
@@ -107,7 +113,7 @@ open class GitWorkflow(
     private fun setupOriginRemote(workspacePath: Path) {
         val remoteUrl = config.remoteUrl
         if (remoteUrl.isBlank()) return
-        val token = System.getenv("GH_TOKEN")
+        val token = testGhTokenOverride ?: System.getenv("GH_TOKEN")
         val authUrl = if (!token.isNullOrBlank()) {
             // Insert token for authenticated push: https://x-access-token:<token>@github.com/...
             remoteUrl.replace("://", "://x-access-token:$token@")

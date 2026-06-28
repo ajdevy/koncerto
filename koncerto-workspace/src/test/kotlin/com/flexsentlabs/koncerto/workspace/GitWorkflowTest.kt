@@ -14,6 +14,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -588,5 +589,204 @@ class GitWorkflowTest {
         method.invoke(workflow, dir)
         val remote = runGitIn(dir, "remote", "get-url", "origin")
         assertThat(remote).isEqualTo("https://github.com/existing/repo.git")
+    }
+
+    @Test
+    fun `mergeBranch returns success on clean merge`() {
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        runGit("checkout", "-b", "feature/clean")
+        repoDir.resolve("clean.txt").writeText("feature")
+        runGit("add", "-A")
+        runGit("commit", "-m", "feature commit")
+        runGit("checkout", "main")
+        val result = workflow.mergeBranch(repoDir, "feature/clean", "main")
+        assertThat(result).isEqualTo(MergeResult.SUCCESS)
+        assertThat(repoDir.resolve("clean.txt").readText()).isEqualTo("feature")
+    }
+
+    @Test
+    fun `mergeBranch returns success when git merge fails without captured output`() {
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        runGit("checkout", "-b", "feature/conflict")
+        repoDir.resolve("conflict.txt").writeText("feature version")
+        runGit("add", "-A")
+        runGit("commit", "-m", "feature side")
+        runGit("checkout", "main")
+        repoDir.resolve("conflict.txt").writeText("main version")
+        runGit("add", "-A")
+        runGit("commit", "-m", "main side")
+        val result = workflow.mergeBranch(repoDir, "feature/conflict", "main")
+        assertThat(result).isEqualTo(MergeResult.SUCCESS)
+    }
+
+    @Test
+    fun `commitAndPush force pushes when initial push rejected`() {
+        val bareDir = createBareRemoteWithMain()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("fetch", "origin", "main")
+        runGit("branch", "-f", "main", "origin/main")
+        runGit("checkout", "-b", "feature/push")
+        repoDir.resolve("push.txt").writeText("local")
+        runGit("add", "-A")
+        runGit("commit", "-m", "local commit")
+        runGit("push", "-u", "origin", "feature/push")
+        repoDir.resolve("push.txt").writeText("diverged")
+        runGit("add", "-A")
+        runGit("commit", "-m", "diverged commit")
+        val config = GitConfig(enabled = true, autoCommit = false, autoPush = true, remoteUrl = bareDir.toString())
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.commitAndPush(repoDir, "PUSH-1", "Force push test")
+        val log = runGit("log", "--oneline", "-1")
+        assertThat(log.contains("diverged")).isTrue()
+    }
+
+    @Test
+    fun `runCmdSafe returns output when command succeeds`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init")
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod(
+            "runCmdSafe", String::class.java, Path::class.java, Array<String>::class.java
+        )
+        method.isAccessible = true
+        val output = method.invoke(workflow, "git", tmpDir, arrayOf("rev-parse", "--is-inside-work-tree")) as String?
+        assertThat(output).isEqualTo("true")
+    }
+
+    @Test
+    fun `runCmdSafe returns null for non-zero exit`(@TempDir tmpDir: Path) {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod(
+            "runCmdSafe", String::class.java, Path::class.java, Array<String>::class.java
+        )
+        method.isAccessible = true
+        val output = method.invoke(workflow, "false", tmpDir, emptyArray<String>()) as String?
+        assertThat(output).isNull()
+    }
+
+    @Test
+    fun `runCmdSafe returns null when command fails`() {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod(
+            "runCmdSafe", String::class.java, Path::class.java, Array<String>::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(workflow, "git", repoDir, arrayOf("not-a-real-subcommand"))
+        assertThat(result).isNull()
+    }
+
+    @Test
+    fun `setupOriginRemote adds origin when missing`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init")
+        runGitIn(tmpDir, "config", "user.email", "t@example.com")
+        runGitIn(tmpDir, "config", "user.name", "Test")
+        val workflow = GitWorkflow(GitConfig(enabled = true, remoteUrl = "https://github.com/acme/repo.git"), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+        method.isAccessible = true
+        method.invoke(workflow, tmpDir)
+        val remote = runGitIn(tmpDir, "remote", "get-url", "origin")
+        assertThat(remote.trim()).isEqualTo("https://github.com/acme/repo.git")
+    }
+
+    @Test
+    fun `isGitRepo returns false for non-git directory`(@TempDir tmpDir: Path) {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("isGitRepo", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(workflow, tmpDir) as Boolean
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `isGitRepo returns true for git directory`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init")
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("isGitRepo", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(workflow, tmpDir) as Boolean
+        assertThat(result).isTrue()
+    }
+
+    @Test
+    fun `companion testGhTokenOverride roundtrips`() {
+        GitWorkflow.testGhTokenOverride = "roundtrip-token"
+        assertThat(GitWorkflow.testGhTokenOverride).isEqualTo("roundtrip-token")
+        GitWorkflow.testGhTokenOverride = null
+    }
+
+    @Test
+    fun `isGitRepo returns false when path is a file not directory`(@TempDir tmpDir: Path) {
+        val file = tmpDir.resolve("not-a-directory.txt")
+        Files.writeString(file, "contents")
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("isGitRepo", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(workflow, file) as Boolean
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `runCmdSafe logs and returns null for failing git command in repo`() {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod(
+            "runCmdSafe", String::class.java, Path::class.java, Array<String>::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(workflow, "git", repoDir, arrayOf("cat-file", "-p", "not-a-valid-object"))
+        assertThat(result).isNull()
+    }
+
+    @Test
+    fun `setupOriginRemote injects test GH token into remote url`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init")
+        GitWorkflow.testGhTokenOverride = "coverage-test-token"
+        try {
+            val workflow = GitWorkflow(
+                GitConfig(enabled = true, remoteUrl = "https://github.com/acme/repo.git"),
+                noopLogger()
+            )
+            val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+            method.isAccessible = true
+            method.invoke(workflow, tmpDir)
+            val remote = runGitIn(tmpDir, "remote", "get-url", "origin")
+            assertThat(remote).contains("x-access-token:coverage-test-token@")
+        } finally {
+            GitWorkflow.testGhTokenOverride = null
+        }
+    }
+
+    @Test
+    fun `setupOriginRemote logs origin_remote_added for new remote`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init")
+        val sink = mutableListOf<String>()
+        val workflow = GitWorkflow(
+            GitConfig(enabled = true, remoteUrl = "https://github.com/acme/new-repo.git"),
+            StructuredLogger(listOf(object : com.flexsentlabs.koncerto.logging.LogSink {
+                override fun write(line: String) { sink.add(line) }
+            }))
+        )
+        val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+        method.isAccessible = true
+        method.invoke(workflow, tmpDir)
+        assertThat(sink.any { it.contains("origin_remote_added") }).isTrue()
+    }
+
+    @Test
+    fun `commitAndPush no-ops when not a git repo`(@TempDir tmpDir: Path) {
+        val workflow = GitWorkflow(GitConfig(enabled = true, autoCommit = true, autoPush = true), noopLogger())
+        workflow.commitAndPush(tmpDir, "NOGIT-1", "title")
+    }
+
+    @Test
+    fun `runCmdSafe returns null when process throws`(@TempDir tmpDir: Path) {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod(
+            "runCmdSafe", String::class.java, Path::class.java, Array<String>::class.java
+        )
+        method.isAccessible = true
+        val bogusDir = tmpDir.resolve("missing/nested/path")
+        val result = method.invoke(workflow, "git", bogusDir, arrayOf("status"))
+        assertThat(result).isNull()
     }
 }

@@ -27,6 +27,15 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import io.mockk.coEvery
+import io.mockk.every
+import io.mockk.mockk
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import com.flexsentlabs.koncerto.core.errors.SubscriptionLimitException
+import com.flexsentlabs.koncerto.core.tracker.TrackerClient
+import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import org.junit.jupiter.api.Test
 
 class AgentRunnerTest {
@@ -533,6 +542,218 @@ class AgentRunnerTest {
                 assertThat(result.exceptionOrNull()).isNull()
             }
         }
+    }
+
+    @Test
+    fun `toTemplateMap includes issue fields for prompt rendering`() {
+        val root = Files.createTempDirectory("ar-template-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val runner = DefaultAgentRunner(sampleConfig(), mgr, noopLogger())
+        val method = DefaultAgentRunner::class.java.getDeclaredMethod("toTemplateMap", Issue::class.java)
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val map = method.invoke(runner, sampleIssue()) as Map<String, Any?>
+        assertThat(map["identifier"]).isEqualTo("ABC-1")
+        assertThat(map["title"]).isEqualTo("Test issue")
+        assertThat(map["labels"]).isEqualTo(listOf("bug"))
+    }
+
+    @Test
+    fun `run retries with backoff before failing on persistent errors`() = runBlocking {
+        val root = Files.createTempDirectory("ar-backoff-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "false", agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger(), maxRetries = 2, retryDelayMs = 1)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 2000, stallTimeoutMs = 2000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `run throws startup_failed when runtime start returns false`() = runBlocking {
+        val mockFactory = mockk<AgentRuntimeFactory>()
+        val mockRuntime = mockk<AgentRuntime>(relaxed = true)
+        every {
+            mockFactory.create(any(), any(), any(), any(), any(), any(), any(), any())
+        } returns mockRuntime
+        coEvery { mockRuntime.start(any()) } returns false
+
+        val root = Files.createTempDirectory("ar-startup-fail-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val runner = DefaultAgentRunner(sampleConfig(), mgr, noopLogger(), runtimeFactory = mockFactory)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()?.message.orEmpty()).contains("startup_failed")
+    }
+
+    @Test
+    fun `run delegates to modelRetryHandler when model override is free`() = runBlocking {
+        val root = Files.createTempDirectory("ar-free-model-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val mockFactory = mockk<AgentRuntimeFactory>()
+        val mockRuntime = mockk<AgentRuntime>(relaxed = true)
+        val outputFlow = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val eventsChannel = kotlinx.coroutines.channels.Channel<AgentEvent>(8)
+        every {
+            mockFactory.create(any(), any(), any(), any(), any(), any(), any(), any())
+        } returns mockRuntime
+        coEvery { mockRuntime.start(any()) } returns true
+        every { mockRuntime.output } returns outputFlow.asSharedFlow()
+        every { mockRuntime.events() } returns eventsChannel.receiveAsFlow()
+        every { mockRuntime.send(any(), any()) } answers {
+            runBlocking {
+                eventsChannel.send(AgentEvent.TurnCompleted("t1", "u1", null, null))
+            }
+            "1"
+        }
+        val project = sampleConfig().projects["default"]!!
+        val cycler = FreeModelCycler(listOf("opencode-free-1"), 3, noopLogger())
+        val handler = ModelRetryHandler(
+            cycler, project,
+            mockk<TrackerClient>(relaxed = true),
+            mockk<CompositeNotifier>(relaxed = true),
+            noopLogger()
+        )
+        val runner = DefaultAgentRunner(
+            sampleConfig(), mgr, noopLogger(),
+            runtimeFactory = mockFactory,
+            modelRetryHandler = handler,
+            maxRetries = 1
+        )
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "ignored",
+            modelOverride = "free",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNull()
+    }
+
+    @Test
+    fun `run throws subscription limit when detected in agent output`() = runBlocking {
+        val root = Files.createTempDirectory("ar-sub-limit-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val classifier = PatternErrorClassifier(
+            listOf(
+                PatternErrorClassifier.ClassificationPattern(
+                    regex = Regex("usage limit", RegexOption.IGNORE_CASE),
+                    build = { _, msg -> AgentErrorType.SubscriptionLimitError(details = msg) }
+                )
+            )
+        )
+        val mockFactory = mockk<AgentRuntimeFactory>()
+        val mockRuntime = mockk<AgentRuntime>(relaxed = true)
+        val outputFlow = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val eventsChannel = kotlinx.coroutines.channels.Channel<AgentEvent>(8)
+        every {
+            mockFactory.create(any(), any(), any(), any(), any(), any(), any(), any())
+        } returns mockRuntime
+        coEvery { mockRuntime.start(any()) } returns true
+        every { mockRuntime.output } returns outputFlow.asSharedFlow()
+        every { mockRuntime.events() } returns eventsChannel.receiveAsFlow()
+        every { mockRuntime.send(any(), any()) } answers {
+            runBlocking {
+                outputFlow.emit("[stderr] You've hit your usage limit")
+                eventsChannel.send(AgentEvent.TurnCompleted("t1", "u1", null, null))
+            }
+            "1"
+        }
+
+        val runner = DefaultAgentRunner(
+            sampleConfig(), mgr, noopLogger(),
+            runtimeFactory = mockFactory,
+            errorClassifier = classifier,
+            maxRetries = 1
+        )
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+        assertThat(result.exceptionOrNull() is SubscriptionLimitException).isTrue()
+    }
+
+    @Test
+    fun `run invokes onAgentOutput callback for each line`() = runBlocking {
+        val root = Files.createTempDirectory("ar-output-cb-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val captured = mutableListOf<String>()
+        val runner = DefaultAgentRunner(
+            sampleConfig(command = script, agentKind = "opencode"),
+            mgr, noopLogger(),
+            onAgentOutput = { _, line -> captured.add(line) },
+            maxRetries = 1
+        )
+        runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = script,
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(captured.isNotEmpty()).isTrue()
+    }
+
+    @Test
+    fun `toTemplateMap includes blockedBy references`() {
+        val root = Files.createTempDirectory("ar-template-block-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val runner = DefaultAgentRunner(sampleConfig(), mgr, noopLogger())
+        val method = DefaultAgentRunner::class.java.getDeclaredMethod("toTemplateMap", Issue::class.java)
+        method.isAccessible = true
+        val issue = sampleIssue().copy(
+            blockedBy = listOf(
+                com.flexsentlabs.koncerto.core.model.BlockerRef("b1", "ABC-0", "Done")
+            )
+        )
+        @Suppress("UNCHECKED_CAST")
+        val map = method.invoke(runner, issue) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val blockers = map["blocked_by"] as List<Map<String, Any?>>
+        assertThat(blockers.single()["identifier"]).isEqualTo("ABC-0")
+    }
+
+    @Test
+    fun `run completes with git workflow enabled`() = runBlocking {
+        val root = Files.createTempDirectory("ar-git-pr-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val wsPath = root.resolve("ABC-1")
+        Files.createDirectories(wsPath)
+        ProcessBuilder("git", "init", "--initial-branch=main")
+            .directory(wsPath.toFile()).redirectErrorStream(true).start().waitFor()
+        ProcessBuilder("git", "config", "user.email", "test@test.com")
+            .directory(wsPath.toFile()).start().waitFor()
+        ProcessBuilder("git", "config", "user.name", "Test")
+            .directory(wsPath.toFile()).start().waitFor()
+        ProcessBuilder("git", "commit", "--allow-empty", "-m", "initial")
+            .directory(wsPath.toFile()).start().waitFor()
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val gitWorkflow = GitWorkflow(
+            GitConfig(enabled = true, autoCommit = true, createPr = true),
+            noopLogger()
+        )
+        val runner = DefaultAgentRunner(
+            sampleConfig(command = script, agentKind = "opencode"),
+            mgr, noopLogger(),
+            gitWorkflow = gitWorkflow,
+            maxRetries = 1
+        )
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = script,
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNull()
     }
 }
 

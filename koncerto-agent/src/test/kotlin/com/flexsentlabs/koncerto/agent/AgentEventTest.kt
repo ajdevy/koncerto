@@ -200,6 +200,16 @@ class AgentEventTest {
         val started = AgentEvent.SubtaskStarted(subtaskId = "step-1", issueId = "KONC-123")
         assertThat(started.subtaskId).isEqualTo("step-1")
         assertThat(started.issueId).isEqualTo("KONC-123")
+
+        val completed = AgentEvent.SubtaskCompleted(subtaskId = "step-1", issueId = "KONC-123", pid = 9L, timestamp = now)
+        assertThat(completed.subtaskId).isEqualTo("step-1")
+        assertThat(completed.pid).isEqualTo(9L)
+
+        val failed = AgentEvent.SubtaskFailed(
+            subtaskId = "step-2", issueId = "KONC-123", error = "boom", pid = 10L, timestamp = now
+        )
+        assertThat(failed.error).isEqualTo("boom")
+        assertThat(failed.pid).isEqualTo(10L)
     }
 
     @Test

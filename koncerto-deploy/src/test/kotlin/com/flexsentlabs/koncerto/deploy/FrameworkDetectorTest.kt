@@ -114,4 +114,26 @@ class FrameworkDetectorTest {
 
         assertThat(framework?.buildCmd).isEqualTo("./gradlew build")
     }
+
+    @Test
+    fun `detects python main py run command when uvicorn absent`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("requirements.txt"), "flask\n")
+        Files.writeString(tmpDir.resolve("app.py"), "app = object()\n")
+
+        val framework = detector.detectFramework(tmpDir)
+
+        assertThat(framework?.runCmd).isEqualTo("python app.py")
+    }
+
+    @Test
+    fun `buildCmdFor returns gradle wrapper command`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("build.gradle.kts"), "plugins { id(\"spring-boot\") }")
+        Files.writeString(tmpDir.resolve("gradlew"), "#!/bin/sh\n")
+        val method = FrameworkDetector::class.java.getDeclaredMethod(
+            "buildCmdFor", Path::class.java, String::class.java
+        )
+        method.isAccessible = true
+        val cmd = method.invoke(detector, tmpDir, "build") as String?
+        assertThat(cmd).isEqualTo("./gradlew build")
+    }
 }

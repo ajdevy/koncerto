@@ -10,6 +10,13 @@ object AgentAuthChecker {
     private val overrideAuth = ConcurrentHashMap<String, Boolean>()
     @Volatile private var claudeAuthToken: String? = null
 
+    /** Test seam: replaces bash auth status probes in [checkCodex] / [checkClaude]. */
+    @JvmStatic
+    var testAuthProcessFactory: ((String) -> ProcessBuilder)? = null
+
+    internal fun authProcessBuilder(command: String): ProcessBuilder =
+        testAuthProcessFactory?.invoke(command) ?: ProcessBuilder("bash", "-lc", command)
+
     fun isAuthenticated(agentKind: String): Boolean {
         val key = agentKind.lowercase().trim()
         if (!needsAuth(key)) return true
@@ -65,7 +72,7 @@ object AgentAuthChecker {
     private fun checkClaude(): Boolean {
         if (!getClaudeAuthToken().isNullOrBlank()) return true
         try {
-            val pb = ProcessBuilder("bash", "-lc", "claude auth status --json")
+            val pb = authProcessBuilder("claude auth status --json")
             pb.redirectErrorStream(true)
             ClaudeAuthSupport.applyToken(pb)
             val p = pb.start()
@@ -83,7 +90,7 @@ object AgentAuthChecker {
 
     private fun checkCodex(): Boolean {
         try {
-            val pb = ProcessBuilder("bash", "-lc", "codex login status")
+            val pb = authProcessBuilder("codex login status")
             pb.redirectErrorStream(true)
             val p = pb.start()
             val exited = p.waitFor(5, TimeUnit.SECONDS)

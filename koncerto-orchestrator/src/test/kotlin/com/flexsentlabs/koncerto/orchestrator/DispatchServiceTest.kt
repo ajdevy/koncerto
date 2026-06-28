@@ -1363,6 +1363,38 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `handleWorkplanIfPresent logs parse failure for invalid workplan`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = workspaces.ensureWorkspace("A-2")
+        val workplanDir = workspace.path.resolve("_koncerto")
+        Files.createDirectories(workplanDir)
+        Files.writeString(workplanDir.resolve("workplan.json"), "{not valid json")
+
+        val subtaskOrchestrator = SubtaskOrchestrator(
+            subtaskRunner = FakeSubtaskRunnerForDispatch { Result.Success(Unit) },
+            gitWorkflow = FakeGitWorkflowForDispatch(remoteExists = false),
+            logger = StructuredLogger(emptyList())
+        )
+        val projectConfig = config().copy(
+            agent = config().agent.copy(
+                workplan = WorkplanConfig(executionMode = WorkplanConfig.ExecutionMode.SEQUENTIAL)
+            )
+        )
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            projectConfig = projectConfig,
+            runner = runner,
+            workspaces = workspaces,
+            subtaskOrchestrator = subtaskOrchestrator,
+            workplanParser = WorkplanParser(),
+            candidates = listOf(issue("2", "A-2", "Todo"))
+        )
+        runDispatchAwait(svc)
+        runBlocking { svc.awaitBackgroundJobs() }
+        assertThat(runner.dispatched.size).isEqualTo(1)
+    }
+
+    @Test
     fun `agent messaging wrappers route and acknowledge messages`() {
         val (svc, _) = createServiceWithState()
         svc.registerAgent("agent-1", "issue-1")
@@ -2145,6 +2177,14 @@ class DispatchServiceTest {
         svc.scheduleRetry(testIssue, "err1")
         svc.scheduleRetry(testIssue, "err2")
         assertThat(auditTypes).contains(AuditEventType.AGENT_FAILED)
+    }
+
+    @Test
+    fun `messageStore send and poll agent messages`() {
+        val svc = createService()
+        svc.messageStore.sendMessage("agent-a", "agent-b", "hello")
+        val messages = svc.messageStore.pollMessages("agent-b")
+        assertThat(messages.single().payload).isEqualTo("hello")
     }
 
     @Test

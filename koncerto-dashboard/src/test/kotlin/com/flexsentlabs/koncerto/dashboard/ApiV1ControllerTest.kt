@@ -1136,6 +1136,28 @@ class ApiV1ControllerTest {
         assertThat(response.body!!.state).isEqualTo("write_failed")
     }
 
+    @Test
+    fun `getCodexLoginStatus returns completed when process finished`() {
+        val process = ProcessBuilder("true").start()
+        process.waitFor()
+        setControllerField("codexProcess", process)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getCodexLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("completed")
+    }
+
+    @Test
+    fun `getClaudeLoginStatus extracts token from process output on completion`() {
+        AgentAuthChecker.markUnauthenticated("claude")
+        val process = ProcessBuilder("bash", "-lc", "echo 'oauth_token=sk-ant-oat01-test'").start()
+        process.waitFor()
+        setControllerField("claudeProcess", process)
+        setControllerField("claudeLoginOutput", "oauth_token=sk-ant-oat01-test")
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getClaudeLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("completed")
+    }
+
     private fun setControllerField(name: String, value: Any?) {
         val field = ApiV1Controller::class.java.getDeclaredField(name)
         field.isAccessible = true

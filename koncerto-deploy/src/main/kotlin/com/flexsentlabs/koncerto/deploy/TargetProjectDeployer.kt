@@ -124,19 +124,19 @@ class TargetProjectDeployer(
         try {
             // Clean up any previous compose instance
             ProcessBuilder(
-                "docker", "compose", "-p", projectName,
-                "-f", composeFile.toString(), "down", "--remove-orphans"
+                *dockerCmd("compose", "-p", projectName,
+                "-f", composeFile.toString(), "down", "--remove-orphans")
             ).directory(projectPath.toFile())
              .redirectErrorStream(true)
              .start()
              .waitFor(30, TimeUnit.SECONDS)
 
             val pb = ProcessBuilder(
-                "docker", "compose", "-p", projectName,
-                "-f", composeFile.toString(), "up", "-d"
+                *dockerCmd("compose", "-p", projectName,
+                "-f", composeFile.toString(), "up", "-d")
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val p = pb.start()
-            val completed = p.waitFor(120, TimeUnit.SECONDS)
+            val completed = p.waitFor(testComposeUpWaitSec ?: 120, TimeUnit.SECONDS)
             val output = p.inputStream.bufferedReader().use { it.readText() }
             if (!completed) {
                 p.destroyForcibly()
@@ -147,11 +147,11 @@ class TargetProjectDeployer(
             }
 
             val psPb = ProcessBuilder(
-                "docker", "compose", "-p", projectName,
-                "-f", composeFile.toString(), "ps"
+                *dockerCmd("compose", "-p", projectName,
+                "-f", composeFile.toString(), "ps")
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val psP = psPb.start()
-            val psCompleted = psP.waitFor(5, TimeUnit.SECONDS)
+            val psCompleted = psP.waitFor(testComposePsWaitSec ?: 5, TimeUnit.SECONDS)
             val psOutput = psP.inputStream.bufferedReader().use { it.readText() }
             if (!psCompleted) {
                 psP.destroyForcibly()
@@ -180,9 +180,9 @@ class TargetProjectDeployer(
     private fun resolveComposeNetwork(projectPath: Path, composeFile: Path, projectName: String = "koncerto-demo"): String {
         return try {
             val pb = ProcessBuilder(
-                "docker", "compose", "-p", projectName,
+                *dockerCmd("compose", "-p", projectName,
                 "-f", composeFile.toString(),
-                "ps", "--format", "{{.Name}}"
+                "ps", "--format", "{{.Name}}")
             ).directory(projectPath.toFile()).redirectErrorStream(true)
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -191,8 +191,8 @@ class TargetProjectDeployer(
                 .filter { it.isNotBlank() && !it.startsWith("time=") }
             if (names.isNotEmpty()) {
                 val inspectPb = ProcessBuilder(
-                    "docker", "inspect", names.last(),
-                    "--format", "{{.HostConfig.NetworkMode}}"
+                    *dockerCmd("inspect", names.last(),
+                    "--format", "{{.HostConfig.NetworkMode}}")
                 ).redirectErrorStream(true)
                 val ip = inspectPb.start()
                 ip.waitFor(5, TimeUnit.SECONDS)
@@ -225,14 +225,14 @@ class TargetProjectDeployer(
         // Stop and remove all containers with this image tag
         try {
             val findPb = ProcessBuilder(
-                "docker", "ps", "-a", "--filter", "ancestor=$tag", "--format", "{{.ID}}"
+                *dockerCmd("ps", "-a", "--filter", "ancestor=$tag", "--format", "{{.ID}}")
             ).redirectErrorStream(true)
             val findP = findPb.start()
             findP.waitFor(10, TimeUnit.SECONDS)
             val ids = findP.inputStream.bufferedReader().use { it.readText() }.lines().filter { it.isNotBlank() }
             ids.forEach { id ->
                 try {
-                    ProcessBuilder("docker", "rm", "-f", id).start().waitFor(10, TimeUnit.SECONDS)
+                    ProcessBuilder(*dockerCmd("rm", "-f", id)).start().waitFor(10, TimeUnit.SECONDS)
                 } catch (_: Exception) {}
             }
             logger.info("deploy_cleanup_containers", mapOf("count" to (ids.size.toString() as Any?)))
@@ -242,7 +242,7 @@ class TargetProjectDeployer(
 
         // Remove the image
         try {
-            ProcessBuilder("docker", "rmi", "-f", tag).start().waitFor(10, TimeUnit.SECONDS)
+            ProcessBuilder(*dockerCmd("rmi", "-f", tag)).start().waitFor(10, TimeUnit.SECONDS)
         } catch (_: Exception) {}
 
         // Clean up compose project if compose file exists
@@ -250,8 +250,8 @@ class TargetProjectDeployer(
         if (Files.exists(composeFile)) {
             try {
                 val pb = ProcessBuilder(
-                    "docker", "compose", "-p", "koncerto-demo",
-                    "-f", composeFile.toString(), "down", "--remove-orphans", "--volumes"
+                    *dockerCmd("compose", "-p", "koncerto-demo",
+                    "-f", composeFile.toString(), "down", "--remove-orphans", "--volumes")
                 ).directory(config.projectPath.toFile()).redirectErrorStream(true).start()
                 pb.waitFor(30, TimeUnit.SECONDS)
                 logger.info("deploy_cleanup_compose", mapOf("status" to ("ok" as Any?)))
@@ -267,7 +267,7 @@ class TargetProjectDeployer(
         // Find and remove all containers with name koncerto-demo-*
         try {
             val findPb = ProcessBuilder(
-                "docker", "ps", "-a", "--filter", "name=koncerto-demo", "--format", "{{.ID}}"
+                *dockerCmd("ps", "-a", "--filter", "name=koncerto-demo", "--format", "{{.ID}}")
             ).redirectErrorStream(true)
             val findP = findPb.start()
             findP.waitFor(10, TimeUnit.SECONDS)
@@ -275,7 +275,7 @@ class TargetProjectDeployer(
             if (ids.isNotEmpty()) {
                 ids.forEach { id ->
                     try {
-                        ProcessBuilder("docker", "rm", "-f", id).start().waitFor(10, TimeUnit.SECONDS)
+                        ProcessBuilder(*dockerCmd("rm", "-f", id)).start().waitFor(10, TimeUnit.SECONDS)
                     } catch (_: Exception) {}
                 }
                 logger.info("deploy_orphan_containers_removed", mapOf("count" to (ids.size.toString() as Any?)))
@@ -287,8 +287,8 @@ class TargetProjectDeployer(
         // Find and remove all images with name koncerto-demo-*
         try {
             val findImgPb = ProcessBuilder(
-                "docker", "images", "--format", "{{.Repository}}:{{.Tag}}",
-                "--filter", "reference=koncerto-demo-*"
+                *dockerCmd("images", "--format", "{{.Repository}}:{{.Tag}}",
+                "--filter", "reference=koncerto-demo-*")
             ).redirectErrorStream(true)
             val findImgP = findImgPb.start()
             findImgP.waitFor(10, TimeUnit.SECONDS)
@@ -296,7 +296,7 @@ class TargetProjectDeployer(
             if (tags.isNotEmpty()) {
                 tags.forEach { tag ->
                     try {
-                        ProcessBuilder("docker", "rmi", "-f", tag).start().waitFor(10, TimeUnit.SECONDS)
+                        ProcessBuilder(*dockerCmd("rmi", "-f", tag)).start().waitFor(10, TimeUnit.SECONDS)
                     } catch (_: Exception) {}
                 }
                 logger.info("deploy_orphan_images_removed", mapOf("count" to (tags.size.toString() as Any?)))
@@ -308,7 +308,7 @@ class TargetProjectDeployer(
         // Remove any dangling compose project
         try {
             val pb = ProcessBuilder(
-                "docker", "compose", "ls", "--format", "{{.Name}}"
+                *dockerCmd("compose", "ls", "--format", "{{.Name}}")
             ).redirectErrorStream(true)
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -316,7 +316,7 @@ class TargetProjectDeployer(
                 .filter { it.startsWith("koncerto-demo") }
             names.forEach { name ->
                 try {
-                    val downPb = ProcessBuilder("docker", "compose", "-p", name, "down", "--remove-orphans", "--volumes")
+                    val downPb = ProcessBuilder(*dockerCmd("compose", "-p", name, "down", "--remove-orphans", "--volumes"))
                         .redirectErrorStream(true).start()
                     downPb.waitFor(30, TimeUnit.SECONDS)
                     logger.info("deploy_orphan_compose_removed", mapOf("project" to (name as Any?)))
@@ -324,6 +324,24 @@ class TargetProjectDeployer(
             }
         } catch (e: Exception) {
             logger.warn("deploy_orphan_compose_scan_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+        }
+    }
+
+    internal companion object {
+        val testDockerOverride = java.util.concurrent.atomic.AtomicReference<String?>(null)
+
+        /** Test seam: overrides docker compose up wait timeout seconds. */
+        @JvmStatic
+        var testComposeUpWaitSec: Long? = null
+
+        /** Test seam: overrides docker compose ps wait timeout seconds. */
+        @JvmStatic
+        var testComposePsWaitSec: Long? = null
+
+        /** Test seam: ThreadLocal or KONCERTO_TEST_DOCKER env overrides the docker executable. */
+        fun dockerCmd(vararg args: String): Array<String> {
+            val override = testDockerOverride.get() ?: System.getenv("KONCERTO_TEST_DOCKER")
+            return if (override != null) arrayOf(override, *args) else arrayOf("docker", *args)
         }
     }
 }

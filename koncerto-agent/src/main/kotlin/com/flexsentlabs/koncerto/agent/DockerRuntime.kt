@@ -8,6 +8,7 @@ import java.nio.file.Path
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +35,16 @@ class DockerRuntime(
     private val logger: StructuredLogger,
     private val containerId: String
 ) : AgentRuntime {
+    companion object {
+        @JvmStatic
+        val testDockerOverride = AtomicReference<String?>(null)
+
+        internal fun dockerCmd(vararg args: String): Array<String> {
+            val override = testDockerOverride.get()
+            return if (override != null) arrayOf(override, *args) else arrayOf("docker", *args)
+        }
+    }
+
     private val requestId = AtomicLong(1)
     private var execProcess: Process? = null
     private var writer: BufferedWriter? = null
@@ -56,8 +67,8 @@ class DockerRuntime(
         }
         try {
             val socatEscaped = command.replace("\\", "\\\\").replace("\"", "\\\"")
-            val pb = ProcessBuilder("docker", "exec", "-i", containerId, "bash", "-lc",
-                "socat EXEC:\"$socatEscaped\",pty,raw,echo=0 STDIO")
+            val pb = ProcessBuilder(*dockerCmd("exec", "-i", containerId, "bash", "-lc",
+                "socat EXEC:\"$socatEscaped\",pty,raw,echo=0 STDIO"))
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(false)
             val p = pb.start()
@@ -79,7 +90,11 @@ class DockerRuntime(
 
     private fun isDockerDaemonAvailable(): Boolean {
         return try {
-            val pb = ProcessBuilder("bash", "-lc", "docker info")
+            val pb = if (testDockerOverride.get() != null) {
+                ProcessBuilder(*dockerCmd("info"))
+            } else {
+                ProcessBuilder("bash", "-lc", "docker info")
+            }
             val p = pb.start()
             val exited = p.waitFor(5, TimeUnit.SECONDS)
             exited && p.exitValue() == 0
@@ -220,7 +235,7 @@ class DockerRuntime(
 
     private fun checkContainerRunning(): Boolean {
         return try {
-            val pb = ProcessBuilder("docker", "inspect", containerId, "--format={{.State.Status}}")
+            val pb = ProcessBuilder(*dockerCmd("inspect", containerId, "--format={{.State.Status}}"))
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
             val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
@@ -342,7 +357,7 @@ class DockerRuntime(
 
     private fun captureContainerStats() {
         try {
-            val pb = ProcessBuilder("docker", "stats", "--no-stream", containerId)
+            val pb = ProcessBuilder(*dockerCmd("stats", "--no-stream", containerId))
                 .redirectErrorStream(true)
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -364,7 +379,7 @@ class DockerRuntime(
 
     private fun captureContainerLogs() {
         try {
-            val pb = ProcessBuilder("docker", "logs", containerId)
+            val pb = ProcessBuilder(*dockerCmd("logs", containerId))
                 .redirectErrorStream(true)
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -386,7 +401,7 @@ class DockerRuntime(
 
     private fun removeContainer() {
         try {
-            val pb = ProcessBuilder("docker", "rm", "-f", containerId)
+            val pb = ProcessBuilder(*dockerCmd("rm", "-f", containerId))
             val p = pb.start()
             p.waitFor(10, TimeUnit.SECONDS)
         } catch (e: Exception) {

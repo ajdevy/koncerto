@@ -1340,4 +1340,174 @@ class ServiceConfigTest {
         assertThat(quality.width).isEqualTo(1280)
         assertThat(quality.height).isEqualTo(720)
     }
+
+    @Test
+    fun `resolvePath expands tilde and relative paths`() {
+        val absolute = ServiceConfig.resolvePath("/tmp/app", "/workflow")
+        assertThat(absolute).isEqualTo(java.nio.file.Paths.get("/tmp/app"))
+        val relative = ServiceConfig.resolvePath("subdir/app", "/workflow")
+        assertThat(relative).isEqualTo(java.nio.file.Paths.get("/workflow/subdir/app"))
+        val tilde = ServiceConfig.resolvePath("~/projects/app", "/workflow")
+        assertThat(tilde.toString()).contains("projects/app")
+    }
+
+    @Test
+    fun `parseLimitPauseConfig parses all fields from agent map`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "limit_pause" to mapOf(
+                            "enabled" to false,
+                            "claude_default_resume_ms" to 120_000L,
+                            "codex_default_resume_ms" to 90_000L,
+                            "linear_comments" to false
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val pause = config.project().agent.limitPause
+        assertThat(pause.enabled).isEqualTo(false)
+        assertThat(pause.claudeDefaultResumeMs).isEqualTo(120_000L)
+        assertThat(pause.codexDefaultResumeMs).isEqualTo(90_000L)
+        assertThat(pause.linearComments).isEqualTo(false)
+    }
+
+    @Test
+    fun `parseLimitPauseConfig uses defaults when map is null`() {
+        val pause = ServiceConfig.parseLimitPauseConfig(null)
+        assertThat(pause.enabled).isEqualTo(true)
+        assertThat(pause.claudeDefaultResumeMs).isEqualTo(LimitPauseConfig.DEFAULT_RESUME_MS)
+        assertThat(pause.codexDefaultResumeMs).isEqualTo(LimitPauseConfig.DEFAULT_RESUME_MS)
+        assertThat(pause.linearComments).isEqualTo(true)
+    }
+
+    @Test
+    fun `tracker kind blank throws from parseTrackerConfig`() {
+        val result = ServiceConfig.fromMapOrError(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `tracker project_slug blank throws`() {
+        val result = ServiceConfig.fromMapOrError(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to ""),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val ex = result.exceptionOrNull()
+        assertThat(ex).isNotNull()
+        assertThat(ex!!.message ?: "").contains("project_slug")
+    }
+
+    @Test
+    fun `webhook notification headers resolve env refs`() {
+        System.setProperty("WEBHOOK_AUTH_FOR_TEST", "Bearer secret")
+        try {
+            val config = ServiceConfig.fromMap(
+                mapOf("projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf(),
+                        "notifications" to mapOf(
+                            "webhook" to mapOf(
+                                "url" to "https://hooks.example.com/alert",
+                                "headers" to mapOf("Authorization" to "\$WEBHOOK_AUTH_FOR_TEST")
+                            )
+                        )
+                    )
+                )),
+                workflowFileDir = "/tmp"
+            )
+            assertThat(config.project().notifications.webhook?.headers?.get("Authorization"))
+                .isEqualTo("Bearer secret")
+        } finally {
+            System.clearProperty("WEBHOOK_AUTH_FOR_TEST")
+        }
+    }
+
+    @Test
+    fun `parseLimitPauseConfig partial map uses defaults for missing fields`() {
+        val pause = ServiceConfig.parseLimitPauseConfig(mapOf("enabled" to true))
+        assertThat(pause.enabled).isEqualTo(true)
+        assertThat(pause.claudeDefaultResumeMs).isEqualTo(LimitPauseConfig.DEFAULT_RESUME_MS)
+        assertThat(pause.codexDefaultResumeMs).isEqualTo(LimitPauseConfig.DEFAULT_RESUME_MS)
+        assertThat(pause.linearComments).isEqualTo(true)
+    }
+
+    @Test
+    fun `email notification config parses optional credentials`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(),
+                    "notifications" to mapOf(
+                        "email" to mapOf(
+                            "smtp_host" to "smtp.example.com",
+                            "from" to "bot@example.com",
+                            "to" to "admin@example.com"
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val email = config.project().notifications.email
+        assertThat(email).isNotNull()
+        assertThat(email!!.username).isNull()
+        assertThat(email.password).isNull()
+        assertThat(email.smtpPort).isEqualTo(587)
+    }
+
+    @Test
+    fun `parseDemoRecording resolves storage env refs from workflow map`() {
+        System.setProperty("TEST_R2_BUCKET", "resolved-bucket")
+        try {
+            val config = ServiceConfig.fromMap(
+                mapOf(
+                    "demo_recording" to mapOf(
+                        "enabled" to true,
+                        "storage" to mapOf(
+                            "r2_bucket" to "\$TEST_R2_BUCKET",
+                            "r2_endpoint" to "https://r2.example.com",
+                            "r2_access_key" to "key",
+                            "r2_secret_key" to "secret"
+                        )
+                    ),
+                    "projects" to mapOf(
+                        "default" to mapOf(
+                            "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                            "workspace" to mapOf("root" to "/tmp/test"),
+                            "agent" to mapOf()
+                        )
+                    )
+                ),
+                workflowFileDir = "/tmp"
+            )
+            assertThat(config.demoRecording.storage?.r2Bucket).isEqualTo("resolved-bucket")
+        } finally {
+            System.clearProperty("TEST_R2_BUCKET")
+        }
+    }
 }

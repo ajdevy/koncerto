@@ -1366,6 +1366,37 @@ class OrchestratorTest {
         startedAt = java.time.Instant.now(),
         lastHeartbeatAt = null
     )
+
+    @Test
+    fun `tick runs dispatch cycle for each project`() = runBlocking {
+        val orch = Orchestrator(
+            config = sampleConfig(),
+            linearClientFactory = { FakeLinearClient(emptyList()) },
+            workspaceManagerFactory = { WorkspaceManager(Files.createTempDirectory("orch-tick-"), HookExecutor { _, _ -> }) },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined)
+        )
+        val tick = Orchestrator::class.java.getDeclaredMethod("tick")
+        tick.isAccessible = true
+        tick.invoke(orch)
+    }
+
+    @Test
+    fun `tickLoop returns immediately when shutdown already requested`() = runBlocking {
+        val orch = Orchestrator(
+            config = sampleConfig(),
+            linearClientFactory = { FakeLinearClient(emptyList()) },
+            workspaceManagerFactory = { WorkspaceManager(Files.createTempDirectory("orch-tickloop-"), HookExecutor { _, _ -> }) },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined)
+        )
+        orch.shutdownRequested = true
+        orch.tickLoop()
+    }
 }
 
 class FakeLinearClient(private val candidates: List<Issue>) : LinearClient {
