@@ -81,6 +81,27 @@ class LinearReportPublisherTest {
         assert(result is DemoResult.Failure)
         assert((result as DemoResult.Failure).error is DemoError.ReportFailed)
     }
+
+    @Test
+    fun `reportSkipped calls createComment with skipped body`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val result = publisher.reportSkipped("issue-1", "KONC-123", "deployment failed and no fallback URL configured")
+        assert(result is DemoResult.Success)
+        assert(client.lastIssueId == "issue-1")
+        assert(client.lastBody!!.contains("Demo Recording Skipped"))
+        assert(client.lastBody!!.contains("KONC-123"))
+        assert(client.lastBody!!.contains("deployment failed"))
+    }
+
+    @Test
+    fun `reportSkipped wraps LinearClient error in DemoError`() = runTest {
+        val client = FakeLinearClient().apply { shouldThrow = true }
+        val publisher = LinearReportPublisher(client)
+        val result = publisher.reportSkipped("issue-1", "KONC-123", "reason")
+        assert(result is DemoResult.Failure)
+        assert((result as DemoResult.Failure).error is DemoError.ReportFailed)
+    }
 }
 
 class FakeLinearClient : TrackerClient {

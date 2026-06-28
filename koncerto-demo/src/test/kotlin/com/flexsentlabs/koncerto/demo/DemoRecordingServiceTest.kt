@@ -53,6 +53,7 @@ class DemoRecordingServiceTest {
         val config = DemoConfig(
             enabled = true,
             tempDir = System.getProperty("java.io.tmpdir"),
+            targetUrl = "http://localhost:3000",
             maxRetries = 2,
             retryDelayMs = 1,
             retentionDays = 90,
@@ -355,6 +356,29 @@ class DemoRecordingServiceTest {
     }
 
     @Test
+    fun `requestRecording posts skipped comment and returns failure when targetUrl is blank and config targetUrl unset`() = runTest {
+        val serviceNoUrl = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), targetUrl = ""),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = serviceNoUrl.requestRecording(
+            issueId = "issue-no-url", issueIdentifier = "KONC-NOURL",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            trigger = DemoTrigger.REVIEW_PASSED, targetUrl = null
+        )
+        assert(result is DemoResult.Failure)
+        assert((result as DemoResult.Failure).error is DemoError.InvalidConfig)
+        assert(reporter.lastSkippedIssueId == "issue-no-url")
+        assert(reporter.lastSkippedReason != null)
+    }
+
+    @Test
     fun `createTask with empty issueId still succeeds`() = runTest {
         val result = service.createTask(
             issueId = "", issueIdentifier = "KONC-EMPTY",
@@ -456,12 +480,19 @@ class FakeDemoStorage2 : DemoStorage {
 class FakeDemoReporter2 : DemoReporter {
     var lastReportedTask: DemoTask? = null
     var lastReportedUrl: String? = null
+    var lastSkippedIssueId: String? = null
+    var lastSkippedReason: String? = null
     override suspend fun report(task: DemoTask, recordingUrl: String): DemoResult<Unit> {
         lastReportedTask = task; lastReportedUrl = recordingUrl
         return DemoResult.Success(Unit)
     }
     override suspend fun reportFailure(task: DemoTask, errorMessage: String): DemoResult<Unit> {
         lastReportedTask = task
+        return DemoResult.Success(Unit)
+    }
+    override suspend fun reportSkipped(issueId: String, issueIdentifier: String, reason: String): DemoResult<Unit> {
+        lastSkippedIssueId = issueId
+        lastSkippedReason = reason
         return DemoResult.Success(Unit)
     }
 }
