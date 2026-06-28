@@ -31,7 +31,7 @@ class DemoRecordingServiceTest {
     private lateinit var recorder: DemoRecorder
     private lateinit var recorderFactory: RecorderFactory
     private lateinit var storage: DemoStorage
-    private lateinit var reporter: DemoReporter
+    private lateinit var reporter: FakeDemoReporter2
     private lateinit var reportGenerator: DemoReportGenerator
     private lateinit var metrics: DemoMetricsRecorder
     private lateinit var auditLogger: DemoAuditLogger
@@ -158,6 +158,7 @@ class DemoRecordingServiceTest {
         val configWithAi = DemoConfig(
             enabled = true,
             tempDir = System.getProperty("java.io.tmpdir"),
+            targetUrl = "http://localhost:3000",
             maxRetries = 2,
             retryDelayMs = 1,
             retentionDays = 90,

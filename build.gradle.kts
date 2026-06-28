@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     kotlin("jvm") version "2.0.21" apply false
@@ -21,8 +22,14 @@ subprojects {
 
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_21)
             javaParameters.set(true)
         }
+    }
+
+    tasks.withType<JavaCompile>().configureEach {
+        sourceCompatibility = "21"
+        targetCompatibility = "21"
     }
 
     tasks.withType<Test>().configureEach {
