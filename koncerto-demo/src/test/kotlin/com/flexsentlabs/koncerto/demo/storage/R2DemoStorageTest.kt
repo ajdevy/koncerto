@@ -337,4 +337,44 @@ class R2DemoStorageTest {
 
         assert(result is DemoResult.Failure)
     }
+
+    @Test
+    fun `delete returns failure when HTTP status is not success`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 500
+                    every { body() } returns "error"
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.delete("demo-recordings/task/demo.webm")
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `checkQuota returns failure when list request fails`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 503
+                    every { body() } returns "unavailable"
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.checkQuota()
+        assert(result is DemoResult.Failure)
+    }
 }

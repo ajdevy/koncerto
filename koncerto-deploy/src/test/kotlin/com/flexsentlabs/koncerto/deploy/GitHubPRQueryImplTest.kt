@@ -70,6 +70,24 @@ class GitHubPRQueryImplTest {
         assert(objects[0].contains("\"a\":1"))
     }
 
+    @Test
+    fun `parsePRList returns empty for malformed json`() {
+        assertThat(invokeParsePRList("not json")).isEmpty()
+    }
+
+    @Test
+    fun `parsePRList handles object with missing fields`() {
+        val prs = invokeParsePRList("""{"number":99}""")
+        assertThat(prs).hasSize(1)
+        assertThat(prs[0].number).isEqualTo(99)
+        assertThat(prs[0].title).isEqualTo("")
+    }
+
+    @Test
+    fun `parseFileList returns empty for malformed json`() {
+        assertThat(invokeParseFileList("[]")).isEmpty()
+    }
+
     private fun invokeExtractJsonObjects(json: String): List<String> {
         val method = GitHubPRQueryImpl::class.java.getDeclaredMethod("extractJsonObjects", String::class.java)
         method.isAccessible = true

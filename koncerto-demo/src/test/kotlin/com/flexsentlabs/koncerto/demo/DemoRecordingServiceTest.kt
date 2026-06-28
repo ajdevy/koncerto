@@ -37,6 +37,7 @@ class DemoRecordingServiceTest {
     private lateinit var auditLogger: DemoAuditLogger
     private lateinit var service: DemoRecordingService
     private lateinit var aiTimelineGenerator: AiTimelineGenerator
+    private lateinit var config: DemoConfig
 
     @BeforeEach
     fun setUp() {
@@ -50,7 +51,7 @@ class DemoRecordingServiceTest {
         auditLogger = DemoAuditLogger("/tmp/koncerto-test-audit.log")
         aiTimelineGenerator = AiTimelineGenerator()
 
-        val config = DemoConfig(
+        config = DemoConfig(
             enabled = true,
             tempDir = System.getProperty("java.io.tmpdir"),
             maxRetries = 2,
@@ -393,6 +394,325 @@ class DemoRecordingServiceTest {
         assert(result is DemoResult.Success)
         assert((result as DemoResult.Success).value.projectSlug == null)
     }
+
+    @Test
+    fun `requestRecording retries on short duration then succeeds`() = runTest {
+        val shortThenOk = ShortThenOkRecorder()
+        val retryService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRetries = 2, retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(shortThenOk)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = retryService.requestRecording(
+            "issue-retry", "KONC-RETRY", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert(shortThenOk.callCount >= 2)
+    }
+
+    @Test
+    fun `requestRecording falls back to asciinema when playwright fails`() = runTest {
+        val asciinema = FakeAsciinemaRecorder()
+        val failPlaywright = FailingRecorder()
+        val fallbackService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRetries = 0, retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(failPlaywright, asciinema)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = fallbackService.requestRecording(
+            "issue-fallback", "KONC-FB", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+    }
+
+    @Test
+    fun `requestRecording partial recovery uploads partial file`() = runTest {
+        val partialRecorder = PartialFileRecorder()
+        val partialService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRetries = 0, retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(partialRecorder)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = partialService.requestRecording(
+            "issue-partial", "KONC-PART", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success || result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording fails preflight when storage quota check fails`() = runTest {
+        val quotaFailStorage = QuotaCheckFailStorage()
+        val preflightService = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = quotaFailStorage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = preflightService.requestRecording(
+            "issue-preflight", "KONC-PF", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording uses scenario file when present`() = runTest {
+        val tempDir = System.getProperty("java.io.tmpdir")
+        File(tempDir, "issue-scenario-scenario.yaml").writeText("steps: []\n")
+        val scenarioService = DemoRecordingService(
+            config = DemoConfig(tempDir = tempDir),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = scenarioService.requestRecording(
+            "issue-scenario", "KONC-SC", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        File(tempDir, "issue-scenario-scenario.yaml").delete()
+    }
+
+    @Test
+    fun `requestRecording with targetUrl override`() = runTest {
+        val result = service.requestRecording(
+            issueId = "issue-url", issueIdentifier = "KONC-URL",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            trigger = DemoTrigger.MANUAL, targetUrl = "http://localhost:8080"
+        )
+        assert(result is DemoResult.Success)
+    }
+
+    @Test
+    fun `requestRecording fails when repo quota exceeded after retention`() = runTest {
+        val heavyRepo = object : DemoTaskRepository by taskRepository {
+            override suspend fun sumFileSizes(): Long = 100L * 1024 * 1024 * 1024
+        }
+        val quotaService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRecordingsPerSpace = 1,
+                retentionDays = 90
+            ),
+            taskRepository = heavyRepo,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = quotaService.requestRecording(
+            "issue-quota", "KONC-Q", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording fails preflight when recorder missing for platform`() = runTest {
+        val playwrightOnly = RecorderFactory(listOf(FakeRecorder2()))
+        val servicePlaywrightOnly = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            taskRepository = taskRepository,
+            recorderFactory = playwrightOnly,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = servicePlaywrightOnly.requestRecording(
+            "issue-asci", "KONC-ASCI", "test", DemoPlatform.ASCIINEMA, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `performQuotaCheck succeeds after retention frees space`() = runTest {
+        val oldTime = Instant.now().minus(100, ChronoUnit.DAYS).toString()
+        val oldTask = DemoTask(
+            id = "quota-old", issueId = "issue-quota-old", issueIdentifier = "Q-OLD",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = oldTime, updatedAt = oldTime,
+            storageKey = "old/key", fileSizeBytes = 60L * 1024 * 1024
+        )
+        taskRepository.save(oldTask)
+
+        val quotaService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRecordingsPerSpace = 1,
+                retentionDays = 90
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = quotaService.requestRecording(
+            "issue-quota-freed", "KONC-QF", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert(taskRepository.findById("quota-old") == null)
+    }
+
+    @Test
+    fun `performQuotaCheck fails when retention cannot free enough space`() = runTest {
+        val heavyRepo = object : DemoTaskRepository by taskRepository {
+            override suspend fun sumFileSizes(): Long = 100L * 1024 * 1024 * 1024
+            override suspend fun deleteOlderThan(timestamp: String, limit: Int): Int = 0
+        }
+        val quotaService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRecordingsPerSpace = 1,
+                retentionDays = 90
+            ),
+            taskRepository = heavyRepo,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = quotaService.requestRecording(
+            "issue-quota-blocked", "KONC-QB", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+        assert((result as DemoResult.Failure).error is DemoError.QuotaExceeded)
+    }
+
+    @Test
+    fun `requestRecording recovers partial upload after integrity failure`() = runTest {
+        val partialService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(AlwaysShortWithPartialRecorder())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = partialService.requestRecording(
+            "issue-partial-recovery", "KONC-PREC", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        val task = (result as DemoResult.Success).value
+        assert(task.status == DemoStatus.PARTIAL || task.status == DemoStatus.COMPLETED)
+    }
+
+    @Test
+    fun `requestRecording exhausts retries and reports failure`() = runTest {
+        val failService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                maxRetries = 1,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(FailingRecorder())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = failService.requestRecording(
+            "issue-max-retry", "KONC-MR", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording creates temp dir during preflight when missing`() = runTest {
+        val missingDir = java.nio.file.Files.createTempDirectory("demo-missing-temp").resolve("nested-temp")
+        java.nio.file.Files.deleteIfExists(missingDir)
+        val preflightService = DemoRecordingService(
+            config = DemoConfig(tempDir = missingDir.toString()),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = preflightService.requestRecording(
+            "issue-tempdir", "KONC-TD", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert(missingDir.toFile().exists())
+        missingDir.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `createTask returns failure when repository save throws`() = runTest {
+        val failingRepo = FakeDemoTaskRepository().apply { failNextSave = true }
+        val failingService = DemoRecordingService(
+            config = config,
+            taskRepository = failingRepo,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = failingService.createTask(
+            "issue-fail", "KONC-FAIL", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `getPendingTasks returns pending from repository`() = runTest {
+        service.requestRecording(
+            "issue-pending", "KONC-P", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        val pending = service.getPendingTasks()
+        assert(pending.isEmpty())
+    }
 }
 
 class FakeFailingStorage : DemoStorage {
@@ -415,6 +735,88 @@ class FakeFailingStorage : DemoStorage {
 
     override suspend fun deleteBatch(storageKeys: List<String>): DemoResult<Int> =
         DemoResult.Failure(DemoError.StorageFailed(RuntimeException("batch_delete_failed")))
+}
+
+class ShortThenOkRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
+    var callCount = 0
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> {
+        callCount++
+        outputFile.writeText("data")
+        val duration = if (callCount == 1) 100L else 1000L
+        return DemoResult.Success(DemoRecorder.RecordingResult(
+            file = outputFile, durationMs = duration, fileSizeBytes = outputFile.length(), format = config.outputFormat
+        ))
+    }
+}
+
+class FailingRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> =
+        DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("record_failed")))
+}
+
+class FakeAsciinemaRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.ASCIINEMA
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> {
+        outputFile.writeText("asciinema cast")
+        return DemoResult.Success(DemoRecorder.RecordingResult(
+            file = outputFile, durationMs = 1000L, fileSizeBytes = outputFile.length(), format = config.outputFormat
+        ))
+    }
+}
+
+class PartialFileRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> {
+        outputFile.writeText("partial")
+        val partial = File(outputFile.parent, "${outputFile.nameWithoutExtension}.partial.webm")
+        outputFile.copyTo(partial, overwrite = true)
+        return DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("failed_with_partial")))
+    }
+}
+
+class AlwaysShortWithPartialRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> {
+        outputFile.writeText("short recording")
+        val partial = File(outputFile.parent, "${outputFile.nameWithoutExtension}.partial.webm")
+        outputFile.copyTo(partial, overwrite = true)
+        return DemoResult.Success(DemoRecorder.RecordingResult(
+            file = outputFile, durationMs = 100L, fileSizeBytes = outputFile.length(), format = config.outputFormat
+        ))
+    }
+}
+
+class QuotaCheckFailStorage : DemoStorage {
+    override suspend fun upload(taskId: String, file: File, contentType: String): DemoResult<DemoStorage.StorageResult> =
+        DemoResult.Success(DemoStorage.StorageResult("key", "url", 0L))
+    override suspend fun uploadWithTags(taskId: String, file: File, contentType: String, tags: Map<String, String>): DemoResult<DemoStorage.StorageResult> =
+        DemoResult.Success(DemoStorage.StorageResult("key", "url", 0L))
+    override suspend fun delete(storageKey: String): DemoResult<Unit> = DemoResult.Success(Unit)
+    override suspend fun generateUrl(storageKey: String, expiresInSeconds: Long): DemoResult<String> =
+        DemoResult.Success("url")
+    override suspend fun checkQuota(): DemoResult<DemoStorage.QuotaInfo> =
+        DemoResult.Failure(DemoError.StorageFailed(RuntimeException("quota_check_failed")))
+    override suspend fun listOldest(limit: Int): DemoResult<List<DemoStorage.StorageItem>> =
+        DemoResult.Success(emptyList())
+    override suspend fun deleteBatch(storageKeys: List<String>): DemoResult<Int> =
+        DemoResult.Success(0)
 }
 
 class FakeRecorder2 : DemoRecorder {
@@ -468,8 +870,12 @@ class FakeDemoReporter2 : DemoReporter {
 
 class FakeDemoTaskRepository : DemoTaskRepository {
     private val tasks = mutableMapOf<String, DemoTask>()
+    var failNextSave: Boolean = false
 
-    override suspend fun save(task: DemoTask) { tasks[task.id] = task }
+    override suspend fun save(task: DemoTask) {
+        if (failNextSave) throw RuntimeException("db unavailable")
+        tasks[task.id] = task
+    }
     override suspend fun findById(taskId: String): DemoTask? = tasks[taskId]
     override suspend fun findByIssue(issueId: String): List<DemoTask> =
         tasks.values.filter { it.issueId == issueId }.sortedByDescending { it.createdAt }

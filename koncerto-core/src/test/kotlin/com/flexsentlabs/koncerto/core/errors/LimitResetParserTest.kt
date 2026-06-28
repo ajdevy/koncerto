@@ -1,8 +1,10 @@
 package com.flexsentlabs.koncerto.core.errors
 
 import assertk.assertThat
+import assertk.assertions.isEqualTo
 import assertk.assertions.isGreaterThan
 import assertk.assertions.isInstanceOf
+import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import org.junit.jupiter.api.Test
 import java.time.LocalDateTime
@@ -46,5 +48,35 @@ class LimitResetParserTest {
     @Test
     fun `parseTryAgainAt returns null for missing phrase`() {
         assertThat(LimitResetParser.parseTryAgainAt("no reset here", 0L)).isNull()
+    }
+
+    @Test
+    fun `defaultDelayMs uses provider specific defaults`() {
+        assertThat(LimitResetParser.defaultDelayMs("claude", 1000L, 2000L)).isEqualTo(1000L)
+        assertThat(LimitResetParser.defaultDelayMs("codex", 1000L, 2000L)).isEqualTo(2000L)
+        assertThat(LimitResetParser.defaultDelayMs("other")).isEqualTo(LimitResetParser.DEFAULT_RESUME_MS)
+    }
+
+    @Test
+    fun `parseTryAgainAt parses ISO datetime format`() {
+        val zone = ZoneId.systemDefault()
+        val reference = LocalDateTime.of(2026, 3, 1, 10, 0)
+        val nowMs = reference.atZone(zone).toInstant().toEpochMilli()
+        val resume = LimitResetParser.parseTryAgainAt("try again at 2026-03-01 15:30:00", nowMs)
+        assertThat(resume).isNotNull()
+        assertThat(resume!!).isGreaterThan(nowMs)
+    }
+
+    @Test
+    fun `resolveResumeAtMs uses custom default delays`() {
+        val now = 1_000_000L
+        val resume = LimitResetParser.resolveResumeAtMs(
+            message = "limit hit",
+            provider = "claude",
+            nowMs = now,
+            claudeDefaultMs = 60_000L,
+            codexDefaultMs = 120_000L
+        )
+        assertThat(resume).isEqualTo(now + 60_000L)
     }
 }

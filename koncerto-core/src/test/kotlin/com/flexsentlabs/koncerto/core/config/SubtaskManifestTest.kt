@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.core.config
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import com.flexsentlabs.koncerto.core.agent.FallbackProviderConfig
 import org.junit.jupiter.api.Test
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -107,5 +108,37 @@ class SubtaskManifestTest {
         assertThat(enumValues<SubtaskStatus>().toList()).isEqualTo(
             listOf(SubtaskStatus.PENDING, SubtaskStatus.RUNNING, SubtaskStatus.SUCCEEDED, SubtaskStatus.FAILED, SubtaskStatus.BLOCKED)
         )
+    }
+
+    @Test
+    fun `CrossProjectFollowUpConfig round-trip serialization`() {
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "other-project",
+            titleTemplate = "Follow-up for {{identifier}}",
+            descriptionTemplate = "Created from {{source}}",
+            linkType = "blocks"
+        )
+        val encoded = json.encodeToString(config)
+        val decoded = json.decodeFromString<CrossProjectFollowUpConfig>(encoded)
+        assertThat(decoded.targetProjectSlug).isEqualTo("other-project")
+        assertThat(decoded.titleTemplate).isEqualTo("Follow-up for {{identifier}}")
+        assertThat(decoded.descriptionTemplate).isEqualTo("Created from {{source}}")
+        assertThat(decoded.linkType).isEqualTo("blocks")
+    }
+
+    @Test
+    fun `FallbackProviderConfig holds provider settings`() {
+        val config = FallbackProviderConfig(
+            primaryProvider = "codex",
+            fallbackProviders = listOf("claude", "opencode"),
+            fallbackOnFailure = true,
+            fallbackOnTimeout = false
+        )
+        assertThat(config.primaryProvider).isEqualTo("codex")
+        assertThat(config.fallbackProviders).isEqualTo(listOf("claude", "opencode"))
+        assertThat(config.fallbackOnFailure).isEqualTo(true)
+        assertThat(config.fallbackOnTimeout).isEqualTo(false)
+        val copy = config.copy(fallbackOnTimeout = true)
+        assertThat(copy.fallbackOnTimeout).isEqualTo(true)
     }
 }

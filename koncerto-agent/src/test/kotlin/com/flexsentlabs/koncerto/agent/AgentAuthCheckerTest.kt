@@ -1,7 +1,9 @@
 package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
+import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
 import java.nio.file.Files
 import org.junit.jupiter.api.Test
@@ -91,6 +93,47 @@ class AgentAuthCheckerTest {
         AgentAuthChecker.markAuthenticated("claude")
         AgentAuthChecker.markUnauthenticated("claude")
         assertThat(AgentAuthChecker.isAuthenticated("claude")).isFalse()
+    }
+
+    @Test
+    fun `setClaudeAuthToken stores token and marks authenticated`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-set-")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", dir.resolve("token.txt").toString())
+            AgentAuthChecker.reset()
+            AgentAuthChecker.setClaudeAuthToken("sk-ant-oat01-test")
+            assertThat(AgentAuthChecker.getClaudeAuthToken()).isEqualTo("sk-ant-oat01-test")
+            assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
+        } finally {
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+            AgentAuthChecker.reset()
+        }
+    }
+
+    @Test
+    fun `deprecated api key accessors delegate to token methods`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-deprecated-")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", dir.resolve("token.txt").toString())
+            AgentAuthChecker.reset()
+            AgentAuthChecker.setClaudeApiKey("legacy-key")
+            assertThat(AgentAuthChecker.getClaudeApiKey()).isEqualTo("legacy-key")
+        } finally {
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+            AgentAuthChecker.reset()
+        }
+    }
+
+    @Test
+    fun `reset clears override auth state`() {
+        AgentAuthChecker.markAuthenticated("codex")
+        AgentAuthChecker.reset()
+        AgentAuthChecker.markUnauthenticated("codex")
+        assertThat(AgentAuthChecker.isAuthenticated("codex")).isFalse()
     }
 
     @Test

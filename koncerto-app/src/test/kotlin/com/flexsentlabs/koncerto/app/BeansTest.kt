@@ -977,6 +977,262 @@ class BeansTest {
         }
     }
 
+    @Test
+    fun `demoRecordingService creates service when storage and reporter configured`() {
+        val demoConfig = DemoConfig(
+            enabled = true,
+            r2 = DemoConfig.R2Config(
+                endpoint = "https://r2.example.com",
+                accessKey = "key",
+                secretKey = "secret",
+                bucketName = "bucket",
+                publicUrlBase = "https://cdn.example.com"
+            ),
+            ai = DemoConfig.AiConfig(model = "free")
+        )
+        val service = beans.demoRecordingService(
+            demoConfig = demoConfig,
+            demoTaskRepository = beans.demoTaskRepository(":memory:"),
+            recorderFactory = beans.recorderFactory(listOf(beans.playwrightRecorder())),
+            demoStorage = beans.demoStorage(demoConfig),
+            demoReporter = beans.demoReporter(
+                {
+                    com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                        com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                        "p"
+                    )
+                },
+                ServiceConfig(
+                    projects = mapOf(
+                        "test" to ProjectConfig(
+                            tracker = TrackerConfig("linear", "x", "k", "p"),
+                            workspace = WorkspaceConfig("/tmp"),
+                            agent = AgentProjectConfig(kind = "opencode")
+                        )
+                    )
+                )
+            ),
+            demoReportGenerator = beans.demoReportGenerator(),
+            demoMetricsRecorder = beans.demoMetricsRecorder(),
+            demoAuditLogger = beans.demoAuditLogger(),
+            aiTimelineGenerator = beans.aiTimelineGenerator(demoConfig)
+        )
+        assertThat(service).isNotNull()
+    }
+
+    @Test
+    fun `demoEventListener creates listener when recording service exists`() {
+        val demoConfig = DemoConfig(enabled = true)
+        val service = com.flexsentlabs.koncerto.demo.service.DemoRecordingService(
+            demoConfig,
+            beans.demoTaskRepository(":memory:"),
+            beans.recorderFactory(emptyList()),
+            beans.demoStorage(DemoConfig(
+                r2 = DemoConfig.R2Config(
+                    endpoint = "https://r2.example.com",
+                    accessKey = "k",
+                    secretKey = "s",
+                    bucketName = "b",
+                    publicUrlBase = "https://cdn.example.com"
+                )
+            ))!!,
+            beans.demoReporter(
+                {
+                    com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                        com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                        "p"
+                    )
+                },
+                ServiceConfig(
+                    projects = mapOf(
+                        "test" to ProjectConfig(
+                            tracker = TrackerConfig("linear", "x", "k", "p"),
+                            workspace = WorkspaceConfig("/tmp"),
+                            agent = AgentProjectConfig(kind = "opencode")
+                        )
+                    )
+                )
+            )!!,
+            beans.demoReportGenerator(),
+            beans.demoMetricsRecorder(),
+            beans.demoAuditLogger(),
+            null
+        )
+        assertThat(beans.demoEventListener(service, demoConfig)).isNotNull()
+    }
+
+    @Test
+    fun `demoCleanupScheduler starts when recording service exists`() {
+        val demoConfig = DemoConfig(enabled = true)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val storage = beans.demoStorage(DemoConfig(
+            r2 = DemoConfig.R2Config(
+                endpoint = "https://r2.example.com",
+                accessKey = "k",
+                secretKey = "s",
+                bucketName = "b",
+                publicUrlBase = "https://cdn.example.com"
+            )
+        ))!!
+        val service = com.flexsentlabs.koncerto.demo.service.DemoRecordingService(
+            demoConfig,
+            beans.demoTaskRepository(":memory:"),
+            beans.recorderFactory(emptyList()),
+            storage,
+            beans.demoReporter(
+                {
+                    com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                        com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                        "p"
+                    )
+                },
+                ServiceConfig(
+                    projects = mapOf(
+                        "test" to ProjectConfig(
+                            tracker = TrackerConfig("linear", "x", "k", "p"),
+                            workspace = WorkspaceConfig("/tmp"),
+                            agent = AgentProjectConfig(kind = "opencode")
+                        )
+                    )
+                )
+            )!!,
+            beans.demoReportGenerator(),
+            beans.demoMetricsRecorder(),
+            beans.demoAuditLogger(),
+            null
+        )
+        val scheduler = beans.demoCleanupScheduler(service, demoConfig, scope)
+        try {
+            assertThat(scheduler).isNotNull()
+        } finally {
+            scheduler?.stop()
+        }
+    }
+
+    @Test
+    fun `aiTimelineGenerator returns null without ai config`() {
+        assertThat(beans.aiTimelineGenerator(DemoConfig(enabled = false, ai = null))).isNull()
+    }
+
+    @Test
+    fun `parseRepoFullName resolves github remote from config`() {
+        val method = Beans::class.java.getDeclaredMethod(
+            "parseRepoFullName",
+            ServiceConfig::class.java
+        )
+        method.isAccessible = true
+        val config = ServiceConfig(gitConfig = GitConfig(enabled = false, remoteUrl = "git@github.com:owner/repo.git"))
+        val repo = method.invoke(beans, config) as String?
+        assertThat(repo).isEqualTo("owner/repo")
+    }
+
+    @Test
+    fun `parseRepoFullName resolves https github remote`() {
+        val method = Beans::class.java.getDeclaredMethod("parseRepoFullName", ServiceConfig::class.java)
+        method.isAccessible = true
+        val config = ServiceConfig(
+            gitConfig = GitConfig(enabled = false, remoteUrl = "https://github.com/acme/widgets.git")
+        )
+        val repo = method.invoke(beans, config) as String?
+        assertThat(repo).isEqualTo("acme/widgets")
+    }
+
+    @Test
+    fun `parseRemoteFromWorkspace reads origin from git config`() {
+        val wsRoot = Files.createTempDirectory("beans-parse-ws")
+        try {
+            val gitDir = wsRoot.resolve(".git")
+            Files.createDirectories(gitDir)
+            Files.writeString(
+                gitDir.resolve("config"),
+                """
+                |[remote "origin"]
+                |    url = https://github.com/ws-owner/ws-repo.git
+                """.trimMargin()
+            )
+            val method = Beans::class.java.getDeclaredMethod("parseRemoteFromWorkspace", String::class.java)
+            method.isAccessible = true
+            val repo = method.invoke(beans, wsRoot.toString()) as String?
+            assertThat(repo).isEqualTo("ws-owner/ws-repo")
+        } finally {
+            wsRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseRepoFullName falls back to workspace git config when remote blank`() {
+        val wsRoot = Files.createTempDirectory("beans-fallback-ws")
+        try {
+            val gitDir = wsRoot.resolve(".git")
+            Files.createDirectories(gitDir)
+            Files.writeString(
+                gitDir.resolve("config"),
+                """
+                |[remote "origin"]
+                |    url = git@github.com:fallback/project.git
+                """.trimMargin()
+            )
+            val method = Beans::class.java.getDeclaredMethod("parseRepoFullName", ServiceConfig::class.java)
+            method.isAccessible = true
+            val config = ServiceConfig(
+                gitConfig = GitConfig(enabled = false, remoteUrl = ""),
+                projects = mapOf(
+                    "test" to ProjectConfig(
+                        tracker = TrackerConfig("linear", "x", "k", "p"),
+                        workspace = WorkspaceConfig(wsRoot.toString()),
+                        agent = AgentProjectConfig(kind = "opencode")
+                    )
+                )
+            )
+            val repo = method.invoke(beans, config) as String?
+            assertThat(repo).isEqualTo("fallback/project")
+        } finally {
+            wsRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `demoController creates controller when service exists`() {
+        val demoConfig = DemoConfig(
+            enabled = true,
+            r2 = DemoConfig.R2Config(
+                endpoint = "https://r2.example.com",
+                accessKey = "key",
+                secretKey = "secret",
+                bucketName = "bucket",
+                publicUrlBase = "https://cdn.example.com"
+            )
+        )
+        val service = beans.demoRecordingService(
+            demoConfig = demoConfig,
+            demoTaskRepository = beans.demoTaskRepository(":memory:"),
+            recorderFactory = beans.recorderFactory(listOf(beans.playwrightRecorder())),
+            demoStorage = beans.demoStorage(demoConfig),
+            demoReporter = beans.demoReporter(
+                {
+                    com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                        com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                        "p"
+                    )
+                },
+                ServiceConfig(
+                    projects = mapOf(
+                        "test" to ProjectConfig(
+                            tracker = TrackerConfig("linear", "x", "k", "p"),
+                            workspace = WorkspaceConfig("/tmp"),
+                            agent = AgentProjectConfig(kind = "opencode")
+                        )
+                    )
+                )
+            ),
+            demoReportGenerator = beans.demoReportGenerator(),
+            demoMetricsRecorder = beans.demoMetricsRecorder(),
+            demoAuditLogger = beans.demoAuditLogger(),
+            aiTimelineGenerator = beans.aiTimelineGenerator(demoConfig)
+        )
+        assertThat(beans.demoController(service)).isNotNull()
+    }
+
     private fun createOrchestratorForConfig(config: ServiceConfig): com.flexsentlabs.koncerto.orchestrator.Orchestrator {
         val tempDir = Files.createTempDirectory("orchestrator-config-test")
         val hookExecutor = HookExecutor { _, _ -> }

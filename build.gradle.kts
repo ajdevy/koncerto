@@ -27,6 +27,7 @@ subprojects {
 
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
+        jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
     }
 
     val jacocoEnabled = providers.gradleProperty("jacoco").isPresent()
@@ -57,7 +58,7 @@ subprojects {
                     limit {
                         counter = "LINE"
                         value = "COVEREDRATIO"
-                        minimum = 0.75.toBigDecimal()
+                        minimum = 0.80.toBigDecimal()
                     }
                 }
             }

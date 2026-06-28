@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
@@ -19,9 +20,12 @@ import com.flexsentlabs.koncerto.core.config.FollowUpConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.config.SubtaskManifest
 import com.flexsentlabs.koncerto.core.config.SubtaskDef
+import com.flexsentlabs.koncerto.core.config.TenantConfig
 import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkplanConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
+import com.flexsentlabs.koncerto.core.tenant.ConfigTenantResolver
+import com.flexsentlabs.koncerto.core.tenant.TenantResolver
 import com.flexsentlabs.koncerto.core.config.WorkflowDefinition
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.core.quota.QuotaConfig
@@ -36,6 +40,14 @@ import com.flexsentlabs.koncerto.core.result.EmptyResult
 import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.core.config.CrossProjectFollowUpConfig
+import com.flexsentlabs.koncerto.core.audit.AuditEvent
+import com.flexsentlabs.koncerto.core.audit.AuditEventType
+import com.flexsentlabs.koncerto.core.audit.AuditLogger
+import com.flexsentlabs.koncerto.metrics.MetricsRepository
+import com.flexsentlabs.koncerto.metrics.TokenDaySummary
+import com.flexsentlabs.koncerto.agent.AgentEvent
+import com.flexsentlabs.koncerto.core.model.TokenUsage
 import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
@@ -43,11 +55,14 @@ import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -228,6 +243,52 @@ class DispatchServiceTest {
         yield()
         assertThat(state.limitPauses.containsKey("1")).isFalse()
         assertThat(linear.commentedBody!!.contains("resuming", ignoreCase = true)).isTrue()
+        assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
+    }
+
+    @Test
+    fun `dispatchDueLimitPauses tolerates resume comment failure`() = runBlocking {
+        val backing = TrackingLinearClient()
+        backing.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) =
+                backing.fetchCandidateIssues(projectSlug, activeStates)
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) =
+                backing.fetchIssuesByStates(projectSlug, stateNames)
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) =
+                backing.fetchIssueStatesByIds(issueIds)
+            override suspend fun fetchIssueById(issueId: String) = backing.fetchIssueById(issueId)
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) =
+                backing.resolveStateId(projectSlug, stateName)
+            override suspend fun updateIssueState(issueId: String, stateId: String) =
+                backing.updateIssueState(issueId, stateId)
+            override suspend fun createComment(issueId: String, body: String) {
+                if (body.contains("resuming", ignoreCase = true)) {
+                    throw RuntimeException("comment failed")
+                }
+                backing.createComment(issueId, body)
+            }
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) =
+                backing.updateIssueAssignee(issueId, assigneeId)
+            override suspend fun fetchIssueCreator(issueId: String) = backing.fetchIssueCreator(issueId)
+            override suspend fun createIssue(
+                projectSlug: String, title: String, state: String,
+                description: String?, labels: List<String>
+            ) = backing.createIssue(projectSlug, title, state, description, labels)
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) =
+                backing.createLink(sourceIssueId, targetIssueId, type)
+        }
+        val state = RuntimeState()
+        state.limitPauses["1"] = LimitPauseEntry(
+            issueId = "1", identifier = "A-1", stageName = "todo",
+            agentKind = "codex", provider = "codex", error = "limit",
+            resumeAtMs = System.currentTimeMillis() - 1
+        )
+        val runner = CollectingAgentRunner()
+        val svc = createService(state = state, linear = linear, runner = runner)
+        svc.dispatchDueLimitPauses(CoroutineScope(coroutineContext))
+        yield()
+        assertThat(state.limitPauses.containsKey("1")).isFalse()
         assertThat(runner.dispatched.map { it.identifier }).containsExactly("A-1")
     }
 
@@ -752,7 +813,14 @@ class DispatchServiceTest {
         quotaEnforcer: QuotaEnforcer? = null,
         quotaConfig: QuotaConfig? = null,
         subtaskOrchestrator: SubtaskOrchestrator? = null,
-        workplanParser: WorkplanParser? = null
+        workplanParser: WorkplanParser? = null,
+        autoReviewOrchestrator: AutoReviewOrchestrator? = null,
+        auditLogger: AuditLogger? = null,
+        notifier: CompositeNotifier? = null,
+        notificationsConfig: NotificationsConfig? = null,
+        crossProjectChainer: CrossProjectChainer? = null,
+        metricsRepository: MetricsRepository? = null,
+        tenantResolver: TenantResolver? = null
     ): DispatchService {
         val cfg = projectConfig ?: DispatchServiceTest.config()
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
@@ -760,11 +828,18 @@ class DispatchServiceTest {
         val client = linear ?: candidates?.let { SimpleLinear(it) } ?: SimpleLinear(emptyList())
         return DispatchService(
             cfg, state, client, runner, wc, logger, workspaces,
-            quotaEnforcer = quotaEnforcer,
-            quotaConfig = quotaConfig,
+            metricsRepository = metricsRepository,
+            notifier = notifier,
+            notificationsConfig = notificationsConfig,
             subtaskOrchestrator = subtaskOrchestrator,
             workplanParser = workplanParser,
-            gitWorkflow = gitWorkflow
+            quotaEnforcer = quotaEnforcer,
+            quotaConfig = quotaConfig,
+            crossProjectChainer = crossProjectChainer,
+            auditLogger = auditLogger,
+            autoReviewOrchestrator = autoReviewOrchestrator,
+            gitWorkflow = gitWorkflow,
+            tenantResolver = tenantResolver
         )
     }
 
@@ -1451,6 +1526,910 @@ class DispatchServiceTest {
         runDispatch(svc)
         assertThat(runner.runArgs.first().prompt).isEqualTo("Hi")
     }
+
+    @Test
+    fun `shutdown sets shutdownRequested and awaits background jobs`() = runBlocking {
+        val svc = createService()
+        svc.shutdown()
+        assertThat(svc.shutdownRequested).isTrue()
+    }
+
+    @Test
+    fun `transitionOnComplete uses onFailureState when review status is fail`(@TempDir root: Path) = runBlocking {
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        ws.ensureWorkspace("T-1")
+        val workspace = root.resolve("T-1")
+        Files.writeString(workspace.resolve(".review-status"), "fail")
+        Files.writeString(workspace.resolve(".review-attempt"), "1")
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val svc = createService(
+            projectConfig = config(stages = mapOf("in review" to stage)),
+            linear = linear,
+            workspaces = ws
+        )
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+    }
+
+    @Test
+    fun `transitionOnComplete clears review files when max attempts reached`(@TempDir root: Path) = runBlocking {
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        ws.ensureWorkspace("T-1")
+        val workspace = root.resolve("T-1")
+        Files.writeString(workspace.resolve(".review-status"), "fail")
+        Files.writeString(workspace.resolve(".review-attempt"), "3")
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val svc = createService(
+            projectConfig = config(stages = mapOf("in review" to stage)),
+            linear = linear,
+            workspaces = ws
+        )
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(Files.exists(workspace.resolve(".review-status"))).isFalse()
+    }
+
+    @Test
+    fun `dispatch failure sends notification when configured`() = runBlocking {
+        var notified = false
+        val notifier = CompositeNotifier(listOf(object : com.flexsentlabs.koncerto.notifications.Notifier {
+            override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
+                if (event is com.flexsentlabs.koncerto.notifications.NotificationEvent.AgentFailed) {
+                    notified = true
+                }
+            }
+        }))
+        val svc = createService(
+            runner = FailingRunner("boom"),
+            notifier = notifier,
+            notificationsConfig = NotificationsConfig(onCompleted = false, onFailed = true),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(notified).isTrue()
+    }
+
+    @Test
+    fun `dispatch success records metrics and audit events`() = runBlocking {
+        var metricResult: String? = null
+        val metrics = object : MetricsRepository {
+            override suspend fun updateAfterRun(
+                issueId: String, issueIdentifier: String, projectSlug: String?,
+                result: String, inputTokens: Long, outputTokens: Long, totalTokens: Long
+            ) { metricResult = result }
+            override suspend fun findAll() = emptyList<com.flexsentlabs.koncerto.metrics.IssueMetrics>()
+            override suspend fun findByProject(projectSlug: String?) = emptyList<com.flexsentlabs.koncerto.metrics.IssueMetrics>()
+            override suspend fun findById(issueId: String) = null
+            override suspend fun tokenHistory(days: Int) =
+                listOf(TokenDaySummary("2026-01-01", 0, 0, 0))
+        }
+        var auditType: AuditEventType? = null
+        val audit = object : AuditLogger {
+            override fun log(event: AuditEvent) { auditType = event.type }
+        }
+        val svc = createService(
+            runner = CollectingAgentRunner(),
+            metricsRepository = metrics,
+            auditLogger = audit,
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(metricResult).isEqualTo("success")
+        assertThat(auditType).isEqualTo(AuditEventType.AGENT_COMPLETED)
+    }
+
+    @Test
+    fun `dispatch emits token usage from agent events`() = runBlocking {
+        val runner = TokenEventRunner()
+        val state = RuntimeState()
+        val svc = createService(
+            state = state,
+            runner = runner,
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(state.running.isEmpty()).isTrue()
+    }
+
+    @Test
+    fun `scheduleLimitPause with disabled config schedules retry instead`() = runBlocking {
+        val (svc, state) = createServiceWithState(
+            projectConfig = config().copy(
+                agent = config().agent.copy(
+                    limitPause = config().agent.limitPause.copy(enabled = false)
+                )
+            )
+        )
+        val testIssue = issue("1", "T-1", "Todo")
+        state.running["1"] = runningEntry("1", "T-1")
+        svc.scheduleLimitPause(testIssue, "limit hit", "codex", System.currentTimeMillis() + 60_000, "todo", "codex")
+        assertThat(state.limitPauses.containsKey("1")).isFalse()
+        assertThat(state.retryAttempts.containsKey("1")).isTrue()
+    }
+
+    @Test
+    fun `fetchAndDispatch marks todo issues blocked by active blockers`() {
+        val blocker = issue("0", "A-0", "Todo")
+        val blocked = issue("1", "A-1", "Todo", blockers = listOf(BlockerRef("0", "A-0", "Todo")))
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            runner = runner,
+            candidates = listOf(blocker, blocked)
+        )
+        runDispatch(svc)
+        assertThat(svc.state.blockedKeys.contains("1")).isTrue()
+        assertThat(runner.dispatched.map { it.id }).containsExactly("0")
+    }
+
+    @Test
+    fun `handleNormalCompletion with auto review no review completes issue`(@TempDir root: Path) = runBlocking {
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = CollectingAgentRunner(),
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = SimpleLinear(listOf(issue("1", "T-1", "Todo"))),
+            projectConfig = config(),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = CollectingAgentRunner(),
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+    }
+
+    @Test
+    fun `cross project follow up launches background chainer job`(@TempDir root: Path) = runBlocking {
+        var followUpCalled = false
+        val chainer = object : CrossProjectChainer {
+            override suspend fun createFollowUp(
+                issue: Issue,
+                config: CrossProjectFollowUpConfig,
+                sourceProjectSlug: String
+            ) { followUpCalled = true }
+        }
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = null,
+            agent = null, followUp = null,
+            crossProjectFollowUp = CrossProjectFollowUpConfig(
+                targetProjectSlug = "other",
+                titleTemplate = "Follow {{identifier}}",
+                descriptionTemplate = null
+            )
+        )
+        val svc = createService(
+            projectConfig = config(stages = mapOf("todo" to stage)),
+            runner = CollectingAgentRunner(),
+            crossProjectChainer = chainer,
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        svc.awaitBackgroundJobs()
+        assertThat(followUpCalled).isTrue()
+    }
+
+    @Test
+    fun `transitionOnComplete uses onComplete when review fail exceeds max attempts`(@TempDir root: Path) = runBlocking {
+        val workspace = root.resolve("T-1")
+        Files.createDirectories(workspace)
+        Files.writeString(workspace.resolve(".review-status"), "fail")
+        Files.writeString(workspace.resolve(".review-attempt"), "3")
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            linear = linear,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = mapOf("todo" to stage)),
+            candidates = emptyList()
+        )
+        svc.transitionOnComplete(issue("1", "T-1", "Todo"), stage)
+        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+        assertThat(Files.exists(workspace.resolve(".review-status"))).isFalse()
+    }
+
+    @Test
+    fun `transitionOnComplete skips when stage config null`() = runBlocking {
+        val linear = TrackingLinearClient()
+        val svc = createService(linear = linear, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "Todo"), null)
+        assertThat(linear.transitionedIssueId).isNull()
+    }
+
+    @Test
+    fun `agent messaging ack returns false for unknown message`() {
+        val svc = createService(candidates = emptyList())
+        assertThat(svc.ackAgentMessage("missing-message")).isFalse()
+    }
+
+    @Test
+    fun `scheduleLimitPause logs audit event when audit logger configured`() = runBlocking {
+        var auditType: AuditEventType? = null
+        val audit = object : AuditLogger {
+            override fun log(event: AuditEvent) { auditType = event.type }
+        }
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "A-1", "Todo"))
+        val svc = createService(linear = linear, auditLogger = audit)
+        svc.scheduleLimitPause(
+            issue = issue("1", "A-1", "Todo"),
+            error = "rate limited",
+            provider = "codex",
+            resumeAtMs = System.currentTimeMillis() + 60_000,
+            stageName = "todo",
+            agentKind = "codex"
+        )
+        assertThat(auditType).isEqualTo(AuditEventType.AGENT_RETRY_SCHEDULED)
+    }
+
+    @Test
+    fun `scheduleLimitPause stores pause when linear comment fails`() = runBlocking {
+        val backing = TrackingLinearClient()
+        backing.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) =
+                backing.fetchCandidateIssues(projectSlug, activeStates)
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) =
+                backing.fetchIssuesByStates(projectSlug, stateNames)
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) =
+                backing.fetchIssueStatesByIds(issueIds)
+            override suspend fun fetchIssueById(issueId: String) = backing.fetchIssueById(issueId)
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) =
+                backing.resolveStateId(projectSlug, stateName)
+            override suspend fun updateIssueState(issueId: String, stateId: String) =
+                backing.updateIssueState(issueId, stateId)
+            override suspend fun createComment(issueId: String, body: String) {
+                throw RuntimeException("comment api down")
+            }
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) =
+                backing.updateIssueAssignee(issueId, assigneeId)
+            override suspend fun fetchIssueCreator(issueId: String) = backing.fetchIssueCreator(issueId)
+            override suspend fun createIssue(
+                projectSlug: String, title: String, state: String,
+                description: String?, labels: List<String>
+            ) = backing.createIssue(projectSlug, title, state, description, labels)
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) =
+                backing.createLink(sourceIssueId, targetIssueId, type)
+        }
+        val state = RuntimeState()
+        val svc = createService(state = state, linear = linear)
+        svc.scheduleLimitPause(
+            issue = issue("1", "A-1", "Todo"),
+            error = "limit",
+            provider = "codex",
+            resumeAtMs = System.currentTimeMillis() + 60_000,
+            stageName = "todo",
+            agentKind = "codex"
+        )
+        assertThat(state.limitPauses.containsKey("1")).isTrue()
+    }
+
+    @Test
+    fun `dispatchDueLimitPauses requeues pause when fetchIssueById fails`() = runBlocking {
+        val backing = TrackingLinearClient()
+        backing.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) =
+                backing.fetchCandidateIssues(projectSlug, activeStates)
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) =
+                backing.fetchIssuesByStates(projectSlug, stateNames)
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) =
+                backing.fetchIssueStatesByIds(issueIds)
+            override suspend fun fetchIssueById(issueId: String): Issue? =
+                throw RuntimeException("fetch failed")
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) =
+                backing.resolveStateId(projectSlug, stateName)
+            override suspend fun updateIssueState(issueId: String, stateId: String) =
+                backing.updateIssueState(issueId, stateId)
+            override suspend fun createComment(issueId: String, body: String) =
+                backing.createComment(issueId, body)
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) =
+                backing.updateIssueAssignee(issueId, assigneeId)
+            override suspend fun fetchIssueCreator(issueId: String) = backing.fetchIssueCreator(issueId)
+            override suspend fun createIssue(
+                projectSlug: String, title: String, state: String,
+                description: String?, labels: List<String>
+            ) = backing.createIssue(projectSlug, title, state, description, labels)
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) =
+                backing.createLink(sourceIssueId, targetIssueId, type)
+        }
+        val state = RuntimeState()
+        val pauseEntry = LimitPauseEntry(
+            issueId = "1", identifier = "A-1", stageName = "todo",
+            agentKind = "codex", provider = "codex", error = "limit",
+            resumeAtMs = System.currentTimeMillis() - 1
+        )
+        state.limitPauses["1"] = pauseEntry
+        val svc = createService(state = state, linear = linear)
+        svc.dispatchDueLimitPauses(CoroutineScope(coroutineContext))
+        assertThat(state.limitPauses["1"]).isEqualTo(pauseEntry)
+    }
+
+    @Test
+    fun `dispatchDueLimitPauses requeues pause when dispatch fails`() = runBlocking {
+        AgentAuthChecker.markUnauthenticated("codex")
+        try {
+            val linear = TrackingLinearClient()
+            linear.addIssue(issue("1", "A-1", "Todo"))
+            val state = RuntimeState()
+            val pauseEntry = LimitPauseEntry(
+                issueId = "1", identifier = "A-1", stageName = "todo",
+                agentKind = "codex", provider = "codex", error = "limit",
+                resumeAtMs = System.currentTimeMillis() - 1
+            )
+            state.limitPauses["1"] = pauseEntry
+            val svc = createService(state = state, linear = linear)
+            svc.dispatchDueLimitPauses(CoroutineScope(coroutineContext))
+            assertThat(state.limitPauses.containsKey("1")).isTrue()
+        } finally {
+            AgentAuthChecker.markAuthenticated("codex")
+        }
+    }
+
+    @Test
+    fun `dispatch failure records failure metrics and audit`() = runBlocking {
+        var metricResult: String? = null
+        val metrics = object : MetricsRepository {
+            override suspend fun updateAfterRun(
+                issueId: String, issueIdentifier: String, projectSlug: String?,
+                result: String, inputTokens: Long, outputTokens: Long, totalTokens: Long
+            ) { metricResult = result }
+            override suspend fun findAll() = emptyList<com.flexsentlabs.koncerto.metrics.IssueMetrics>()
+            override suspend fun findByProject(projectSlug: String?) = emptyList<com.flexsentlabs.koncerto.metrics.IssueMetrics>()
+            override suspend fun findById(issueId: String) = null
+            override suspend fun tokenHistory(days: Int) =
+                listOf(TokenDaySummary("2026-01-01", 0, 0, 0))
+        }
+        var auditTypes = mutableListOf<AuditEventType>()
+        val audit = object : AuditLogger {
+            override fun log(event: AuditEvent) { auditTypes.add(event.type) }
+        }
+        val svc = createService(
+            runner = FailingRunner("boom"),
+            metricsRepository = metrics,
+            auditLogger = audit,
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(metricResult).isEqualTo("failure")
+        assertThat(auditTypes).contains(AuditEventType.AGENT_FAILED)
+    }
+
+    @Test
+    fun `prepareDispatch sets tenant context on running entry`() = runBlocking {
+        val tenantResolver = ConfigTenantResolver()
+        val projectConfig = config().copy(
+            tenant = TenantConfig(tier = "enterprise", quotaProfile = "large")
+        )
+        var capturedTier: String? = null
+        val state = RuntimeState()
+        val runner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?
+            ): EmptyResult<IllegalStateException> {
+                capturedTier = state.running[issue.id]?.tenantContext?.tier
+                return Result.Success(Unit)
+            }
+        }
+        val svc = createService(
+            projectConfig = projectConfig,
+            state = state,
+            runner = runner,
+            tenantResolver = tenantResolver,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(capturedTier).isEqualTo("enterprise")
+    }
+
+    @Test
+    fun `resolveAgent applies KONCERTO_DEFAULT_MODEL when model unset`() {
+        try {
+            setEnvVar("KONCERTO_DEFAULT_MODEL", "gpt-test-default")
+        } catch (_: Exception) {
+            return
+        }
+        if (System.getenv("KONCERTO_DEFAULT_MODEL") != "gpt-test-default") return
+        try {
+            val (svc, _) = createServiceWithState()
+            val resolved = svc.resolveAgent(issue("1", "T-1", "Todo"), null)
+            assertThat(resolved.model).isEqualTo("gpt-test-default")
+        } finally {
+            clearEnvVar("KONCERTO_DEFAULT_MODEL")
+        }
+    }
+
+    @Test
+    fun `transitionOnComplete uses onComplete when onFailureState null`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(linear = linear, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "Todo"), stage)
+        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+    }
+
+    @Test
+    fun `transitionOnComplete uses onComplete when review status file missing`(@TempDir root: Path) = runBlocking {
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        Files.createDirectories(root.resolve("T-1"))
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val svc = createService(linear = linear, workspaces = ws, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+    }
+
+    @Test
+    fun `handleNormalCompletion with auto review pass completes issue`(@TempDir root: Path) = runBlocking {
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val todoStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Ready for Human Review",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val runner = ReviewWritingAgentRunner(root, "pass")
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = mapOf(
+                "todo" to todoStage,
+                "in review" to reviewStage,
+                "review" to reviewStage.copy(onCompleteState = "Done")
+            )),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = mapOf(
+                "todo" to todoStage,
+                "in review" to reviewStage,
+                "review" to reviewStage.copy(onCompleteState = "Done")
+            )),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+        assertThat(linear.transitionedIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `handleNormalCompletion with auto review retry reroutes state`(@TempDir root: Path) = runBlocking {
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val todoStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Ready for Human Review",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val runner = ReviewWritingAgentRunner(root, reviewStatus = null)
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = mapOf("todo" to todoStage, "in review" to reviewStage)),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = mapOf("todo" to todoStage, "in review" to reviewStage)),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isFalse()
+        assertThat(linear.transitionedIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `handleNormalCompletion with auto review blocked does not complete`(@TempDir root: Path) = runBlocking {
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val todoStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Ready for Human Review",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val runner = ReviewWritingAgentRunner(root, reviewStatus = null)
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = mapOf("todo" to todoStage, "in review" to reviewStage)),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = mapOf("todo" to todoStage, "in review" to reviewStage)),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isFalse()
+        assertThat(linear.transitionedIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `scheduleRetry exhaustion logs AGENT_FAILED audit event`() = runBlocking {
+        val auditTypes = mutableListOf<AuditEventType>()
+        val audit = object : AuditLogger {
+            override fun log(event: AuditEvent) { auditTypes.add(event.type) }
+        }
+        val projectConfig = config().copy(
+            agent = config().agent.copy(maxRetries = 1),
+            tracker = config().tracker.copy(blockedState = "Blocked")
+        )
+        val svc = createService(projectConfig = projectConfig, auditLogger = audit)
+        val testIssue = issue("1", "A-1", "Todo")
+        svc.scheduleRetry(testIssue, "err1")
+        svc.scheduleRetry(testIssue, "err2")
+        assertThat(auditTypes).contains(AuditEventType.AGENT_FAILED)
+    }
+
+    @Test
+    fun `handleClarification tolerates comment failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient by tracking {
+            override suspend fun createComment(issueId: String, body: String) {
+                throw RuntimeException("comment failed")
+            }
+        }
+        val svc = createService(linear = linear)
+        svc.handleClarification("1", "Need more info")
+        assertThat(svc.state.isBlocked("1")).isFalse()
+    }
+
+    @Test
+    fun `handleClarification tolerates missing blocked state`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient by tracking {
+            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? =
+                if (stateName == "Blocked") null else "done-id"
+        }
+        val svc = createService(
+            linear = linear,
+            projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked"))
+        )
+        svc.handleClarification("1", "Need specs")
+        assertThat(svc.state.isBlocked("1")).isTrue()
+        assertThat(tracking.commentedIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `handleClarification sends notification when configured`() = runBlocking {
+        var notified = false
+        val notifier = object : com.flexsentlabs.koncerto.notifications.Notifier {
+            override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
+                if (event is com.flexsentlabs.koncerto.notifications.NotificationEvent.ClarificationRequested) {
+                    notified = true
+                }
+            }
+        }
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "A-1", "Todo"))
+        val svc = createService(
+            linear = linear,
+            notifier = CompositeNotifier(listOf(notifier)),
+            notificationsConfig = NotificationsConfig(onClarification = true)
+        )
+        svc.handleClarification("1", "Please clarify")
+        assertThat(notified).isTrue()
+        assertThat(svc.state.isBlocked("1")).isTrue()
+    }
+
+    @Test
+    fun `handleClarification no-ops when issue fetch returns null`() = runBlocking {
+        val svc = createService(candidates = emptyList<Issue>())
+        svc.handleClarification("missing", "content")
+        assertThat(svc.state.isBlocked("missing")).isFalse()
+    }
+
+    @Test
+    fun `handleClarification assigns human creator`() = runBlocking {
+        val linear = TrackingLinearClient()
+        val human = UserRef("user-1", "Human", isBot = false)
+        linear.addIssue(issue("1", "A-1", "Todo").copy(creator = human))
+        val svc = createService(linear = linear)
+        svc.handleClarification("1", "Need input")
+        assertThat(linear.assignedUserId).isEqualTo("user-1")
+        assertThat(svc.state.isBlocked("1")).isTrue()
+    }
+
+    @Test
+    fun `fetchAndDispatch removes stale blocked keys`() = runBlocking {
+        val state = RuntimeState()
+        state.addBlocked("stale-id")
+        val ready = issue("2", "A-2", "Todo")
+        val svc = createService(state = state, candidates = listOf(ready))
+        svc.fetchAndDispatch(CoroutineScope(coroutineContext))
+        assertThat(state.isBlocked("stale-id")).isFalse()
+    }
+
+    @Test
+    fun `prepareDispatch releases claim when audit logger throws`() = runBlocking {
+        val state = RuntimeState()
+        val audit = object : AuditLogger {
+            override fun log(event: AuditEvent) {
+                if (event.type == AuditEventType.AGENT_DISPATCHED) throw RuntimeException("audit boom")
+            }
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(
+            state = state,
+            runner = runner,
+            auditLogger = audit,
+            candidates = listOf(issue("1", "A-1", "Todo"))
+        )
+        try {
+            runDispatch(svc)
+        } catch (_: RuntimeException) {
+        }
+        assertThat(state.isClaimed("1")).isFalse()
+    }
+
+    @Test
+    fun `agentMessageFlow delivers routed messages`() = runBlocking {
+        val (svc, _) = createServiceWithState()
+        val messages = mutableListOf<AgentMessage>()
+        val job = launch {
+            svc.agentMessageFlow("agent-1").collect { messages.add(it) }
+        }
+        kotlinx.coroutines.delay(50)
+        svc.sendAgentMessage("agent-2", "agent-1", "hello-flow")
+        kotlinx.coroutines.delay(100)
+        job.cancel()
+        assertThat(messages.map { it.payload }).contains("hello-flow")
+    }
+
+    @Test
+    fun `prepareDispatch tolerates in progress state transition failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient by tracking {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                throw RuntimeException("linear down")
+            }
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(linear = linear, runner = runner, candidates = listOf(issue("1", "A-1", "Todo")))
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `handleClarification tolerates assignee update failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.addIssue(issue("1", "A-1", "Todo").copy(creator = UserRef("user-1", "Human", isBot = false)))
+        val linear = object : LinearClient by tracking {
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {
+                throw RuntimeException("assignee failed")
+            }
+        }
+        val svc = createService(linear = linear)
+        svc.handleClarification("1", "Need input")
+        assertThat(svc.state.isBlocked("1")).isTrue()
+    }
+
+    @Test
+    fun `handleClarification tolerates state update failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.addIssue(issue("1", "A-1", "Todo"))
+        val linear = object : LinearClient by tracking {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                throw RuntimeException("state failed")
+            }
+        }
+        val svc = createService(linear = linear)
+        svc.handleClarification("1", "Need input")
+        assertThat(svc.state.isBlocked("1")).isTrue()
+    }
+
+    @Test
+    fun `transitionOnComplete skips when target state id missing`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.resolveStateIdResult = null
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done"
+        )
+        val svc = createService(linear = tracking)
+        svc.transitionOnComplete(issue("1", "A-1", "Todo"), stage)
+        assertThat(tracking.transitionedIssueId).isNull()
+    }
+
+    @Test
+    fun `transitionOnComplete tolerates linear update failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.throwOnStateUpdate = true
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done"
+        )
+        val svc = createService(linear = tracking)
+        svc.transitionOnComplete(issue("1", "A-1", "Todo"), stage)
+        assertThat(tracking.transitionedIssueId).isNull()
+    }
+
+    @Test
+    fun `transitionOnComplete logs when follow-up creation fails`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.createIssueResult = null
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done",
+            followUp = FollowUpConfig(titleTemplate = "Follow {{ issue.identifier }}", state = "Todo", linkType = "")
+        )
+        val svc = createService(linear = tracking)
+        svc.transitionOnComplete(issue("1", "A-1", "Todo"), stage)
+        assertThat(tracking.transitionedIssueId).isEqualTo("1")
+        assertThat(tracking.createdIssueTitle).isEqualTo("Follow A-1")
+    }
+
+    @Test
+    fun `transitionOnComplete tolerates follow-up link failure`() = runBlocking {
+        val tracking = TrackingLinearClient()
+        tracking.createIssueResult = issue("2", "A-2", "Todo")
+        tracking.createLinkResult = false
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done",
+            followUp = FollowUpConfig(titleTemplate = "Follow {{ issue.identifier }}", state = "Todo", linkType = "blocks")
+        )
+        val svc = createService(linear = tracking)
+        svc.transitionOnComplete(issue("1", "A-1", "Todo"), stage)
+        assertThat(tracking.linkedSourceId).isEqualTo("1")
+        assertThat(tracking.linkedTargetId).isEqualTo("2")
+    }
+
+    private fun setEnvVar(name: String, value: String) {
+        val pe = Class.forName("java.lang.ProcessEnvironment")
+        val env = pe.getDeclaredField("theEnvironment")
+        env.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (env.get(null) as MutableMap<String, String>)[name] = value
+        try {
+            val ciEnv = pe.getDeclaredField("theCaseInsensitiveEnvironment")
+            ciEnv.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            (ciEnv.get(null) as MutableMap<String, String>)[name] = value
+        } catch (_: NoSuchFieldException) {
+        }
+    }
+
+    private fun clearEnvVar(name: String) {
+        val pe = Class.forName("java.lang.ProcessEnvironment")
+        val env = pe.getDeclaredField("theEnvironment")
+        env.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (env.get(null) as MutableMap<String, String>).remove(name)
+        try {
+            val ciEnv = pe.getDeclaredField("theCaseInsensitiveEnvironment")
+            ciEnv.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            (ciEnv.get(null) as MutableMap<String, String>).remove(name)
+        } catch (_: NoSuchFieldException) {
+        }
+    }
+}
+
+private class ReviewWritingAgentRunner(
+    private val workspaceRoot: Path,
+    private val reviewStatus: String?
+) : AgentRunner {
+    private var invocations = 0
+    private val flow = MutableSharedFlow<AgentEvent>()
+    override fun events() = flow.asSharedFlow()
+    override suspend fun run(
+        issue: Issue, attempt: Int?, prompt: String,
+        agentKindOverride: String?, commandOverride: String?,
+        modelOverride: String?, effortOverride: String?,
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+    ): EmptyResult<IllegalStateException> {
+        invocations++
+        if (invocations > 1 && reviewStatus != null) {
+            val dir = workspaceRoot.resolve(issue.identifier)
+            Files.createDirectories(dir)
+            Files.writeString(dir.resolve(".review-status"), reviewStatus)
+        }
+        return Result.Success(Unit)
+    }
+}
+
+private class TokenEventRunner : AgentRunner {
+    private val flow = MutableSharedFlow<AgentEvent>()
+    override fun events() = flow.asSharedFlow()
+    override suspend fun run(
+        issue: Issue, attempt: Int?, prompt: String,
+        agentKindOverride: String?, commandOverride: String?,
+        modelOverride: String?, effortOverride: String?,
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+    ): EmptyResult<IllegalStateException> {
+        flow.emit(AgentEvent.TurnCompleted(threadId = "t", turnId = "u", usage = TokenUsage(10, 20, 30), pid = null))
+        return Result.Success(Unit)
+    }
 }
 
 private class LimitFailureRunner(private val error: Throwable) : AgentRunner {
@@ -1503,6 +2482,8 @@ private class TrackingLinearClient : LinearClient {
     var linkedType: String? = null
     var createIssueResult: Issue? = null
     var createLinkResult: Boolean = true
+    var resolveStateIdResult: String? = "done-id"
+    var throwOnStateUpdate: Boolean = false
     private val candidates = mutableListOf<Issue>()
 
     fun addIssue(issue: Issue) { candidates.add(issue) }
@@ -1512,8 +2493,9 @@ private class TrackingLinearClient : LinearClient {
     override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> = emptyList()
     override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> = emptyMap()
     override suspend fun fetchIssueById(issueId: String): Issue? = candidates.firstOrNull { it.id == issueId }
-    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = "done-id"
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = resolveStateIdResult
     override suspend fun updateIssueState(issueId: String, stateId: String) {
+        if (throwOnStateUpdate) throw RuntimeException("linear down")
         transitionedIssueId = issueId
         transitionedStateId = stateId
     }

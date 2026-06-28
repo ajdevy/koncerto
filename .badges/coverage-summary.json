@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 {"branches": 63.67, "coverage": 85.57}
+=======
+{"branches": 73.32, "coverage": 95.03}
+>>>>>>> d043be2 (feat: raise line coverage to 95% (agg) / 80% per-module threshold)

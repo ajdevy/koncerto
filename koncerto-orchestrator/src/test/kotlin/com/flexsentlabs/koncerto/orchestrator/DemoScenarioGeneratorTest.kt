@@ -275,6 +275,37 @@ class DemoScenarioGeneratorTest {
         assertThat(result).isNull()
     }
 
+    @Test
+    fun `generate falls back to third model when first two fail`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-5", identifier = "T-5", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val calledModels = mutableListOf<String>()
+        val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
+            val model = cmd[cmd.indexOf("--model") + 1]
+            calledModels += model
+            if (model == "opencode-free-3") validScenarioOutput else null
+        }
+        val result = generatorWithRunner(runner).generate(issue, workspace)
+        assertThat(result).isNotNull()
+        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2", "opencode-free-3"))
+    }
+
+    @Test
+    fun `runGitDiff returns null when git diff fails`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
     private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {
         runProcess(listOf("git", "init"), tmpDir)
         runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)

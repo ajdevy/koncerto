@@ -1,10 +1,17 @@
 package com.flexsentlabs.koncerto.deploy
 
 import assertk.assertThat
+import assertk.assertions.contains
+import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isGreaterThan
+import assertk.assertions.isNotNull
+import assertk.assertions.isSuccess
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import java.nio.file.Files
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class ContainerLifecycleManagerTest {
 
@@ -58,5 +65,79 @@ class ContainerLifecycleManagerTest {
             "koncerto-test-invalid"
         )
         assertThat(result.isFailure).isTrue()
+    }
+
+    @Test
+    fun `buildImage succeeds with fake docker`() {
+        FakeDockerPath.withFakeDocker(FakeDockerPath.lifecycleSuccessScript()) {
+            val tmpDir = Files.createTempDirectory("docker-build-test")
+            val dockerfile = tmpDir.resolve("Dockerfile")
+            Files.writeString(dockerfile, "FROM alpine\n")
+            val result = manager.buildImage(tmpDir, dockerfile, "koncerto-test-build")
+            assertThat(result.isSuccess).isTrue()
+            tmpDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `allocatePort throws when range exhausted`() {
+        val tightManager = ContainerLifecycleManager(
+            logger = StructuredLogger(emptyList()),
+            portRange = 45300..45300
+        )
+        val port = tightManager.allocatePort()
+        assertThat(port).isEqualTo(45300)
+        assertThrows<IllegalStateException> { tightManager.allocatePort() }
+        tightManager.releasePort(port)
+    }
+
+    @Test
+    fun `waitForHealthy returns failure when container never running`() {
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  inspect) echo "starting"; exit 0 ;;
+esac
+exit 0
+"""
+        FakeDockerPath.withFakeDocker(script) {
+            val result = manager.waitForHealthy("test-container", timeoutSec = 1)
+            assertThat(result.isFailure).isTrue()
+            assertThat(result.exceptionOrNull()!!.message!!.contains("not healthy")).isTrue()
+        }
+    }
+
+    @Test
+    fun `getOccupiedPorts parses docker ps output without throwing`() {
+        val method = ContainerLifecycleManager::class.java.getDeclaredMethod("getOccupiedPorts")
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val occupied = method.invoke(manager) as Set<Int>
+        assertThat(occupied.all { it in 1..65535 }).isTrue()
+    }
+
+    @Test
+    fun `runContainer stops retrying on non port conflict error`() {
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  run) echo "invalid reference format"; exit 1 ;;
+esac
+exit 1
+"""
+        FakeDockerPath.withFakeDocker(script) {
+            val port = manager.allocatePort()
+            val result = manager.runContainer("bad-image", port, 8080)
+            assertThat(result.isFailure).isTrue()
+            manager.releasePort(port)
+        }
+    }
+
+    @Test
+    fun `isPortFree returns true for available port`() {
+        val method = ContainerLifecycleManager::class.java.getDeclaredMethod("isPortFree", Int::class.javaPrimitiveType)
+        method.isAccessible = true
+        val freePort = (50000..50100).firstOrNull { port ->
+            method.invoke(manager, port) as Boolean
+        }
+        assertThat(freePort).isNotNull()
     }
 }

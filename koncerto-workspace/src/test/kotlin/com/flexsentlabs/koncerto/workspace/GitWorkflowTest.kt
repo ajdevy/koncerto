@@ -6,6 +6,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
@@ -58,6 +59,39 @@ class GitWorkflowTest {
         val out = pb.inputStream.bufferedReader().readText()
         pb.waitFor()
         return out.trim()
+    }
+
+    private fun runGitIn(dir: Path, vararg args: String): String {
+        val pb = ProcessBuilder(listOf("git") + args.toList())
+            .directory(dir.toFile())
+            .redirectErrorStream(true)
+            .start()
+        val out = pb.inputStream.bufferedReader().readText()
+        pb.waitFor()
+        return out.trim()
+    }
+
+    private fun createBareRemoteWithMain(): Path {
+        val bareDir = Files.createTempDirectory("bare-origin-")
+        ProcessBuilder("git", "init", "--bare", "--initial-branch=main")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        val seedDir = Files.createTempDirectory("seed-repo-")
+        ProcessBuilder("git", "init", "--initial-branch=main")
+            .directory(seedDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGitIn(seedDir, "config", "user.email", "test@test.com")
+        runGitIn(seedDir, "config", "user.name", "Test")
+        seedDir.resolve("README.md").writeText("# seed")
+        runGitIn(seedDir, "add", "-A")
+        runGitIn(seedDir, "commit", "-m", "initial")
+        runGitIn(seedDir, "remote", "add", "origin", bareDir.toString())
+        runGitIn(seedDir, "push", "-u", "origin", "main")
+        return bareDir
     }
 
     @Test
@@ -394,5 +428,165 @@ class GitWorkflowTest {
         workflow.commitAndPush(repoDir, "ABC-1", "No commit")
         val log = runGit("log", "--oneline")
         assertThat(log.lines().size).isEqualTo(1)
+    }
+
+    @Test
+    fun `remoteBranchExists returns false when git disabled`() {
+        val config = GitConfig(enabled = false)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchExists("feature/ABC-1", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `remoteBranchExists returns true when ls-remote finds branch`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("checkout", "-b", "feature/ABC-1")
+        runGit("push", "-u", "origin", "feature/ABC-1")
+
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchExists("feature/ABC-1", repoDir)).isTrue()
+    }
+
+    @Test
+    fun `remoteBranchExists returns false when ls-remote empty`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchExists("feature/MISSING", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `remoteBranchExists returns false when git command fails`() {
+        runGit("remote", "add", "origin", "/nonexistent/koncerto-remote.git")
+
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchExists("feature/ABC-1", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `createBranch initializes new repo from remote base when remoteUrl set`() {
+        val bareDir = createBareRemoteWithMain()
+        val newDir = Files.createTempDirectory("new-remote-ws-")
+        val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+
+        workflow.createBranch(newDir, "ABC-1")
+
+        val branch = runGitIn(newDir, "rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/ABC-1")
+        val remote = runGitIn(newDir, "remote", "get-url", "origin")
+        assertThat(remote).isEqualTo(bareDir.toString())
+    }
+
+    @Test
+    fun `createBranch on existing repo checks out from origin base when remoteUrl set`() {
+        val bareDir = createBareRemoteWithMain()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("fetch", "origin", "main")
+        runGit("branch", "-f", "main", "origin/main")
+
+        val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(repoDir, "REMOTE-1")
+
+        val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/REMOTE-1")
+    }
+
+    @Test
+    fun `createBranch skips adding origin when remote already exists`() {
+        val bareDir = createBareRemoteWithMain()
+        runGit("remote", "add", "origin", bareDir.toString())
+        val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+
+        workflow.createBranch(repoDir, "EXISTING-ORIGIN")
+
+        assertThat(logs.any { it.contains("origin_remote_exists") }).isTrue()
+        val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/EXISTING-ORIGIN")
+    }
+
+    @Test
+    fun `createBranch falls back to local init when remote fetch fails`() {
+        val newDir = Files.createTempDirectory("bad-remote-ws-")
+        val config = GitConfig(
+            enabled = true,
+            remoteUrl = "/nonexistent/koncerto-bare.git",
+            prBase = "main"
+        )
+        val workflow = GitWorkflow(config, noopLogger())
+
+        workflow.createBranch(newDir, "FALLBACK-1")
+
+        val branch = runGitIn(newDir, "rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/FALLBACK-1")
+        assertThat(newDir.resolve("README.md").toFile().exists()).isTrue()
+    }
+
+    @Test
+    fun `subtaskBranchName follows convention`() {
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        assertThat(workflow.subtaskBranchName("ABC-1", "task-1")).isEqualTo("subtask/ABC-1/task-1")
+    }
+
+    @Test
+    fun `setupOriginRemote skips when remote url blank`() {
+        val dir = Files.createTempDirectory("origin-blank-ws-")
+        runGitIn(dir, "init", "--initial-branch=main")
+        val config = GitConfig(enabled = true, remoteUrl = "", prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+        method.isAccessible = true
+        method.invoke(workflow, dir)
+        val remotes = runGitIn(dir, "remote")
+        assertThat(remotes.isBlank()).isTrue()
+    }
+
+    @Test
+    fun `setupOriginRemote adds origin without token`() {
+        val dir = Files.createTempDirectory("origin-add-ws-")
+        val config = GitConfig(
+            enabled = true,
+            remoteUrl = "https://github.com/acme/widget.git",
+            prBase = "main"
+        )
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(dir, "ORIGIN-1")
+        val remote = runGitIn(dir, "remote", "get-url", "origin")
+        assertThat(remote).isEqualTo("https://github.com/acme/widget.git")
+    }
+
+    @Test
+    fun `setupOriginRemote skips add when origin already exists`() {
+        val dir = Files.createTempDirectory("origin-exists-ws-")
+        runGitIn(dir, "init", "--initial-branch=main")
+        runGitIn(dir, "remote", "add", "origin", "https://github.com/existing/repo.git")
+        val config = GitConfig(
+            enabled = true,
+            remoteUrl = "https://github.com/acme/widget.git",
+            prBase = "main"
+        )
+        val workflow = GitWorkflow(config, noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+        method.isAccessible = true
+        method.invoke(workflow, dir)
+        val remote = runGitIn(dir, "remote", "get-url", "origin")
+        assertThat(remote).isEqualTo("https://github.com/existing/repo.git")
     }
 }
