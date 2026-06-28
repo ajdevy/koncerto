@@ -809,6 +809,7 @@ class DemoRecordingServiceTest {
         val aiService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 ai = DemoConfig.AiConfig(model = "free", timelineEnabled = true, reproStepsEnabled = true)
             ),
             taskRepository = taskRepository,
@@ -837,7 +838,12 @@ class DemoRecordingServiceTest {
             ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("adb_failed")))
         }
         val adbService = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), maxRetries = 0, retryDelayMs = 1),
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
             taskRepository = taskRepository,
             recorderFactory = RecorderFactory(listOf(failAdb, asciinema)),
             storage = storage,
@@ -857,7 +863,12 @@ class DemoRecordingServiceTest {
     fun `requestRecording reports failure when fallback recorder unavailable`() = runTest {
         val failPlaywright = FailingRecorder()
         val noFallbackService = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), maxRetries = 0, retryDelayMs = 1),
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
             taskRepository = taskRepository,
             recorderFactory = RecorderFactory(listOf(failPlaywright)),
             storage = storage,
@@ -883,7 +894,12 @@ class DemoRecordingServiceTest {
             ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("ffmpeg_failed")))
         }
         val ffmpegService = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), maxRetries = 0, retryDelayMs = 1),
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
             taskRepository = taskRepository,
             recorderFactory = RecorderFactory(listOf(failFfmpeg, asciinema)),
             storage = storage,
@@ -910,7 +926,12 @@ class DemoRecordingServiceTest {
             ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("xcrun_failed")))
         }
         val xcrunService = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), maxRetries = 0, retryDelayMs = 1),
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
             taskRepository = taskRepository,
             recorderFactory = RecorderFactory(listOf(failXcrun, asciinema)),
             storage = storage,
