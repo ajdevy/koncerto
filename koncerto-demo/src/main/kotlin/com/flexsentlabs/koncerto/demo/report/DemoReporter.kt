@@ -6,4 +6,5 @@ import com.flexsentlabs.koncerto.demo.model.DemoTask
 interface DemoReporter {
     suspend fun report(task: DemoTask, recordingUrl: String): DemoResult<Unit>
     suspend fun reportFailure(task: DemoTask, errorMessage: String): DemoResult<Unit>
+    suspend fun reportSkipped(issueId: String, issueIdentifier: String, reason: String): DemoResult<Unit>
 }

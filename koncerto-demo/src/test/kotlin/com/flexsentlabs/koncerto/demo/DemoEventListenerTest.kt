@@ -43,6 +43,7 @@ class DemoEventListenerTest {
         val config = DemoConfig(
             enabled = true,
             tempDir = System.getProperty("java.io.tmpdir"),
+            targetUrl = "http://localhost:3000",
             maxRetries = 2,
             retryDelayMs = 1,
             retentionDays = 90,

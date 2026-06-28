@@ -82,6 +82,7 @@ import com.flexsentlabs.koncerto.deploy.FrameworkDetector
 import com.flexsentlabs.koncerto.deploy.GitHubPRQueryImpl
 import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
+import com.flexsentlabs.koncerto.orchestrator.DemoScenarioGenerator
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
@@ -412,7 +413,8 @@ class Beans {
                         },
                         targetProjectDeployer = targetProjectDeployer(logger),
                         deployRepoFullName = parseRepoFullName(config),
-                        demoFailureReporter = DemoFailureReporter(logger)
+                        demoFailureReporter = DemoFailureReporter(logger),
+                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger)
                     )
                 }
             } else null

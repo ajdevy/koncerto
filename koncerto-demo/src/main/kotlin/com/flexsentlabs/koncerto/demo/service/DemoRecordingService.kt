@@ -83,6 +83,15 @@ class DemoRecordingService(
             return DemoResult.Failure(DemoError.RecorderNotAvailable("no_platform_available"))
         }
 
+        val effectiveUrl = targetUrl?.takeIf { it.isNotBlank() } ?: config.targetUrl.takeIf { it.isNotBlank() }
+        if (effectiveUrl == null) {
+            reporter.reportSkipped(
+                issueId, issueIdentifier,
+                "Deployment failed and no fallback target URL is configured (DEMO_TARGET_URL is unset)"
+            )
+            return DemoResult.Failure(DemoError.InvalidConfig("no_target_url"))
+        }
+
         val quotaCheck = performQuotaCheck()
         if (quotaCheck is DemoResult.Failure) return quotaCheck as DemoResult<DemoTask>
 

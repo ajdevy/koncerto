@@ -29,6 +29,16 @@ class LinearReportPublisher(
         }
     }
 
+    override suspend fun reportSkipped(issueId: String, issueIdentifier: String, reason: String): DemoResult<Unit> {
+        return try {
+            val body = buildSkippedBody(issueIdentifier, reason)
+            linearClient.createComment(issueId, body)
+            DemoResult.Success(Unit)
+        } catch (e: Exception) {
+            DemoResult.Failure(DemoError.ReportFailed(e))
+        }
+    }
+
     private fun buildCommentBody(task: DemoTask, recordingUrl: String): String {
         return """
             |## Demo Recording — ${task.platform.name}
@@ -41,6 +51,15 @@ class LinearReportPublisher(
             |**Recording URL:** [View Recording]($recordingUrl)
             |
             |_Recorded at ${task.completedAt}_
+        """.trimMargin()
+    }
+
+    private fun buildSkippedBody(issueIdentifier: String, reason: String): String {
+        return """
+            |## Demo Recording Skipped
+            |
+            |**Issue:** $issueIdentifier
+            |**Reason:** $reason
         """.trimMargin()
     }
 
