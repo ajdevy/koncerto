@@ -421,7 +421,10 @@ class ApiV1Controller @Autowired constructor(
         @Volatile private var claudeUrl: String? = null
         @Volatile private var claudeCode: String? = null
         @Volatile private var claudeLoginOutput: String? = null
+        @Volatile private var claudeCallbackPort: Int? = null
         private val claudeLock = Any()
+
+        fun getClaudeCallbackPort(): Int? = claudeCallbackPort
     }
 
     @PostMapping("/codex-login")
@@ -462,7 +465,7 @@ class ApiV1Controller @Autowired constructor(
                 if (n < 0) return sb.toString()
                 sb.append(String(buf, 0, n, Charsets.UTF_8))
             }
-            if (sb.contains("https://") || sb.contains("one-time code")) break
+            if (sb.contains("https://") || sb.contains("one-time code") || sb.contains("localhost:")) break
             Thread.sleep(100)
         }
         return sb.toString()
@@ -504,21 +507,24 @@ class ApiV1Controller @Autowired constructor(
             claudeUrl = null
             claudeCode = null
             claudeLoginOutput = null
+            claudeCallbackPort = null
         }
         if (AgentAuthChecker.isAuthenticated("claude")) {
             return Mono.just(ResponseEntity.ok(CodexLoginStatus("completed")))
         }
         return Mono.fromCallable {
-            val pb = ProcessBuilder("bash", "-lc", "claude setup-token")
+            val pb = ProcessBuilder("bash", "-lc", "claude auth login")
             pb.redirectErrorStream(true)
             val p = pb.start()
             claudeProcess = p
             val output = p.inputStream
-            val text = withTimeout(output, 5000)
+            val text = withTimeout(output, 8000)
             claudeLoginOutput = text
             val clean = text.replace(Regex("\u001b\\[[0-9;]*m"), "")
             claudeUrl = Regex("https?://[^\\s]+").find(clean)?.value
             claudeCode = Regex("[A-Z0-9]{4,8}-[A-Z0-9]+").find(clean)?.value
+            claudeCallbackPort = Regex("http://(?:127\\.0\\.0\\.1|localhost):(\\d+)").find(clean)
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
             ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
         }.onErrorResume {
             Mono.just(ResponseEntity.status(500).body(CodexLoginStatus("error")))
@@ -556,6 +562,7 @@ class ApiV1Controller @Autowired constructor(
             claudeProcess = null
             AgentAuthChecker.markAuthenticated("claude")
             claudeLoginOutput = null
+            claudeCallbackPort = null
             return ResponseEntity.ok(CodexLoginStatus("completed"))
         }
         if (alive) return ResponseEntity.ok(CodexLoginStatus("pending", claudeUrl, claudeCode))
@@ -572,6 +579,7 @@ class ApiV1Controller @Autowired constructor(
         claudeUrl = null
         claudeCode = null
         claudeLoginOutput = null
+        claudeCallbackPort = null
         return ResponseEntity.ok().build()
     }
 }

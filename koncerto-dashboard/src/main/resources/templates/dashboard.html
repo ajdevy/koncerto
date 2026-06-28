@@ -60,15 +60,11 @@
     <div class="totals" id="claude-login-section" style="display:block;">
         <strong>Claude:</strong>
         <span id="claude-login-status">checking...</span>
-        <button id="claude-login-btn" style="display:none;" onclick="startClaudeLogin()">Set up subscription token</button>
+        <button id="claude-login-btn" style="display:none;" onclick="startClaudeLogin()">Login with Claude</button>
         <div id="claude-login-form" style="display:none; margin-top:0.5rem;">
-            <div id="claude-login-help" style="margin-bottom:0.35rem; color:#bbb;">
-                Run <code>claude setup-token</code>, then paste the token here.
-            </div>
-            <input type="password" id="claude-code-input" placeholder="paste Claude subscription token" style="width:300px; background:#222; color:#eee; border:1px solid #444; padding:0.25rem;">
-            <button onclick="submitClaudeCode()" style="background:#333; color:#6cf; border:1px solid #555; cursor:pointer;">Submit</button>
+            <div id="claude-login-help" style="margin-bottom:0.35rem; color:#bbb;">Starting login...</div>
             <button onclick="cancelClaudeLogin()" style="background:#333; color:#f66; border:1px solid #555; cursor:pointer;">Cancel</button>
-            <div id="claude-login-message" style="margin-top:0.25rem;"></div>
+            <div id="claude-login-message" style="margin-top:0.25rem; color:#aaa; font-size:0.85em;"></div>
         </div>
     </div>
 
@@ -517,39 +513,33 @@
         async function startClaudeLogin() {
             document.getElementById('claude-login-btn').style.display = 'none';
             document.getElementById('claude-login-form').style.display = 'block';
+            document.getElementById('claude-login-help').textContent = 'Starting login...';
             document.getElementById('claude-login-message').textContent = '';
-            document.getElementById('claude-code-input').value = '';
-            document.getElementById('claude-login-help').textContent = 'Run `claude setup-token`, then paste the token here.';
-        }
-
-        async function submitClaudeCode() {
-            const code = document.getElementById('claude-code-input').value.trim();
-            if (!code) {
-                document.getElementById('claude-login-message').textContent = 'Please enter the subscription token';
-                return;
-            }
-            const msgEl = document.getElementById('claude-login-message');
-            msgEl.textContent = 'saving...';
             try {
-                const r = await fetch('/api/v1/claude-login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code })
-                });
+                const r = await fetch('/api/v1/claude-login', { method: 'POST' });
                 const data = await r.json();
-                if (data.authenticated || data.state === 'pending') {
-                    msgEl.textContent = data.authenticated ? 'Subscription token saved successfully' : 'Subscription token submitted';
+                if (data.state === 'completed') {
+                    document.getElementById('claude-login-form').style.display = 'none';
                     document.getElementById('claude-login-status').textContent = 'logged in';
-                    setTimeout(() => { document.getElementById('claude-login-form').style.display = 'none'; }, 1000);
+                } else if (data.url) {
+                    document.getElementById('claude-login-help').innerHTML =
+                        '<a href="' + data.url + '" target="_blank" style="color:#6cf;">Click here to authorize Claude</a>';
+                    document.getElementById('claude-login-message').innerHTML =
+                        'After authorizing, the browser will redirect to <code>localhost:PORT/callback</code>. ' +
+                        'If it shows a connection error, change <code>PORT</code> to <code>17348</code> in the address bar ' +
+                        'to complete the flow through Koncerto.';
                 } else {
-                    msgEl.textContent = data.message || 'Error saving subscription token';
+                    document.getElementById('claude-login-help').textContent = 'Waiting for login process...';
                 }
             } catch (e) {
-                msgEl.textContent = 'Error: ' + e.message;
+                document.getElementById('claude-login-help').textContent = 'Failed to start login.';
+                document.getElementById('claude-login-btn').style.display = 'inline';
+                document.getElementById('claude-login-form').style.display = 'none';
             }
         }
 
-        function cancelClaudeLogin() {
+        async function cancelClaudeLogin() {
+            await fetch('/api/v1/cancel-claude-login', { method: 'POST' }).catch(() => {});
             document.getElementById('claude-login-form').style.display = 'none';
             document.getElementById('claude-login-btn').style.display = 'inline';
             document.getElementById('claude-login-message').textContent = '';
