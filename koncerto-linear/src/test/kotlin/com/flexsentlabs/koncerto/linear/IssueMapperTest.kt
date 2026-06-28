@@ -22,14 +22,18 @@ class IssueMapperTest {
         val labelsNodes = buildJsonArray { add(bugLabel); add(frontendLabel) }
         val labelsObj = buildJsonObject { put("nodes", labelsNodes) }
         
-        val blockedStateObj = buildJsonObject { put("name", "Done") }
-        val blockedIssueObj = buildJsonObject {
-            put("id", "x")
-            put("identifier", "ABC-2")
-            put("state", blockedStateObj)
+        val blockedByObj = buildJsonObject {
+            put("nodes", buildJsonArray {
+                add(buildJsonObject {
+                    put("type", "blocks")
+                    put("issue", buildJsonObject {
+                        put("id", "x")
+                        put("identifier", "ABC-2")
+                        put("state", buildJsonObject { put("name", "Done") })
+                    })
+                })
+            })
         }
-        val blockedByNodes = buildJsonArray { add(blockedIssueObj) }
-        val blockedByObj = buildJsonObject { put("nodes", blockedByNodes) }
         
         val childrenNodes = buildJsonArray { add(buildJsonObject { put("id", "sub-1") }) }
         val childrenObj = buildJsonObject { put("nodes", childrenNodes) }
@@ -55,7 +59,10 @@ class IssueMapperTest {
         assertThat(issue.priority).isEqualTo(2)
         assertThat(issue.state).isEqualTo("Todo")
         assertThat(issue.labels).containsExactly("bug", "frontend")
-        assertThat(issue.blockedBy).isNotNull()
+        assertThat(issue.blockedBy.size).isEqualTo(1)
+        assertThat(issue.blockedBy[0].id).isEqualTo("x")
+        assertThat(issue.blockedBy[0].identifier).isEqualTo("ABC-2")
+        assertThat(issue.blockedBy[0].state).isEqualTo("Done")
         assertThat(issue.children).containsExactly("sub-1")
         assertThat(issue.createdAt).isNotNull()
     }
