@@ -9,6 +9,7 @@ import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import java.util.Collections
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
@@ -55,7 +56,7 @@ class StdioAgentRuntimeTest {
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
 
-        val outputLines = mutableListOf<String>()
+        val outputLines = CopyOnWriteArrayList<String>()
         val collector = thread(start = true, isDaemon = true) {
             runBlocking {
                 runtime.output.collect { line -> outputLines += line }
@@ -63,9 +64,15 @@ class StdioAgentRuntimeTest {
         }
 
         runBlocking { runtime.start() }
-        Thread.sleep(500)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline &&
+               !(outputLines.any { it.contains("stdout line") } &&
+                 outputLines.any { it.contains("stderr line") })) {
+            Thread.sleep(50)
+        }
         runtime.stop()
         collector.interrupt()
+        collector.join(1_000)
 
         assertThat(outputLines.any { it.contains("stdout line") }).isTrue()
         assertThat(outputLines.any { it.contains("stderr line") }).isTrue()
@@ -77,19 +84,25 @@ class StdioAgentRuntimeTest {
         val runtime = OpencodeRuntime("cat", ws, noopLogger())
         runBlocking { runtime.start() }
 
-        val outputLines = mutableListOf<String>()
+        val outputLines = CopyOnWriteArrayList<String>()
         val collector = thread(start = true, isDaemon = true) {
             runBlocking {
                 runtime.output.collect { line -> outputLines += line }
             }
         }
 
+        // close stdin immediately after write — cat will flush and echo "test-data"
+        // once bash finishes loading its login profile and exec's cat
         runtime.writeRaw("test-data")
-        Thread.sleep(200)
         runtime.closeStdin()
-        Thread.sleep(200)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline &&
+               !outputLines.any { it.contains("test-data") }) {
+            Thread.sleep(50)
+        }
         runtime.stop()
         collector.interrupt()
+        collector.join(1_000)
 
         assertThat(outputLines.any { it.contains("test-data") }).isTrue()
     }
@@ -122,7 +135,7 @@ class StdioAgentRuntimeTest {
         val runtime = OpencodeRuntime("cat", ws, noopLogger())
         runBlocking { runtime.start() }
 
-        val outputLines = mutableListOf<String>()
+        val outputLines = CopyOnWriteArrayList<String>()
         val collector = thread(start = true, isDaemon = true) {
             runBlocking {
                 runtime.output.collect { line -> outputLines += line }
@@ -130,11 +143,15 @@ class StdioAgentRuntimeTest {
         }
 
         runtime.sendMessage("target-agent", "test payload")
-        Thread.sleep(300)
         runtime.closeStdin()
-        Thread.sleep(300)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline &&
+               !outputLines.any { it.contains("\"method\":\"agent/message\"") }) {
+            Thread.sleep(50)
+        }
         runtime.stop()
         collector.interrupt()
+        collector.join(1_000)
 
         assertThat(outputLines.any { it.contains("\"method\":\"agent/message\"") }).isTrue()
         assertThat(outputLines.any { it.contains("\"to_agent_id\":\"target-agent\"") }).isTrue()
@@ -223,7 +240,7 @@ class StdioAgentRuntimeTest {
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
 
-        val outputLines = mutableListOf<String>()
+        val outputLines = CopyOnWriteArrayList<String>()
         val collector = thread(start = true, isDaemon = true) {
             runBlocking {
                 runtime.output.collect { line -> outputLines += line }
@@ -231,9 +248,14 @@ class StdioAgentRuntimeTest {
         }
 
         runBlocking { runtime.start() }
-        Thread.sleep(500)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline &&
+               !outputLines.any { it.contains("turn.started") }) {
+            Thread.sleep(50)
+        }
         runtime.stop()
         collector.interrupt()
+        collector.join(1_000)
 
         assertThat(outputLines.any { it.contains("turn.started") }).isTrue()
         assertThat(outputLines.any { it.contains("item.started") }).isTrue()
