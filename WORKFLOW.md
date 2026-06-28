@@ -23,7 +23,7 @@ projects:
         - "In Review"
       terminal_states:
         - Done
-      blocked_state: "Blocked"
+      blocked_state: "Blocked"  # Invariant: every automated transition to this state posts a comment first (see architecture/issue-lifecycle-state-machine.md)
       project_admin: "user-1"
     reviewer:
       kind: human

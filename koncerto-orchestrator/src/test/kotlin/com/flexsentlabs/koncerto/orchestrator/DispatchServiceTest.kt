@@ -2393,6 +2393,56 @@ class DispatchServiceTest {
         } catch (_: NoSuchFieldException) {
         }
     }
+
+    @Test
+    fun `scheduleRetry posts comment before transitioning to blocked state`() = runBlocking {
+        val projectConfig = config().copy(
+            agent = config().agent.copy(maxRetries = 2),
+            tracker = config().tracker.copy(blockedState = "Blocked")
+        )
+        val callOrder = mutableListOf<String>()
+        val backing = TrackingLinearClient()
+        val trackingLinear = object : LinearClient by backing {
+            override suspend fun createComment(issueId: String, body: String) {
+                callOrder.add("createComment")
+                backing.createComment(issueId, body)
+            }
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                callOrder.add("updateState")
+                backing.updateIssueState(issueId, stateId)
+            }
+        }
+        val state = RuntimeState()
+        val svc = createService(projectConfig = projectConfig, state = state, linear = trackingLinear)
+        val testIssue = issue("1", "A-1", "Todo")
+        svc.scheduleRetry(testIssue, "err1")
+        svc.scheduleRetry(testIssue, "err2")
+        svc.scheduleRetry(testIssue, "err3")
+        assertThat(backing.commentedIssueId).isEqualTo("1")
+        assertThat(backing.transitionedIssueId).isEqualTo("1")
+        assertThat(callOrder.indexOf("createComment") < callOrder.indexOf("updateState")).isTrue()
+    }
+
+    @Test
+    fun `scheduleRetry still transitions to blocked even if comment fails`() = runBlocking {
+        val projectConfig = config().copy(
+            agent = config().agent.copy(maxRetries = 2),
+            tracker = config().tracker.copy(blockedState = "Blocked")
+        )
+        val backing = TrackingLinearClient()
+        val failingCommentLinear = object : LinearClient by backing {
+            override suspend fun createComment(issueId: String, body: String) {
+                throw RuntimeException("API down")
+            }
+        }
+        val state = RuntimeState()
+        val svc = createService(projectConfig = projectConfig, state = state, linear = failingCommentLinear)
+        val testIssue = issue("1", "A-1", "Todo")
+        svc.scheduleRetry(testIssue, "err1")
+        svc.scheduleRetry(testIssue, "err2")
+        svc.scheduleRetry(testIssue, "err3")
+        assertThat(backing.transitionedIssueId).isEqualTo("1")
+    }
 }
 
 private class ReviewWritingAgentRunner(

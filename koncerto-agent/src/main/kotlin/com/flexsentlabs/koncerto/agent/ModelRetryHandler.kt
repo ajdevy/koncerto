@@ -98,6 +98,15 @@ class ModelRetryHandler(
         ))
 
         try {
+            linearClient.createComment(
+                issueId,
+                "Blocked: all free models exhausted after ${exhausted.totalRetries} retries (tried: ${exhausted.modelsTried.joinToString()})"
+            )
+        } catch (e: Exception) {
+            logger.warn("blocked_comment_failed", mapOf("issue_id" to issueId, "error" to (e.message ?: "unknown")))
+        }
+
+        try {
             val blockedStateId = linearClient.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
             if (blockedStateId != null) {
                 linearClient.updateIssueState(issueId, blockedStateId)

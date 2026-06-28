@@ -279,6 +279,12 @@ class DispatchService(
             ))
             val failureState = onFailureState ?: projectConfig.tracker.blockedState
             withContext(Dispatchers.IO) {
+                try {
+                    linear.createComment(issue.id, "Blocked: retry limit reached. Last error: $error")
+                } catch (e: Exception) {
+                    logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+                }
+
                 val failureStateId = linear.resolveStateId(projectConfig.tracker.projectSlug, failureState)
                 if (failureStateId != null) {
                     linear.updateIssueState(issue.id, failureStateId)

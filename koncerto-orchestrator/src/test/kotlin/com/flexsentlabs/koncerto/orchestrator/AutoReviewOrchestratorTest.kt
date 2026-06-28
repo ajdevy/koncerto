@@ -890,4 +890,99 @@ class AutoReviewOrchestratorTest {
         method.invoke(orchestrator, issueDir)
         assertThat(Files.exists(reviewDir)).isTrue()
     }
+
+    @Test
+    fun `handleReviewExhaustion posts comment before transitioning to blocked state`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        val commentedIds = mutableListOf<String>()
+        val commentedBodies = mutableListOf<String>()
+        val transitionedIds = mutableListOf<String>()
+        val callOrder = mutableListOf<String>()
+
+        val trackingTracker = object : TrackerClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String): Issue? = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) = "state-blocked"
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                transitionedIds.add(issueId)
+                callOrder.add("updateState")
+            }
+            override suspend fun createComment(issueId: String, body: String) {
+                commentedIds.add(issueId)
+                commentedBodies.add(body)
+                callOrder.add("createComment")
+            }
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String): UserRef? = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>) = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) = false
+        }
+
+        val exhaustionStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = trackingTracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to exhaustionStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+
+        assertThat(commentedIds.contains("issue-1")).isTrue()
+        assertThat(commentedBodies.any { it.contains("review") || it.contains("attempt") }).isTrue()
+        assertThat(callOrder.indexOf("createComment") < callOrder.indexOf("updateState")).isTrue()
+    }
+
+    @Test
+    fun `handleReviewExhaustion still transitions to blocked even if comment fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+
+        var transitioned = false
+        val failingCommentTracker = object : TrackerClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String): Issue? = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) = "state-blocked"
+            override suspend fun updateIssueState(issueId: String, stateId: String) { transitioned = true }
+            override suspend fun createComment(issueId: String, body: String) { throw RuntimeException("API down") }
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String): UserRef? = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>) = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) = false
+        }
+
+        val exhaustionStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = failingCommentTracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to exhaustionStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+
+        assertThat(transitioned).isTrue()
+    }
 }

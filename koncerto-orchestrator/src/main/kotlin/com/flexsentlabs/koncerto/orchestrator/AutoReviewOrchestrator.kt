@@ -237,6 +237,12 @@ class AutoReviewOrchestrator(
 
     private suspend fun handleReviewExhaustion(issue: Issue, totalAttempts: Int) {
         try {
+            linearClient.createComment(issue.id, "Blocked: review gate failed after $totalAttempts attempt(s)")
+        } catch (e: Exception) {
+            logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+
+        try {
             val blockedStateId = linearClient.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
             if (blockedStateId != null) {
                 linearClient.updateIssueState(issue.id, blockedStateId)

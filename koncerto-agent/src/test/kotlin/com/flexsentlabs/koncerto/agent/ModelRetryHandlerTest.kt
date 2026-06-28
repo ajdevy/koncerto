@@ -22,7 +22,9 @@ import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.runs
 import io.mockk.verify
 import io.mockk.confirmVerified
 import java.nio.file.Files
@@ -156,6 +158,7 @@ class ModelRetryHandlerTest {
         val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
         val linearClient = mockk<TrackerClient>()
         val notifier = mockk<CompositeNotifier>(relaxed = true)
+        coEvery { linearClient.createComment(any(), any()) } just runs
         coEvery { linearClient.resolveStateId("p", "Blocked") } returns "blocked-state-id"
         coEvery { linearClient.updateIssueState("issue-1", "blocked-state-id") } returns Unit
         coEvery { linearClient.fetchIssueById("issue-1") } returns Issue(
@@ -222,5 +225,56 @@ class ModelRetryHandlerTest {
 
         assertThat(result is Result.Failure).isTrue()
         assertThat(attempts).isEqualTo(3)
+    }
+
+    @Test
+    fun `handleExhaustion posts comment before transitioning to blocked state`() = runTest {
+        val root = Files.createTempDirectory("model-retry-comment-")
+        val config = sampleConfig().projects["default"]!!.copy(workspace = WorkspaceConfig(root = root.toString()))
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>()
+
+        coEvery { linearClient.resolveStateId(any(), any()) } returns "blocked-state-id"
+        coEvery { linearClient.createComment(any(), any()) } just runs
+        coEvery { linearClient.updateIssueState(any(), any()) } just runs
+        coEvery { linearClient.fetchIssueById(any()) } returns null
+
+        val handler = ModelRetryHandler(cycler, config, linearClient, notifier, noopLogger())
+
+        handler.executeWithRetry("issue-1") { _ ->
+            Result.Failure(ModelExhaustedException(listOf("model-a"), 3, "rate limit"))
+        }
+
+        coVerify(ordering = io.mockk.Ordering.ORDERED) {
+            linearClient.createComment("issue-1", match { it.contains("exhausted") || it.contains("model") })
+            linearClient.updateIssueState("issue-1", "blocked-state-id")
+        }
+
+        root.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `handleExhaustion still transitions to blocked even if comment fails`() = runTest {
+        val root = Files.createTempDirectory("model-retry-comment-fail-")
+        val config = sampleConfig().projects["default"]!!.copy(workspace = WorkspaceConfig(root = root.toString()))
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>()
+
+        coEvery { linearClient.resolveStateId(any(), any()) } returns "blocked-state-id"
+        coEvery { linearClient.createComment(any(), any()) } throws RuntimeException("API down")
+        coEvery { linearClient.updateIssueState(any(), any()) } just runs
+        coEvery { linearClient.fetchIssueById(any()) } returns null
+
+        val handler = ModelRetryHandler(cycler, config, linearClient, notifier, noopLogger())
+
+        handler.executeWithRetry("issue-1") { _ ->
+            Result.Failure(ModelExhaustedException(listOf("model-a"), 1, "err"))
+        }
+
+        coVerify { linearClient.updateIssueState("issue-1", "blocked-state-id") }
+
+        root.toFile().deleteRecursively()
     }
 }
