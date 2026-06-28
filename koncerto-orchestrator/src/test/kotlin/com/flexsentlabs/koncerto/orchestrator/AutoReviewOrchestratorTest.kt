@@ -33,6 +33,7 @@ import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -984,5 +985,273 @@ class AutoReviewOrchestratorTest {
         orchestrator.onCodingComplete(issue())
 
         assertThat(transitioned).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment logs failure when gh exits non-zero`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "---\n✅ PASS\nLooks good\n")
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":9}""")
+                command.contains("comment") -> GhProcessResult(1, "comment failed")
+                else -> GhProcessResult(0, "")
+            }
+        }
+        val orchestrator = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, null)
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment skips when detailed file missing`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, null)
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment skips blank content after stripping`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "Claude configuration file not found\n")
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, null)
+    }
+
+    @Test
+    fun `deployTargetProject returns failure when deployer fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val failingDeployer = RecordingProjectDeployer(
+            deployResult = DeployResult.failure("build failed", logs = "docker error")
+        )
+        val orchestrator = passingReviewOrchestrator(
+            workspaceDir,
+            deployer = failingDeployer,
+            deployRepoFullName = "acme/widget",
+            ghProcessRunner = { command, _ ->
+                if (command.contains("view")) GhProcessResult(0, """{"number":1}""")
+                else GhProcessResult(0, "")
+            }
+        )
+        orchestrator.onCodingComplete(issue())
+    }
+
+    @Test
+    fun `handleReviewExhaustion sends notification when notifier configured`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+        var notified = false
+        val notifier = CompositeNotifier(listOf(object : com.flexsentlabs.koncerto.notifications.Notifier {
+            override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
+                notified = true
+            }
+        }))
+        val exhaustionStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to exhaustionStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = notifier,
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(notified).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment uses verdict line when no yaml separator`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(
+            issueDir.resolve(".review-output-detailed"),
+            "Preamble line\n✅ PASS\nVerdict without separator block.\n"
+        )
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":3}""")
+                command.contains("comment") -> {
+                    val idx = command.indexOf("--body-file")
+                    if (idx >= 0) capturedBody = Files.readString(Path.of(command[idx + 1]))
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/3#issuecomment-1")
+                }
+                else -> GhProcessResult(0, "")
+            }
+        }
+        passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner).onCodingComplete(issue())
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!.contains("Verdict without separator")).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment logs error when gh runner throws`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "---\n✅ PASS\nok\n")
+        val ghRunner: GhProcessRunner = { command, _ ->
+            if (command.contains("comment")) throw RuntimeException("gh exploded")
+            GhProcessResult(0, """{"number":1}""")
+        }
+        val orchestrator = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, null)
+    }
+
+    @Test
+    fun `handleReviewExhaustion warns when blocked state missing`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+        val tracker = object : TrackerClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String): Issue? = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
+            override suspend fun updateIssueState(issueId: String, stateId: String) {}
+            override suspend fun createComment(issueId: String, body: String) {}
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String): UserRef? = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>) = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) = false
+        }
+        val exhaustionStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to exhaustionStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment uses plain content when no verdict marker`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "Plain review notes without pass fail markers\n")
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":5}""")
+                command.contains("comment") -> {
+                    val idx = command.indexOf("--body-file")
+                    if (idx >= 0) capturedBody = Files.readString(Path.of(command[idx + 1]))
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/5#issuecomment-1")
+                }
+                else -> GhProcessResult(0, "")
+            }
+        }
+        passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner).onCodingComplete(issue())
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!.contains("Plain review notes")).isTrue()
+    }
+
+    @Test
+    fun `handleReviewExhaustion tolerates comment state and notification failures`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+        val tracker = object : TrackerClient {
+            override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>) = emptyList<Issue>()
+            override suspend fun fetchIssueStatesByIds(issueIds: List<String>) = emptyMap<String, String>()
+            override suspend fun fetchIssueById(issueId: String): Issue? = null
+            override suspend fun resolveStateId(projectSlug: String, stateName: String) = "blocked-id"
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                throw RuntimeException("state update failed")
+            }
+            override suspend fun createComment(issueId: String, body: String) {
+                throw RuntimeException("comment failed")
+            }
+            override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+            override suspend fun fetchIssueCreator(issueId: String): UserRef? = null
+            override suspend fun createIssue(projectSlug: String, title: String, state: String, description: String?, labels: List<String>) = null
+            override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String) = false
+        }
+        val notifier = object : Notifier {
+            override suspend fun send(event: NotificationEvent) {
+                throw RuntimeException("notify failed")
+            }
+        }
+        val exhaustionStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 1, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to exhaustionStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = CompositeNotifier(listOf(notifier)),
+            logger = noopLogger()
+        )
+        orchestrator.onCodingComplete(issue())
+        assertThat(Files.exists(workspaceDir.resolve("T-1").resolve(".review-exhausted"))).isTrue()
     }
 }

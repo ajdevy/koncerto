@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.deploy
 
 import assertk.assertThat
+import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
@@ -16,6 +17,12 @@ class DockerConfigDetectorTest {
     @Test
     fun `detect returns null when no docker config`(@TempDir tmpDir: Path) {
         assertThat(detector.detect(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `DockerConfigType enum values are stable`() {
+        assertThat(DockerConfigType.DOCKERFILE.name).isEqualTo("DOCKERFILE")
+        assertThat(DockerConfigType.values().toList()).contains(DockerConfigType.DOCKER_COMPOSE)
     }
 
     @Test

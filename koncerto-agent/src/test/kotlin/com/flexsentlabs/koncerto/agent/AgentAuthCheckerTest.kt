@@ -161,4 +161,79 @@ class AgentAuthCheckerTest {
         pool.shutdown()
         assertThat(errors.get() == 0).isTrue()
     }
+
+    @org.junit.jupiter.api.AfterEach
+    fun resetSeams() {
+        AgentAuthChecker.testAuthProcessFactory = null
+        AgentAuthChecker.reset()
+    }
+
+    @Test
+    fun `isAuthenticated uses codex login status process when not overridden`() {
+        AgentAuthChecker.reset()
+        AgentAuthChecker.testAuthProcessFactory = { _ ->
+            ProcessBuilder("bash", "-c", "exit 0")
+        }
+        assertThat(AgentAuthChecker.isAuthenticated("codex")).isTrue()
+    }
+
+    @Test
+    fun `isAuthenticated uses claude auth status json when token absent`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-probe-")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", dir.resolve("missing.txt").toString())
+            AgentAuthChecker.reset()
+            ClaudeAuthSupport.clearToken()
+            AgentAuthChecker.testAuthProcessFactory = { _ ->
+                ProcessBuilder("bash", "-c", "echo '{\"loggedIn\": true}'; exit 0")
+            }
+            assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
+        } finally {
+            AgentAuthChecker.testAuthProcessFactory = null
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+            AgentAuthChecker.reset()
+        }
+    }
+
+    @Test
+    fun `isAuthenticated returns false when codex login status fails`() {
+        AgentAuthChecker.reset()
+        AgentAuthChecker.testAuthProcessFactory = { _ ->
+            ProcessBuilder("bash", "-c", "exit 1")
+        }
+        assertThat(AgentAuthChecker.isAuthenticated("codex")).isFalse()
+    }
+
+    @Test
+    fun `isAuthenticated returns false when claude auth probe times out`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-timeout-")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", dir.resolve("missing.txt").toString())
+            AgentAuthChecker.reset()
+            ClaudeAuthSupport.clearToken()
+            AgentAuthChecker.testAuthProcessFactory = { _ ->
+                ProcessBuilder("bash", "-c", "sleep 10")
+            }
+            assertThat(AgentAuthChecker.isAuthenticated("claude")).isFalse()
+        } finally {
+            AgentAuthChecker.testAuthProcessFactory = null
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+            AgentAuthChecker.reset()
+        }
+    }
+
+    @Test
+    fun `authProcessBuilder uses test factory when configured`() {
+        var seen: String? = null
+        AgentAuthChecker.testAuthProcessFactory = { cmd ->
+            seen = cmd
+            ProcessBuilder("bash", "-c", "exit 0")
+        }
+        AgentAuthChecker.authProcessBuilder("echo probe")
+        assertThat(seen).isEqualTo("echo probe")
+    }
 }

@@ -169,6 +169,38 @@ class CrossProjectChainerTest {
         assertThat(trackingClient.createdTitle).isEqualTo("[main-app] Important fix (KONC-42)")
     }
 
+    @Test
+    fun `createFollowUp without link type skips linking`() {
+        val trackingClient = TrackingClient()
+        val chainer = createChainer { slug -> if (slug == "target-proj") trackingClient else null }
+        val issue = testIssue()
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "target-proj",
+            titleTemplate = "Follow-up {sourceId}",
+            linkType = null
+        )
+
+        runBlocking {
+            chainer.createFollowUp(issue, config, "source-proj")
+        }
+
+        assertThat(trackingClient.createCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `createFollowUp catches exceptions from provider`() {
+        val chainer = createChainer { throw RuntimeException("provider failed") }
+        val issue = testIssue()
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "target-proj",
+            titleTemplate = "Follow-up"
+        )
+
+        runBlocking {
+            chainer.createFollowUp(issue, config, "source-proj")
+        }
+    }
+
     private fun createChainer(provider: (String) -> TrackerClient?): DefaultCrossProjectChainer {
         return DefaultCrossProjectChainer(
             config = ServiceConfig(),

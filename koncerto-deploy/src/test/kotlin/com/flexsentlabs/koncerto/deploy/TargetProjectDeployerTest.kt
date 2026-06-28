@@ -516,6 +516,37 @@ exit 0
         assertThat(result.url).isEqualTo("http://host.docker.internal:32795")
     }
 
+    @Test
+    fun `deployWithCompose returns failure when compose up times out`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 0 ;;
+      *" up "*) sleep 3; echo started; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        TargetProjectDeployer.testComposeUpWaitSec = 1L
+        try {
+            FakeDockerPath.withFakeDocker(script) {
+                val result = invokeDeployWithCompose(
+                    deployer, tmpDir.resolve("docker-compose.yml"), tmpDir, "koncerto-demo-test"
+                )
+                assertThat(result.success).isFalse()
+                assertThat(result.error).isEqualTo("docker compose up timed out")
+            }
+        } finally {
+            TargetProjectDeployer.testComposeUpWaitSec = null
+        }
+    }
+
+    @Test
     fun `deployWithCompose handles ps timeout`(@TempDir tmpDir: Path) {
         Files.writeString(
             tmpDir.resolve("docker-compose.yml"),
@@ -569,6 +600,271 @@ exit 0
         FakeDockerPath.withFakeDocker(script) {
             val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.yml"), tmpDir, "koncerto-demo-test")
             assertThat(result.success).isTrue()
+        }
+    }
+
+    @Test
+    fun `FakeDockerPath redirects docker via test override`() {
+        FakeDockerPath.withFakeDocker("""#!/usr/bin/env bash
+echo FAKE_DOCKER_MARKER
+""") {
+            val process = ProcessBuilder(*TargetProjectDeployer.dockerCmd()).start()
+            process.waitFor()
+            val output = process.inputStream.bufferedReader().readText().trim()
+            assertThat(output).isEqualTo("FAKE_DOCKER_MARKER")
+        }
+    }
+
+    @Test
+    fun `deployWithCompose returns failure when compose up exits non-zero`(@TempDir tmpDir: Path) {
+        Files.writeString(
+            tmpDir.resolve("docker-compose.yml"),
+            "services:\n  web:\n    image: nginx\n    ports:\n      - \"8080:80\"\n"
+        )
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 0 ;;
+      *" up "*) echo "compose error"; exit 1 ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDocker(script) {
+            val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.yml"), tmpDir, "koncerto-demo-test")
+            assertThat(result.success).isFalse()
+            assertThat(result.error).isEqualTo("docker compose up failed")
+        }
+    }
+
+    @Test
+    fun `cleanup handles docker ps scan failure`(@TempDir tmpDir: Path) = runTest {
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend("""#!/usr/bin/env bash
+case "${'$'}1" in
+  ps) exit 1 ;;
+esac
+exit 0
+""") {
+            deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        }
+    }
+
+    @Test
+    fun `cleanupOrphans handles container and image scan failures`() = runTest {
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend("""#!/usr/bin/env bash
+exit 1
+""") {
+            deployer.cleanupOrphans()
+        }
+    }
+
+    @Test
+    fun `deployWithCompose returns failure on docker compose error`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val deployer = createDeployer(mockk(relaxed = true))
+        val result = invokeDeployWithCompose(
+            deployer, tmpDir.resolve("docker-compose.yml"), Path.of("/nonexistent/project/path"), "koncerto-demo-test"
+        )
+        assertThat(result.success).isFalse()
+        assertThat(result.error!!.startsWith("docker compose error:")).isTrue()
+    }
+
+    @Test
+    fun `resolveComposeNetwork falls back on inspect exception`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  db:\n    image: postgres\n")
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *"ps --format"*) echo "koncerto-demo-db-1"; exit 0 ;;
+    esac
+    ;;
+  inspect) exit 1 ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDocker(script) {
+            val network = invokeResolveComposeNetwork(deployer, tmpDir, tmpDir.resolve("docker-compose.yml"))
+            assertThat(network).isEqualTo("koncerto-demo_default")
+        }
+    }
+
+    @Test
+    fun `cleanup removes containers found by ancestor filter`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(FakeDockerPath.cleanupWithContainersScript()) {
+            deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        }
+    }
+
+    @Test
+    fun `compose wait sec test seams roundtrip`() {
+        TargetProjectDeployer.testComposeUpWaitSec = 42L
+        TargetProjectDeployer.testComposePsWaitSec = 7L
+        assertThat(TargetProjectDeployer.testComposeUpWaitSec).isEqualTo(42L)
+        assertThat(TargetProjectDeployer.testComposePsWaitSec).isEqualTo(7L)
+        TargetProjectDeployer.testComposeUpWaitSec = null
+        TargetProjectDeployer.testComposePsWaitSec = null
+    }
+
+    @Test
+    fun `cleanup and cleanupOrphans tolerate missing docker binary`(@TempDir tmpDir: Path) = runTest {
+        val deployer = createDeployer(mockk(relaxed = true))
+        TargetProjectDeployer.testDockerOverride.set("/nonexistent/koncerto-docker")
+        try {
+            deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+            deployer.cleanupOrphans()
+        } finally {
+            TargetProjectDeployer.testDockerOverride.set(null)
+        }
+    }
+
+    @Test
+    fun `cleanupOrphans removes images and compose projects`() = runTest {
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(FakeDockerPath.orphanCleanupScript()) {
+            deployer.cleanupOrphans()
+        }
+    }
+
+    @Test
+    fun `cleanupOrphans tolerates per-container rm failures`() = runTest {
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  ps)
+    echo "orphan-id-1"
+    exit 0
+    ;;
+  rm) exit 1 ;;
+  images) exit 0 ;;
+  compose)
+    shift
+    case "${'$'}*" in
+      *ls*) exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(script) {
+            deployer.cleanupOrphans()
+        }
+    }
+
+    @Test
+    fun `cleanup runs compose down when compose file exists`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(FakeDockerPath.cleanupScript()) {
+            deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        }
+    }
+
+    @Test
+    fun `resolveComposeNetwork returns inspect network mode`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val deployer = createDeployer(mockk(relaxed = true))
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *ps*--format*) echo "koncerto-demo-web-1"; exit 0 ;;
+    esac
+    ;;
+  inspect)
+    echo "koncerto-demo_default"
+    exit 0
+    ;;
+esac
+exit 0
+"""
+        FakeDockerPath.withFakeDocker(script) {
+            val network = invokeResolveComposeNetwork(deployer, tmpDir, tmpDir.resolve("docker-compose.yml"))
+            assertThat(network).isEqualTo("koncerto-demo_default")
+        }
+    }
+
+    @Test
+    fun `cleanupOrphans tolerates compose ls scan failure`() = runTest {
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend("""#!/usr/bin/env bash
+case "${'$'}1" in
+  ps) exit 0 ;;
+  images) exit 0 ;;
+  compose) exit 1 ;;
+esac
+exit 0
+""") {
+            deployer.cleanupOrphans()
+        }
+    }
+
+    @Test
+    fun `cleanup tolerates compose down failure`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services:\n  web:\n    image: nginx\n")
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend("""#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 1 ;;
+    esac
+    ;;
+  ps) exit 0 ;;
+  rm) exit 0 ;;
+  rmi) exit 0 ;;
+esac
+exit 0
+""") {
+            deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        }
+    }
+
+    @Test
+    fun `compose wait sec test seams can be read and written`() {
+        val previousUp = TargetProjectDeployer.testComposeUpWaitSec
+        val previousPs = TargetProjectDeployer.testComposePsWaitSec
+        try {
+            TargetProjectDeployer.testComposeUpWaitSec = 1L
+            TargetProjectDeployer.testComposePsWaitSec = 2L
+            assertThat(TargetProjectDeployer.testComposeUpWaitSec).isEqualTo(1L)
+            assertThat(TargetProjectDeployer.testComposePsWaitSec).isEqualTo(2L)
+        } finally {
+            TargetProjectDeployer.testComposeUpWaitSec = previousUp
+            TargetProjectDeployer.testComposePsWaitSec = previousPs
+        }
+    }
+
+    @Test
+    fun `cleanupOrphans tolerates per-image rmi failures`() = runTest {
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  ps) echo "orphan-id"; exit 0 ;;
+  rm) exit 0 ;;
+  images) echo "koncerto-demo-stale:tag"; exit 0 ;;
+  rmi) exit 1 ;;
+  compose)
+    shift
+    case "${'$'}*" in *ls*) exit 0 ;; esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(script) {
+            deployer.cleanupOrphans()
         }
     }
 
@@ -662,12 +958,11 @@ internal object FakeDockerPath {
         val docker = binDir.resolve("docker")
         Files.writeString(docker, script)
         docker.toFile().setExecutable(true)
-        val originalPath = System.getenv("PATH") ?: ""
         try {
-            prependPath("$binDir:$originalPath")
+            TargetProjectDeployer.testDockerOverride.set(docker.toString())
             block()
         } finally {
-            prependPath(originalPath)
+            TargetProjectDeployer.testDockerOverride.set(null)
             binDir.toFile().deleteRecursively()
         }
     }
@@ -677,29 +972,12 @@ internal object FakeDockerPath {
         val docker = binDir.resolve("docker")
         Files.writeString(docker, script)
         docker.toFile().setExecutable(true)
-        val originalPath = System.getenv("PATH") ?: ""
         try {
-            prependPath("$binDir:$originalPath")
+            TargetProjectDeployer.testDockerOverride.set(docker.toString())
             block()
         } finally {
-            prependPath(originalPath)
+            TargetProjectDeployer.testDockerOverride.set(null)
             binDir.toFile().deleteRecursively()
-        }
-    }
-
-    private fun prependPath(path: String) {
-        val pe = Class.forName("java.lang.ProcessEnvironment")
-        val env = pe.getDeclaredField("theEnvironment")
-        env.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        (env.get(null) as MutableMap<String, String>)["PATH"] = path
-        try {
-            val ciEnv = pe.getDeclaredField("theCaseInsensitiveEnvironment")
-            ciEnv.isAccessible = true
-            @Suppress("UNCHECKED_CAST")
-            (ciEnv.get(null) as MutableMap<String, String>)["PATH"] = path
-        } catch (_: NoSuchFieldException) {
-            // Unix JVMs only expose theEnvironment
         }
     }
 
@@ -753,7 +1031,11 @@ case "${'$'}1" in
   compose)
     shift
     case "${'$'}*" in
-      *"ps --format"*) echo "koncerto-demo-db-1"; exit 0 ;;
+      *"ps --format"*)
+        echo 'time="2026-06-01T00:00:00Z" level=warning msg="noise"'
+        echo "koncerto-demo-db-1"
+        exit 0
+        ;;
       *" ps"*) exit 0 ;;
     esac
     ;;
@@ -858,6 +1140,28 @@ case "${'$'}1" in
         ;;
       *down*) exit 0 ;;
     esac
+    ;;
+esac
+exit 0
+"""
+
+    fun cleanupWithContainersScript() = """#!/usr/bin/env bash
+case "${'$'}1" in
+  ps)
+    if [[ "${'$'}*" == *ancestor* ]]; then
+      echo "container-id-1"
+      echo "container-id-2"
+    fi
+    exit 0
+    ;;
+  rm) exit 0 ;;
+  rmi) exit 0 ;;
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 0 ;;
+    esac
+    exit 0
     ;;
 esac
 exit 0

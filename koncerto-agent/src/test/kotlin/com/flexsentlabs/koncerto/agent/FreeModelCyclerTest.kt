@@ -169,6 +169,19 @@ class FreeModelCyclerTest {
     }
 
     @Test
+    fun `nextModel returns failure immediately when already exhausted`() = runTest {
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        cycler.nextModel()
+        cycler.reportFailure("model-a")
+        val first = cycler.nextModel()
+        assertThat(first is Result.Failure).isTrue()
+        val second = cycler.nextModel()
+        assertThat(second is Result.Failure).isTrue()
+        val err = (second as Result.Failure<ModelExhaustedException>).error
+        assertThat(err.lastError).isEqualTo("Already exhausted")
+    }
+
+    @Test
     fun `ModelExhaustedException stores all properties`() {
         val exception = ModelExhaustedException(
             modelsTried = listOf("model-a", "model-b"),

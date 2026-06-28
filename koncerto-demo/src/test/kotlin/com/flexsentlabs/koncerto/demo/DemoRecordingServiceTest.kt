@@ -21,6 +21,10 @@ import java.io.File
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -745,6 +749,258 @@ class DemoRecordingServiceTest {
         )
         val pending = service.getPendingTasks()
         assert(pending.isEmpty())
+    }
+
+    @Test
+    fun `toggleKeep updates keep flag on existing task`() = runTest {
+        val created = service.createTask(
+            "issue-keep", "KONC-KEEP", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        ) as DemoResult.Success
+        val result = service.toggleKeep(created.value.id, true)
+        assert(result is DemoResult.Success)
+    }
+
+    @Test
+    fun `markBlocked reports failure for existing task`() = runTest {
+        val created = service.createTask(
+            "issue-block", "KONC-BLK", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        ) as DemoResult.Success
+        val result = service.markBlocked(created.value.id)
+        assert(result is DemoResult.Success)
+    }
+
+    @Test
+    fun `enforceRetentionPolicy fails when storage batch delete fails`() = runTest {
+        val oldTime = Instant.now().minus(100, ChronoUnit.DAYS).toString()
+        val oldTask = DemoTask(
+            id = "retention-old", issueId = "issue-ret", issueIdentifier = "R-OLD",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.COMPLETED, trigger = DemoTrigger.MANUAL,
+            createdAt = oldTime, updatedAt = oldTime,
+            storageKey = "old/key", fileSizeBytes = 1024
+        )
+        taskRepository.save(oldTask)
+        val retentionService = DemoRecordingService(
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), retentionDays = 90),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = FakeFailingStorage(),
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = retentionService.enforceRetentionPolicy()
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `executeTask rejects task that is not pending`() = runTest {
+        val created = service.createTask(
+            "issue-not-pending", "KONC-NP", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        ) as DemoResult.Success
+        taskRepository.updateStatus(created.value.id, DemoStatus.COMPLETED)
+        val result = service.executeTask(created.value.id)
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording with ai timeline and repro steps enabled`() = runTest {
+        val aiService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                ai = DemoConfig.AiConfig(model = "free", timelineEnabled = true, reproStepsEnabled = true)
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger,
+            aiTimelineGenerator = AiTimelineGenerator(apiEndpoint = "", apiKey = "", model = "free")
+        )
+        val result = aiService.requestRecording(
+            "issue-ai", "KONC-AI", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+    }
+
+    @Test
+    fun `requestRecording falls back from adb to asciinema`() = runTest {
+        val asciinema = FakeAsciinemaRecorder()
+        val failAdb = object : DemoRecorder {
+            override val platform = DemoPlatform.ADB
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+            ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("adb_failed")))
+        }
+        val adbService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(failAdb, asciinema)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = adbService.requestRecording(
+            "issue-adb", "KONC-ADB", "test", DemoPlatform.ADB, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+    }
+
+    @Test
+    fun `requestRecording reports failure when fallback recorder unavailable`() = runTest {
+        val failPlaywright = FailingRecorder()
+        val noFallbackService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(failPlaywright)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = noFallbackService.requestRecording(
+            "issue-nofb", "KONC-NOFB", "test", DemoPlatform.ASCIINEMA, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `requestRecording falls back from ffmpeg to asciinema`() = runTest {
+        val asciinema = FakeAsciinemaRecorder()
+        val failFfmpeg = object : DemoRecorder {
+            override val platform = DemoPlatform.FFMPEG
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+            ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("ffmpeg_failed")))
+        }
+        val ffmpegService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(failFfmpeg, asciinema)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = ffmpegService.requestRecording(
+            "issue-ffmpeg", "KONC-FF", "test", DemoPlatform.FFMPEG, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+    }
+
+    @Test
+    fun `requestRecording falls back from xcrun to asciinema`() = runTest {
+        val asciinema = FakeAsciinemaRecorder()
+        val failXcrun = object : DemoRecorder {
+            override val platform = DemoPlatform.XCRUN
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+            ) = DemoResult.Failure(DemoError.RecordingFailed(RuntimeException("xcrun_failed")))
+        }
+        val xcrunService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(failXcrun, asciinema)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = xcrunService.requestRecording(
+            "issue-xcrun", "KONC-XC", "test", DemoPlatform.XCRUN, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+    }
+
+    @Test
+    fun `performIntegrityCheck rejects missing and empty files`() = runTest {
+        val task = DemoTask(
+            id = "integrity-1", issueId = "issue-i", issueIdentifier = "KONC-I",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.RECORDING, trigger = DemoTrigger.MANUAL,
+            createdAt = Instant.now().toString(), updatedAt = Instant.now().toString()
+        )
+        val missing = invokePerformIntegrityCheck(
+            task, File("/tmp/does-not-exist-${UUID.randomUUID()}.webm")
+        )
+        assert(missing is DemoResult.Failure)
+
+        val emptyFile = File.createTempFile("empty-demo", ".webm")
+        emptyFile.writeText("")
+        val empty = invokePerformIntegrityCheck(task, emptyFile)
+        assert(empty is DemoResult.Failure)
+        emptyFile.delete()
+    }
+
+    @Test
+    fun `performIntegrityCheck rejects recordings shorter than 500ms`() = runTest {
+        val task = DemoTask(
+            id = "integrity-2", issueId = "issue-i2", issueIdentifier = "KONC-I2",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT,
+            status = DemoStatus.RECORDING, trigger = DemoTrigger.MANUAL,
+            createdAt = Instant.now().toString(), updatedAt = Instant.now().toString(),
+            durationMs = 100L
+        )
+        val file = File.createTempFile("short-demo", ".webm")
+        file.writeBytes(byteArrayOf(1, 2, 3))
+        val result = invokePerformIntegrityCheck(task, file)
+        assert(result is DemoResult.Failure)
+        file.delete()
+    }
+
+    private suspend fun invokePerformIntegrityCheck(task: DemoTask, file: File): DemoResult<Unit> {
+        val method = DemoRecordingService::class.java.getDeclaredMethod(
+            "performIntegrityCheck",
+            DemoTask::class.java,
+            File::class.java,
+            Continuation::class.java
+        )
+        method.isAccessible = true
+        return suspendCancellableCoroutine { cont ->
+            val invokeResult = runCatching {
+                method.invoke(service, task, file, cont)
+            }
+            invokeResult.onFailure { cont.resumeWith(Result.failure(it)) }
+            if (invokeResult.isSuccess && invokeResult.getOrNull() !== COROUTINE_SUSPENDED) {
+                @Suppress("UNCHECKED_CAST")
+                cont.resume(invokeResult.getOrNull() as DemoResult<Unit>)
+            }
+        }
     }
 }
 

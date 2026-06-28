@@ -424,6 +424,13 @@ class ApiV1Controller @Autowired constructor(
         @Volatile private var claudeCallbackPort: Int? = null
         private val claudeLock = Any()
 
+        /** Test seam: replaces bash login process for [startCodexLogin] / [startClaudeLogin]. */
+        @JvmStatic
+        var testLoginProcessFactory: ((String) -> ProcessBuilder)? = null
+
+        internal fun loginProcessBuilder(command: String): ProcessBuilder =
+            testLoginProcessFactory?.invoke(command) ?: ProcessBuilder("bash", "-lc", command)
+
         fun getClaudeCallbackPort(): Int? = claudeCallbackPort
     }
 
@@ -440,7 +447,7 @@ class ApiV1Controller @Autowired constructor(
             codexCode = null
         }
         return Mono.fromCallable {
-            val pb = ProcessBuilder("bash", "-lc", "codex login --device-auth")
+            val pb = loginProcessBuilder("codex login --device-auth")
             pb.redirectErrorStream(true)
             val p = pb.start()
             codexProcess = p
@@ -513,7 +520,7 @@ class ApiV1Controller @Autowired constructor(
             return Mono.just(ResponseEntity.ok(CodexLoginStatus("completed")))
         }
         return Mono.fromCallable {
-            val pb = ProcessBuilder("bash", "-lc", "claude auth login")
+            val pb = loginProcessBuilder("claude auth login")
             pb.redirectErrorStream(true)
             val p = pb.start()
             claudeProcess = p

@@ -377,4 +377,136 @@ class R2DemoStorageTest {
         val result = storage.checkQuota()
         assert(result is DemoResult.Failure)
     }
+
+    @Test
+    fun `uploadWithTags succeeds with mock HTTP`() = runTest {
+        val file = File(tempDir, "tagged.webm").apply { writeText("recording") }
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns ""
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.uploadWithTags(
+            "task-tags", file, "video/webm",
+            mapOf("task_id" to "task-tags", "issue_id" to "issue-1")
+        )
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.url.contains("cdn.example.com"))
+    }
+
+    @Test
+    fun `listOldest paginates through truncated list responses`() = runTest {
+        val page1 = """
+            <ListBucketResult>
+              <Contents><Key>a</Key><Size>100</Size><LastModified>2026-06-01T00:00:00.000Z</LastModified></Contents>
+              <IsTruncated>true</IsTruncated>
+              <NextContinuationToken>page2</NextContinuationToken>
+            </ListBucketResult>
+        """.trimIndent()
+        val page2 = """
+            <ListBucketResult>
+              <Contents><Key>b</Key><Size>200</Size><LastModified>2026-06-02T00:00:00.000Z</LastModified></Contents>
+              <IsTruncated>false</IsTruncated>
+            </ListBucketResult>
+        """.trimIndent()
+        var calls = 0
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                calls++
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns if (calls == 1) page1 else page2
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.listOldest(10)
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.size == 2)
+    }
+
+    @Test
+    fun `delete returns failure when HTTP sender throws`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = { throw RuntimeException("network down") },
+            clock = { fixedInstant }
+        )
+        val result = storage.delete("demo-recordings/task/demo.webm")
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `uploadWithTags returns presigned url when publicUrlBase blank`() = runTest {
+        val file = File(tempDir, "presigned.webm").apply { writeText("recording") }
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns ""
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.uploadWithTags("task-ps", file, "video/webm", mapOf("task_id" to "task-ps"))
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.url.contains("X-Amz-Signature="))
+    }
+
+    @Test
+    fun `deleteBatch returns failure when HTTP status is not success`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 500
+                    every { body() } returns "error"
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val result = storage.deleteBatch(listOf("demo-recordings/a.webm"))
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `generateUrl returns failure when presign throws`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = "not a valid uri",
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "",
+            clock = { fixedInstant }
+        )
+        val result = storage.generateUrl("demo-recordings/task/demo.webm", 3600)
+        assert(result is DemoResult.Failure)
+    }
 }

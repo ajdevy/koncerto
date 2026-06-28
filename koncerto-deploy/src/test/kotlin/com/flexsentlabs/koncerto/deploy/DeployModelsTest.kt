@@ -32,6 +32,14 @@ class DeployModelsTest {
     }
 
     @Test
+    fun `DeployResult data class uses default isCompose and tag`() {
+        val result = DeployResult(url = "http://localhost:8080", success = true, error = null, logs = null)
+
+        assertThat(result.isCompose).isFalse()
+        assertThat(result.tag).isNull()
+    }
+
+    @Test
     fun `ContainerInstance holds connection info`() {
         val instance = ContainerInstance("abc123", 32768, "http://host.docker.internal:32768")
 

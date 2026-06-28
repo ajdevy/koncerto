@@ -5,10 +5,14 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
+import assertk.assertions.contains
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import org.junit.jupiter.api.Test
 
 class StdioAgentRuntimeTest {
@@ -274,5 +278,37 @@ class StdioAgentRuntimeTest {
         assertThat(runtime.isAlive()).isTrue()
         runtime.stop()
         assertThat(runtime.isAlive()).isFalse()
+    }
+
+    @Test
+    fun `jsonl stream end emits synthetic turn completed`() = runBlocking {
+        val ws = Files.createTempDirectory("stdio-jsonl-end-")
+        val runtime = OpencodeRuntime("sleep 0.1", ws, noopLogger())
+        val setJsonlMode = StdioAgentRuntime::class.java.getDeclaredField("jsonlMode")
+        setJsonlMode.isAccessible = true
+        setJsonlMode.setBoolean(runtime, true)
+        val events = mutableListOf<AgentEvent>()
+        val job = launch {
+            runtime.events().collect { events.add(it) }
+        }
+        val readStdout = StdioAgentRuntime::class.java.getDeclaredMethod(
+            "readStdout", java.io.BufferedReader::class.java
+        )
+        readStdout.isAccessible = true
+        readStdout.invoke(runtime, java.io.BufferedReader(java.io.StringReader("")))
+        kotlinx.coroutines.delay(50)
+        runtime.stop()
+        job.cancel()
+        assertThat(events.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `sendMessage writes agent message request`() {
+        val ws = Files.createTempDirectory("stdio-send-msg-")
+        val runtime = OpencodeRuntime("cat", ws, noopLogger())
+        runBlocking { runtime.start() }
+        runtime.sendMessage("agent-b", "payload")
+        runtime.closeStdin()
+        runtime.stop()
     }
 }

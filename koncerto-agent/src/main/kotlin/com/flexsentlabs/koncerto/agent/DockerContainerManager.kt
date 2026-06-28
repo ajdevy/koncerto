@@ -7,6 +7,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class DockerContainerManager(
     private val config: DockerConfig,
@@ -35,7 +36,7 @@ class DockerContainerManager(
                 append(" sleep infinity")
             }
 
-            val pb = ProcessBuilder("bash", "-lc", runCmd)
+            val pb = ProcessBuilder(*bashLc(runCmd))
             val p = pb.start()
             val completed = p.waitFor(30, TimeUnit.SECONDS)
             val exitCode = if (completed) p.exitValue() else -1
@@ -57,7 +58,7 @@ class DockerContainerManager(
 
     fun isContainerRunning(containerId: String): Boolean {
         return try {
-            val pb = ProcessBuilder("bash", "-lc", "docker inspect $containerId --format='{{.State.Status}}' 2>/dev/null")
+            val pb = ProcessBuilder(*bashLc("docker inspect $containerId --format='{{.State.Status}}' 2>/dev/null"))
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
             val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
@@ -69,7 +70,7 @@ class DockerContainerManager(
 
     fun captureLogs(containerId: String): String? {
         return try {
-            val pb = ProcessBuilder("bash", "-lc", "docker logs $containerId 2>&1")
+            val pb = ProcessBuilder(*bashLc("docker logs $containerId 2>&1"))
             val p = pb.start()
             val logsCompleted = p.waitFor(5, TimeUnit.SECONDS)
             val logs = p.inputStream.bufferedReader().use { it.readText() }
@@ -81,7 +82,7 @@ class DockerContainerManager(
 
     fun removeContainer(containerId: String) {
         try {
-            val pb = ProcessBuilder("bash", "-lc", "docker rm -f $containerId 2>/dev/null")
+            val pb = ProcessBuilder(*bashLc("docker rm -f $containerId 2>/dev/null"))
             val p = pb.start()
             p.waitFor(10, TimeUnit.SECONDS)
             logger.info("container_removed", mapOf("container_id" to containerId))
@@ -113,7 +114,7 @@ class DockerContainerManager(
 
     private fun osFreeMem(): Long {
         return try {
-            val pb = ProcessBuilder("bash", "-lc", "free -b | awk '/Mem:/ {print \$7}'")
+            val pb = ProcessBuilder(*bashLc("free -b | awk '/Mem:/ {print \$7}'"))
             val p = pb.start()
             p.waitFor(5, TimeUnit.SECONDS)
             val output = p.inputStream.bufferedReader().use { it.readText() }.trim()
@@ -128,6 +129,14 @@ class DockerContainerManager(
     }
 
     companion object {
+        @JvmStatic
+        val testBashOverride = AtomicReference<String?>(null)
+
+        internal fun bashLc(command: String): Array<String> {
+            val override = testBashOverride.get()
+            return if (override != null) arrayOf(override, command) else arrayOf("bash", "-lc", command)
+        }
+
         private val counter = AtomicLong(0)
         private val dockerDateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss Z")
 
@@ -140,8 +149,7 @@ class DockerContainerManager(
             try {
                 val cutoff = System.currentTimeMillis() - olderThanHours * 60 * 60 * 1000L
                 val pb = ProcessBuilder(
-                    "bash", "-lc",
-                    "docker ps -a --filter name=koncerto-agent- --format '{{.ID}}|{{.CreatedAt}}' 2>/dev/null"
+                    *bashLc("docker ps -a --filter name=koncerto-agent- --format '{{.ID}}|{{.CreatedAt}}' 2>/dev/null")
                 )
                 val p = pb.start()
                 p.waitFor(10, TimeUnit.SECONDS)
@@ -169,7 +177,7 @@ class DockerContainerManager(
                                 "created_at" to createdAt,
                                 "age_hours" to String.format("%.1f", (System.currentTimeMillis() - epoch) / 3600000.0)
                             ))
-                            val rm = ProcessBuilder("bash", "-lc", "docker rm -f $id 2>/dev/null")
+                            val rm = ProcessBuilder(*bashLc("docker rm -f $id 2>/dev/null"))
                             rm.start().waitFor(10, TimeUnit.SECONDS)
                             pruned++
                         }

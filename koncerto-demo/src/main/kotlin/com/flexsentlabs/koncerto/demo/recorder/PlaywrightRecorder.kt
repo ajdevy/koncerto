@@ -13,6 +13,7 @@ class PlaywrightRecorder : DemoRecorder {
     override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
 
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
+        testDependenciesAvailable?.let { return@withContext it }
         try {
             val xvfb = ProcessBuilder("which", "Xvfb").start()
             if (!(xvfb.waitFor(5, TimeUnit.SECONDS) && xvfb.exitValue() == 0)) return@withContext false
@@ -50,7 +51,8 @@ class PlaywrightRecorder : DemoRecorder {
                 shellScript.setExecutable(true)
                 shellScript.deleteOnExit()
 
-                val pb = ProcessBuilder("bash", shellScript.absolutePath)
+                val pb = testRecordProcessBuilder?.invoke(config, outputFile)
+                    ?: ProcessBuilder("bash", shellScript.absolutePath)
                     .redirectErrorStream(true)
                 val env = pb.environment()
                 env["TARGET_URL"] = config.targetUrl
@@ -58,7 +60,7 @@ class PlaywrightRecorder : DemoRecorder {
                 env["PW_SCRIPT_PATH"] = pwScript.absolutePath
                 val process = pb.start()
 
-                val maxWaitSec = config.maxDurationSeconds + 60L
+                val maxWaitSec = testMaxWaitSeconds ?: (config.maxDurationSeconds + 60L)
                 val completed = process.waitFor(maxWaitSec, TimeUnit.SECONDS)
                 val durationMs = System.currentTimeMillis() - startTime
 
@@ -171,6 +173,18 @@ exit ${'$'}?
     }
 
     companion object {
+        /** Test seam: when set, bypasses dependency probing in [isAvailable]. */
+        @JvmStatic
+        var testDependenciesAvailable: Boolean? = null
+
+        /** Test seam: when set, replaces the bash recording process. */
+        @JvmStatic
+        var testRecordProcessBuilder: ((RecordingConfig, File) -> ProcessBuilder)? = null
+
+        /** Test seam: overrides process wait timeout seconds in [record]. */
+        @JvmStatic
+        var testMaxWaitSeconds: Long? = null
+
         private val PLAYWRIGHT_SCRIPT = """#!/usr/bin/env node
 const { chromium } = require('playwright');
 const fs = require('fs');

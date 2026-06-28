@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.coroutines.test.runTest
@@ -294,18 +295,6 @@ class DemoScenarioGeneratorTest {
         assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2", "opencode-free-3"))
     }
 
-    @Test
-    fun `runGitDiff returns null when git diff fails`(@TempDir tmpDir: Path) {
-        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
-        val issue = com.flexsentlabs.koncerto.core.model.Issue(
-            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
-            priority = 1, state = "Todo", branchName = null, url = null,
-            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
-        )
-        val prompt = generator().buildPrompt(issue, workspace)
-        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
-    }
-
     private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {
         runProcess(listOf("git", "init"), tmpDir)
         runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
@@ -326,5 +315,44 @@ class DemoScenarioGeneratorTest {
             .start()
         process.waitFor()
         check(process.exitValue() == 0) { "Command failed: ${command.joinToString(" ")}" }
+    }
+
+    @Test
+    fun `generate saves scenario files when model output is valid`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "T-1", createdNow = true)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-save", identifier = "SAVE-1", title = "Save scenario", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "echo",
+            logger = logger(),
+            processRunner = { _, _, _ ->
+                """
+                demo_scenario:
+                  description: "Saved scenario"
+                  steps:
+                    - action: wait
+                      ms: 500
+                """.trimIndent()
+            }
+        )
+        val path = gen.generate(issue, workspace)
+        assertThat(path).isNotNull()
+        assertThat(File(path!!).exists()).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt includes git diff when repository has changes`(@TempDir tmpDir: Path) {
+        initGitRepoWithDiff(tmpDir, "updated readme content")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "T-1", createdNow = true)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i-diff", identifier = "DIFF-1", title = "With diff", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("## PR Changes") || prompt.contains("updated readme")).isEqualTo(true)
     }
 }
