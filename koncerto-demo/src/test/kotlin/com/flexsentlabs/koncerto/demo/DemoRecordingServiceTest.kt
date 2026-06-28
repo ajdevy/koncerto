@@ -426,6 +426,7 @@ class DemoRecordingServiceTest {
         val retryService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRetries = 2, retryDelayMs = 1
             ),
             taskRepository = taskRepository,
@@ -450,6 +451,7 @@ class DemoRecordingServiceTest {
         val fallbackService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRetries = 0, retryDelayMs = 1
             ),
             taskRepository = taskRepository,
@@ -473,6 +475,7 @@ class DemoRecordingServiceTest {
         val partialService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRetries = 0, retryDelayMs = 1
             ),
             taskRepository = taskRepository,
@@ -493,7 +496,7 @@ class DemoRecordingServiceTest {
     fun `requestRecording fails preflight when storage quota check fails`() = runTest {
         val quotaFailStorage = QuotaCheckFailStorage()
         val preflightService = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), targetUrl = "http://localhost:3000"),
             taskRepository = taskRepository,
             recorderFactory = recorderFactory,
             storage = quotaFailStorage,
@@ -513,7 +516,7 @@ class DemoRecordingServiceTest {
         val tempDir = System.getProperty("java.io.tmpdir")
         File(tempDir, "issue-scenario-scenario.yaml").writeText("steps: []\n")
         val scenarioService = DemoRecordingService(
-            config = DemoConfig(tempDir = tempDir),
+            config = DemoConfig(tempDir = tempDir, targetUrl = "http://localhost:3000"),
             taskRepository = taskRepository,
             recorderFactory = recorderFactory,
             storage = storage,
@@ -547,6 +550,7 @@ class DemoRecordingServiceTest {
         val quotaService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRecordingsPerSpace = 1,
                 retentionDays = 90
             ),
@@ -568,7 +572,7 @@ class DemoRecordingServiceTest {
     fun `requestRecording fails preflight when recorder missing for platform`() = runTest {
         val playwrightOnly = RecorderFactory(listOf(FakeRecorder2()))
         val servicePlaywrightOnly = DemoRecordingService(
-            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir")),
+            config = DemoConfig(tempDir = System.getProperty("java.io.tmpdir"), targetUrl = "http://localhost:3000"),
             taskRepository = taskRepository,
             recorderFactory = playwrightOnly,
             storage = storage,
@@ -598,6 +602,7 @@ class DemoRecordingServiceTest {
         val quotaService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRecordingsPerSpace = 1,
                 retentionDays = 90
             ),
@@ -625,6 +630,7 @@ class DemoRecordingServiceTest {
         val quotaService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRecordingsPerSpace = 1,
                 retentionDays = 90
             ),
@@ -648,6 +654,7 @@ class DemoRecordingServiceTest {
         val partialService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRetries = 0,
                 retryDelayMs = 1
             ),
@@ -672,6 +679,7 @@ class DemoRecordingServiceTest {
         val failService = DemoRecordingService(
             config = DemoConfig(
                 tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
                 maxRetries = 1,
                 retryDelayMs = 1
             ),
@@ -694,7 +702,7 @@ class DemoRecordingServiceTest {
         val missingDir = java.nio.file.Files.createTempDirectory("demo-missing-temp").resolve("nested-temp")
         java.nio.file.Files.deleteIfExists(missingDir)
         val preflightService = DemoRecordingService(
-            config = DemoConfig(tempDir = missingDir.toString()),
+            config = DemoConfig(tempDir = missingDir.toString(), targetUrl = "http://localhost:3000"),
             taskRepository = taskRepository,
             recorderFactory = recorderFactory,
             storage = storage,
