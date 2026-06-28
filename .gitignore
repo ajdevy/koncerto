@@ -32,6 +32,10 @@ log/
 # Generated
 *.class
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Local secrets (bot tokens, API keys)
 local.properties
 
