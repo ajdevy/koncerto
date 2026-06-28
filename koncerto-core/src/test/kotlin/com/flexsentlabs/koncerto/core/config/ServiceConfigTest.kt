@@ -1234,4 +1234,110 @@ class ServiceConfigTest {
         )
         assertThat(config.adminApiKey).isEqualTo("secret-123")
     }
+
+    @Test
+    fun `resolveInlineEnvRefs replaces dollar and brace env references`() {
+        try {
+            System.setProperty("INLINE_TEST_VAR", "resolved-value")
+            assertThat(ServiceConfig.resolveInlineEnvRefs("prefix-\$INLINE_TEST_VAR-suffix"))
+                .isEqualTo("prefix-resolved-value-suffix")
+            assertThat(ServiceConfig.resolveInlineEnvRefs("use \${INLINE_TEST_VAR} here"))
+                .isEqualTo("use resolved-value here")
+        } finally {
+            System.clearProperty("INLINE_TEST_VAR")
+        }
+    }
+
+    @Test
+    fun `resolveInlineEnvRefs leaves unknown refs unchanged`() {
+        assertThat(ServiceConfig.resolveInlineEnvRefs("no refs here")).isEqualTo("no refs here")
+        assertThat(ServiceConfig.resolveInlineEnvRefs("missing \$UNKNOWN_INLINE_VAR_XYZ"))
+            .isEqualTo("missing \$UNKNOWN_INLINE_VAR_XYZ")
+    }
+
+    @Test
+    fun `resolveInlineEnvRefs returns null for null input`() {
+        assertThat(ServiceConfig.resolveInlineEnvRefs(null)).isNull()
+    }
+
+    @Test
+    fun `parse stage on_failure_state and max_review_attempts`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "stages" to mapOf(
+                            "In Review" to mapOf(
+                                "prompt" to "review.md",
+                                "on_failure_state" to "Blocked",
+                                "max_review_attempts" to 5
+                            )
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        val stage = config.project().agent.stages["in review"]
+        assertThat(stage).isNotNull()
+        assertThat(stage!!.onFailureState).isEqualTo("Blocked")
+        assertThat(stage.maxReviewAttempts).isEqualTo(5)
+    }
+
+    @Test
+    fun `parse stage and agent effort`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf(
+                        "agents" to mapOf(
+                            "fast" to mapOf("kind" to "codex", "effort" to "high")
+                        ),
+                        "stages" to mapOf(
+                            "Todo" to mapOf("prompt" to "impl.md", "effort" to "medium")
+                        )
+                    )
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().agent.stages["todo"]?.effort).isEqualTo("medium")
+        assertThat(config.project().agent.agents["fast"]?.effort).isEqualTo("high")
+    }
+
+    @Test
+    fun `quality config dimensions parsed from resolution`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "demo_recording" to mapOf(
+                    "quality" to mapOf("resolution" to "1920x1080", "fps" to 24, "codec" to "h264")
+                ),
+                "projects" to mapOf(
+                    "default" to mapOf(
+                        "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                        "workspace" to mapOf("root" to "/tmp/test"),
+                        "agent" to mapOf()
+                    )
+                )
+            ),
+            workflowFileDir = "/tmp"
+        )
+        val quality = config.demoRecording.quality
+        assertThat(quality.resolution).isEqualTo("1920x1080")
+        assertThat(quality.width).isEqualTo(1920)
+        assertThat(quality.height).isEqualTo(1080)
+        assertThat(quality.fps).isEqualTo(24)
+        assertThat(quality.codec).isEqualTo("h264")
+    }
+
+    @Test
+    fun `quality config dimensions fall back when resolution invalid`() {
+        val quality = DemoRecordingConfig.QualityConfig(resolution = "invalid")
+        assertThat(quality.width).isEqualTo(1280)
+        assertThat(quality.height).isEqualTo(720)
+    }
 }

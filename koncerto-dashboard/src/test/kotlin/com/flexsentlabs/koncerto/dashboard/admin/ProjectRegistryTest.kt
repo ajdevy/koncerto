@@ -63,4 +63,24 @@ class ProjectRegistryTest {
         assertThat(config).isNotNull()
         assertThat(config!!.tracker.kind).isEqualTo("linear")
     }
+
+    @Test
+    fun `registerProject overwrites existing entry`() {
+        registry.registerProject("test", testConfig)
+        val updated = testConfig.copy(
+            workspace = WorkspaceConfig(root = "/tmp/updated")
+        )
+        registry.registerProject("test", updated)
+        assertThat(registry.getProjectCount()).isEqualTo(1)
+        assertThat(registry.getProject("test")!!.workspace.root).isEqualTo("/tmp/updated")
+    }
+
+    @Test
+    fun `getAllProjects returns snapshot not live view`() {
+        registry.registerProject("test", testConfig)
+        val snapshot = registry.getAllProjects()
+        registry.registerProject("other", testConfig)
+        assertThat(snapshot).hasSize(1)
+        assertThat(registry.getProjectCount()).isEqualTo(2)
+    }
 }

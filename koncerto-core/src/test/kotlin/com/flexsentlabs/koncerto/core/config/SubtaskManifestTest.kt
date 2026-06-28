@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.core.config
 import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
+import com.flexsentlabs.koncerto.core.agent.FallbackProviderConfig
 import org.junit.jupiter.api.Test
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -79,5 +80,65 @@ class SubtaskManifestTest {
             routingRules = emptyList()
         )
         assertThat(agentConfig.workplan).isEqualTo(null)
+    }
+
+    @Test
+    fun `SubtaskState holds runtime fields`() {
+        val def = SubtaskDef(id = "step-1", description = "Do work", prompt = "prompt")
+        val started = java.time.Instant.parse("2026-01-01T00:00:00Z")
+        val completed = java.time.Instant.parse("2026-01-01T01:00:00Z")
+        val state = SubtaskState(
+            def = def,
+            status = SubtaskStatus.RUNNING,
+            branchName = "subtask/KONC-1/step-1",
+            runId = "run-123",
+            startedAt = started,
+            completedAt = completed
+        )
+        assertThat(state.def.id).isEqualTo("step-1")
+        assertThat(state.status).isEqualTo(SubtaskStatus.RUNNING)
+        assertThat(state.branchName).isEqualTo("subtask/KONC-1/step-1")
+        assertThat(state.runId).isEqualTo("run-123")
+        assertThat(state.startedAt).isEqualTo(started)
+        assertThat(state.completedAt).isEqualTo(completed)
+    }
+
+    @Test
+    fun `SubtaskStatus enum values`() {
+        assertThat(enumValues<SubtaskStatus>().toList()).isEqualTo(
+            listOf(SubtaskStatus.PENDING, SubtaskStatus.RUNNING, SubtaskStatus.SUCCEEDED, SubtaskStatus.FAILED, SubtaskStatus.BLOCKED)
+        )
+    }
+
+    @Test
+    fun `CrossProjectFollowUpConfig round-trip serialization`() {
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "other-project",
+            titleTemplate = "Follow-up for {{identifier}}",
+            descriptionTemplate = "Created from {{source}}",
+            linkType = "blocks"
+        )
+        val encoded = json.encodeToString(config)
+        val decoded = json.decodeFromString<CrossProjectFollowUpConfig>(encoded)
+        assertThat(decoded.targetProjectSlug).isEqualTo("other-project")
+        assertThat(decoded.titleTemplate).isEqualTo("Follow-up for {{identifier}}")
+        assertThat(decoded.descriptionTemplate).isEqualTo("Created from {{source}}")
+        assertThat(decoded.linkType).isEqualTo("blocks")
+    }
+
+    @Test
+    fun `FallbackProviderConfig holds provider settings`() {
+        val config = FallbackProviderConfig(
+            primaryProvider = "codex",
+            fallbackProviders = listOf("claude", "opencode"),
+            fallbackOnFailure = true,
+            fallbackOnTimeout = false
+        )
+        assertThat(config.primaryProvider).isEqualTo("codex")
+        assertThat(config.fallbackProviders).isEqualTo(listOf("claude", "opencode"))
+        assertThat(config.fallbackOnFailure).isEqualTo(true)
+        assertThat(config.fallbackOnTimeout).isEqualTo(false)
+        val copy = config.copy(fallbackOnTimeout = true)
+        assertThat(copy.fallbackOnTimeout).isEqualTo(true)
     }
 }

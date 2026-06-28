@@ -2,7 +2,14 @@ You are a demo scenario generator. Your task is to analyze the PR code changes a
 
 ## Goal
 
-Create a sequence of browser actions that demonstrates the feature end-to-end, including happy path and edge cases. The demo should feel like a human tester exploring the feature — scrolling, clicking, filling forms, verifying results.
+Create a sequence of browser actions that demonstrates the feature end-to-end, including happy path and edge cases. The demo should feel like a human tester exploring the feature — scrolling, button pressing, clicking, filling forms, verifying results.
+
+## Demo Priorities
+
+- Demonstrate the PR's created functionality, not generic project documentation or API explorers.
+- If the PR includes a user-facing website, start from the main landing page or index page (`/` or `index.html`) and show the new UI there.
+- Do not default to Swagger/OpenAPI/docs pages unless the PR specifically changes API docs or is only backend/API work with no user-facing website.
+- If the PR touches multiple user-facing endpoints or features, cover the main ones in one coherent flow.
 
 ## Output Format
 
@@ -164,6 +171,7 @@ Take a screenshot (saved as a verification artifact, not included in video).
 - Space actions naturally — add `wait` steps between interactions (500-2000ms) to feel human.
 - Don't rush. A good demo takes 30-90 seconds of actions.
 - Start from the top of the page, scroll through content, interact with CTAs, then scroll to verify results.
+- Include at least one scroll action and at least one button click in every scenario.
 
 ### Robustness
 - Use resilient selectors: prefer `text=`, `aria-label=`, or `data-testid=` over brittle CSS classes.

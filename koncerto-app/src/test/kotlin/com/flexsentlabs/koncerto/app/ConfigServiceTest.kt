@@ -191,6 +191,137 @@ class ConfigServiceTest {
         assertThat(service.getWorkflowPath()).isEqualTo("/custom/path/workflow.md")
     }
 
+    @Test
+    fun `loadServiceConfig uses dot when workflow path has no parent`() {
+        val fileName = "koncerto-config-parentless-${System.nanoTime()}.md"
+        val file = Path.of(fileName)
+        Files.writeString(
+            file,
+            """
+            |---
+            |poll_interval_ms: 20000
+            |projects:
+            |  test-project:
+            |    tracker:
+            |      kind: linear
+            |      api_key: test-key
+            |      project_slug: TEST
+            |    workspace:
+            |      root: /tmp/test
+            |    agent:
+            |      kind: opencode
+            |---
+            |Prompt body
+            """.trimMargin()
+        )
+        try {
+            val service = ConfigService(fileName)
+            val result = service.loadServiceConfig()
+            assertThat(result).isInstanceOf(Result.Success::class)
+            assertThat((result as Result.Success).value.pollIntervalMs).isEqualTo(20_000L)
+        } finally {
+            Files.deleteIfExists(file)
+        }
+    }
+
+    @Test
+    fun `saveConfig preserves existing prompt template`() {
+        val file = createWorkflowFile()
+        val service = ConfigService(file.toString())
+        val configMap = mapOf(
+            "poll_interval_ms" to 15000,
+            "projects" to mapOf(
+                "test" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "key", "project_slug" to "SLUG"),
+                    "workspace" to mapOf("root" to "/tmp"),
+                    "agent" to mapOf("kind" to "opencode", "max_turns" to 5)
+                )
+            )
+        )
+        val result = service.saveConfig(configMap)
+        assertThat(result).isInstanceOf(Result.Success::class)
+        assertThat(Files.readString(file)).contains("Test prompt")
+    }
+
+    @Test
+    fun `validateConfig succeeds with admin apiKey`() {
+        val file = createWorkflowFile()
+        val service = ConfigService(file.toString())
+        val configMap = mapOf(
+            "poll_interval_ms" to 15000,
+            "admin" to mapOf("apiKey" to "secret-admin-key"),
+            "projects" to mapOf(
+                "test" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "key", "project_slug" to "SLUG"),
+                    "workspace" to mapOf("root" to "/tmp"),
+                    "agent" to mapOf("kind" to "opencode", "max_turns" to 5)
+                )
+            )
+        )
+        val result = service.validateConfig(configMap)
+        assertThat(result).isInstanceOf(Result.Success::class)
+        val saveResult = service.saveConfig(configMap)
+        assertThat(saveResult).isInstanceOf(Result.Success::class)
+        val serviceConfig = service.loadServiceConfig()
+        assertThat(serviceConfig).isInstanceOf(Result.Success::class)
+        assertThat((serviceConfig as Result.Success).value.adminApiKey).isEqualTo("secret-admin-key")
+    }
+
+    @Test
+    fun `validateConfig succeeds with rate limiter and circuit breaker`() {
+        val file = createWorkflowFile()
+        val service = ConfigService(file.toString())
+        val configMap = mapOf(
+            "poll_interval_ms" to 15000,
+            "projects" to mapOf(
+                "test" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "key", "project_slug" to "SLUG"),
+                    "workspace" to mapOf("root" to "/tmp"),
+                    "agent" to mapOf("kind" to "opencode", "max_turns" to 5),
+                    "rate_limiter" to mapOf("requests_per_second" to 5, "max_burst" to 10),
+                    "circuit_breaker" to mapOf("failure_threshold" to 3, "reset_timeout_ms" to 15_000)
+                )
+            )
+        )
+        val result = service.validateConfig(configMap)
+        assertThat(result).isInstanceOf(Result.Success::class)
+    }
+
+    @Test
+    fun `saveRawYaml succeeds with admin and notification config`() {
+        val file = createWorkflowFile()
+        val service = ConfigService(file.toString())
+        val yaml = """
+            poll_interval_ms: 15000
+            admin:
+              apiKey: admin-secret
+            projects:
+              test:
+                tracker:
+                  kind: linear
+                  api_key: key
+                  project_slug: SLUG
+                workspace:
+                  root: /tmp
+                agent:
+                  kind: opencode
+                notifications:
+                  telegram:
+                    bot_token: bot-token
+                    chat_id: "-123"
+                  email:
+                    smtp_host: smtp.example.com
+                    smtp_port: 587
+                    username: user
+                    password: pass
+                    from: from@example.com
+                    to: to@example.com
+        """.trimIndent()
+        val result = service.saveRawYaml(yaml)
+        assertThat(result).isInstanceOf(Result.Success::class)
+        assertThat(Files.readString(file)).contains("admin-secret")
+    }
+
     private fun createWorkflowFile(): Path {
         val file = Files.createTempFile("config-test", ".md")
         Files.writeString(

@@ -38,6 +38,17 @@ data class RetryEntry(
     val error: String?
 )
 
+data class LimitPauseEntry(
+    val issueId: String,
+    val identifier: String,
+    val stageName: String,
+    val agentKind: String,
+    val provider: String,
+    val error: String,
+    val resumeAtMs: Long,
+    val pausedAtMs: Long = System.currentTimeMillis()
+)
+
 data class TokenTotals(
     val inputTokens: Long = 0,
     val outputTokens: Long = 0,
@@ -49,6 +60,7 @@ class RuntimeState {
     val running = ConcurrentHashMap<String, RunningEntry>()
     val claimed = ConcurrentHashMap<String, Boolean>()
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
+    val limitPauses = ConcurrentHashMap<String, LimitPauseEntry>()
     val reviewAttempts = ConcurrentHashMap<String, Int>()
     val completed = ConcurrentHashMap<String, Boolean>()
     private val _blocked = ConcurrentHashMap<String, Boolean>()
@@ -122,6 +134,7 @@ class RuntimeState {
             running.clear()
             claimed.clear()
             retryAttempts.clear()
+            limitPauses.clear()
             reviewAttempts.clear()
             completed.clear()
             _blocked.clear()

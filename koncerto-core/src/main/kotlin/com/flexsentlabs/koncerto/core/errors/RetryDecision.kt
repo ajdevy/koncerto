@@ -20,6 +20,7 @@ object RetryDecisionMaker {
                 RetryDecision.RetryWithDelay(delayMs)
             }
             is AgentErrorType.TokenQuotaError -> RetryDecision.NoRetry
+            is AgentErrorType.SubscriptionLimitError -> RetryDecision.NoRetry
             is AgentErrorType.AuthError -> RetryDecision.NoRetry
             is AgentErrorType.TransientError -> RetryDecision.RetryWithBackoff()
             is AgentErrorType.PermanentError -> RetryDecision.NoRetry

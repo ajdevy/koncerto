@@ -64,13 +64,13 @@ class CrossProjectChainerTest {
     }
 
     @Test
-    fun `max depth enforced`() {
+    fun `max depth zero prevents issue creation`() {
         val trackingClient = TrackingClient()
         val chainer = DefaultCrossProjectChainer(
             config = ServiceConfig(),
             linearClientProvider = { slug -> if (slug == "target-proj") trackingClient else null },
             logger = StructuredLogger(emptyList()),
-            maxDepth = 2
+            maxDepth = 0
         )
         val issue = testIssue()
         val config = CrossProjectFollowUpConfig(
@@ -80,13 +80,52 @@ class CrossProjectChainerTest {
 
         runBlocking {
             chainer.createFollowUp(issue, config, "source-proj")
-            val issue2 = testIssue(id = "iss-2", identifier = "PROJ-2")
-            chainer.createFollowUp(issue2, config, "source-proj")
-            val issue3 = testIssue(id = "iss-3", identifier = "PROJ-3")
-            chainer.createFollowUp(issue3, config, "source-proj")
         }
 
-        assertThat(trackingClient.createCount).isEqualTo(3)
+        assertThat(trackingClient.createCount).isEqualTo(0)
+    }
+
+    @Test
+    fun `createIssue null does not propagate`() {
+        val chainer = createChainer { slug ->
+            if (slug == "target-proj") NullCreateClient() else null
+        }
+        val issue = testIssue()
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "target-proj",
+            titleTemplate = "Follow-up {sourceId}"
+        )
+
+        var caught = false
+        runBlocking {
+            try {
+                chainer.createFollowUp(issue, config, "source-proj")
+            } catch (_: Exception) {
+                caught = true
+            }
+        }
+
+        assertThat(caught).isFalse()
+    }
+
+    @Test
+    fun `link failure does not prevent issue creation`() {
+        val trackingClient = LinkFailingClient()
+        val chainer = createChainer { slug -> if (slug == "target-proj") trackingClient else null }
+        val issue = testIssue()
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "target-proj",
+            titleTemplate = "Follow-up {sourceId}",
+            linkType = "blocks"
+        )
+
+        runBlocking {
+            chainer.createFollowUp(issue, config, "source-proj")
+        }
+
+        assertThat(trackingClient.createCount).isEqualTo(1)
+        assertThat(trackingClient.linkCalled).isTrue()
+        assertThat(trackingClient.linkSucceeded).isFalse()
     }
 
     @Test
@@ -139,7 +178,7 @@ class CrossProjectChainerTest {
         )
     }
 
-    private class TrackingClient : TrackerClient {
+    private open class TrackingClient : TrackerClient {
         var createdTitle: String? = null
         var createdDescription: String? = null
         var createdProjectSlug: String? = null
@@ -170,5 +209,33 @@ class CrossProjectChainerTest {
             )
         }
         override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = true
+    }
+
+    private class NullCreateClient : TrackerClient {
+        override suspend fun fetchCandidateIssues(projectSlug: String, activeStates: List<String>): List<Issue> = emptyList()
+        override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> = emptyList()
+        override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> = emptyMap()
+        override suspend fun fetchIssueById(issueId: String): Issue? = null
+        override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = null
+        override suspend fun updateIssueState(issueId: String, stateId: String) {}
+        override suspend fun createComment(issueId: String, body: String) {}
+        override suspend fun updateIssueAssignee(issueId: String, assigneeId: String) {}
+        override suspend fun fetchIssueCreator(issueId: String) = null
+        override suspend fun createIssue(
+            projectSlug: String, title: String, state: String,
+            description: String?, labels: List<String>
+        ): Issue? = null
+        override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean = true
+    }
+
+    private class LinkFailingClient : TrackingClient() {
+        var linkCalled = false
+        var linkSucceeded = true
+
+        override suspend fun createLink(sourceIssueId: String, targetIssueId: String, type: String): Boolean {
+            linkCalled = true
+            linkSucceeded = false
+            return false
+        }
     }
 }

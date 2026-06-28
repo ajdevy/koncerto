@@ -32,6 +32,10 @@ log/
 # Generated
 *.class
 
+# Python
+__pycache__/
+*.py[cod]
+
 # Local secrets (bot tokens, API keys)
 local.properties
 
@@ -40,3 +44,6 @@ config/ngrok.yml
 
 # Env file (contains secrets)
 .env
+
+# Cloudflare Wrangler local cache
+.wrangler/

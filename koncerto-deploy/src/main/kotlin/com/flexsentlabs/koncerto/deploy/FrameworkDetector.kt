@@ -29,9 +29,9 @@ class FrameworkDetector {
                 val hasUv = Files.exists(projectPath.resolve("uv.lock"))
                 val hasPyproject = Files.exists(projectPath.resolve("pyproject.toml"))
                 val buildCmd = when {
-                    hasReqTxt -> "pip install -r requirements.txt"
-                    hasPyproject -> "pip install -e ."
-                    else -> "pip install -e ."
+                    hasReqTxt -> "pip install --default-timeout 60 --retries 10 -r requirements.txt"
+                    hasPyproject -> "pip install --default-timeout 60 --retries 10 ."
+                    else -> "pip install --default-timeout 60 --retries 10 ."
                 }
                 val runCmd = detectPythonRunCmd(projectPath)
                 FrameworkInfo("python", listOf(5000), buildCmd, runCmd)
@@ -79,7 +79,8 @@ class FrameworkDetector {
             ?: return false
         val content = Files.readString(gradle)
         return content.contains("spring-boot", ignoreCase = true) ||
-               content.contains("spring.boot", ignoreCase = true)
+               content.contains("spring.boot", ignoreCase = true) ||
+               content.contains("springframework.boot", ignoreCase = true)
     }
 
     private fun hasPackageJson(path: Path): Boolean =

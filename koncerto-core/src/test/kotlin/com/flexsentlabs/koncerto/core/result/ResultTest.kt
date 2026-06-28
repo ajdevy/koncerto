@@ -2,8 +2,12 @@ package com.flexsentlabs.koncerto.core.result
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isNull
 import assertk.assertions.isSameAs
+import com.flexsentlabs.koncerto.core.agent.FallbackProvider
+import com.flexsentlabs.koncerto.core.errors.SubscriptionLimitException
+import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
 
 class ResultTest {
@@ -114,5 +118,54 @@ class ResultTest {
         val failure: EmptyResult<RuntimeException> = Result.Failure(RuntimeException("boom"))
         assertThat(success).isEqualTo(Result.Success(Unit))
         assertThat(failure.exceptionOrNull()?.message).isEqualTo("boom")
+    }
+
+    @Test
+    fun `SubscriptionLimitException stores provider and raw message`() {
+        val ex = SubscriptionLimitException("limit hit", provider = "codex", rawMessage = "raw detail")
+        assertThat(ex.message).isEqualTo("limit hit")
+        assertThat(ex.provider).isEqualTo("codex")
+        assertThat(ex.rawMessage).isEqualTo("raw detail")
+        assertThat(ex).isInstanceOf(Exception::class)
+    }
+
+    @Test
+    fun `FallbackProvider withFallback returns primary on success`() = runTest {
+        val result = FallbackProvider.withFallback(
+            primary = { "primary" },
+            fallbacks = listOf({ "fallback" })
+        )
+        assertThat(result.isSuccess).isEqualTo(true)
+        assertThat(result.getOrNull()).isEqualTo("primary")
+    }
+
+    @Test
+    fun `FallbackProvider withFallback uses fallback when primary throws`() = runTest {
+        val result = FallbackProvider.withFallback(
+            primary = { throw RuntimeException("primary failed") },
+            fallbacks = listOf({ "fallback" })
+        )
+        assertThat(result.isSuccess).isEqualTo(true)
+        assertThat(result.getOrNull()).isEqualTo("fallback")
+    }
+
+    @Test
+    fun `FallbackProvider withFallback fails when all providers fail`() = runTest {
+        val result = FallbackProvider.withFallback(
+            primary = { throw RuntimeException("primary failed") },
+            fallbacks = listOf({ throw RuntimeException("fallback failed") })
+        )
+        assertThat(result.isFailure).isEqualTo(true)
+        assertThat(result.exceptionOrNull()?.message).isEqualTo("fallback failed")
+    }
+
+    @Test
+    fun `FallbackProvider withFallback tries next when onResult returns false`() = runTest {
+        val result = FallbackProvider.withFallback(
+            primary = { "reject-me" },
+            fallbacks = listOf({ "accepted" }),
+            onResult = { it != "reject-me" }
+        )
+        assertThat(result.getOrNull()).isEqualTo("accepted")
     }
 }

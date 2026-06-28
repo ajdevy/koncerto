@@ -24,6 +24,10 @@ object AgentAuthChecker {
         overrideAuth[agentKind.lowercase().trim()] = true
     }
 
+    fun markUnauthenticated(agentKind: String) {
+        overrideAuth[agentKind.lowercase().trim()] = false
+    }
+
     fun setClaudeAuthToken(token: String) {
         claudeAuthToken = token.trim().takeIf { it.isNotBlank() }
         claudeAuthToken?.let {

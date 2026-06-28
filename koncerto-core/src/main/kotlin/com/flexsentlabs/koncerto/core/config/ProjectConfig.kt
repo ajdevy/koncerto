@@ -54,6 +54,18 @@ data class RoutingRule(
 )
 
 @kotlinx.serialization.Serializable
+data class LimitPauseConfig(
+    val enabled: Boolean = true,
+    val claudeDefaultResumeMs: Long = LimitPauseConfig.DEFAULT_RESUME_MS,
+    val codexDefaultResumeMs: Long = LimitPauseConfig.DEFAULT_RESUME_MS,
+    val linearComments: Boolean = true
+) {
+    companion object {
+        const val DEFAULT_RESUME_MS: Long = 5 * 60 * 60 * 1000L
+    }
+}
+
+@kotlinx.serialization.Serializable
 data class AgentProjectConfig(
     val kind: String = "opencode",
     val command: String? = null,
@@ -72,7 +84,8 @@ data class AgentProjectConfig(
     val agents: Map<String, AgentProviderConfig> = emptyMap(),
     val routingRules: List<RoutingRule> = emptyList(),
     val workplan: WorkplanConfig? = null,
-    val docker: DockerConfig? = null
+    val docker: DockerConfig? = null,
+    val limitPause: LimitPauseConfig = LimitPauseConfig()
 )
 
 @kotlinx.serialization.Serializable

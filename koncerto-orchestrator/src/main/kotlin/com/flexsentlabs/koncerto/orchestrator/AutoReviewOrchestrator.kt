@@ -8,7 +8,7 @@ import com.flexsentlabs.koncerto.core.tracker.TrackerClient
 import com.flexsentlabs.koncerto.deploy.DeployConfig
 import com.flexsentlabs.koncerto.deploy.DeployResult
 import com.flexsentlabs.koncerto.deploy.DemoFailureReporter
-import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
+import com.flexsentlabs.koncerto.deploy.ProjectDeployer
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
@@ -21,6 +21,20 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Instant
 
+data class GhProcessResult(val exitCode: Int, val output: String)
+
+typealias GhProcessRunner = (command: List<String>, workDir: Path) -> GhProcessResult
+
+private val defaultGhProcessRunner: GhProcessRunner = { command, workDir ->
+    val pb = ProcessBuilder(command)
+        .directory(workDir.toFile())
+        .redirectErrorStream(true)
+    val proc = pb.start()
+    val output = proc.inputStream.bufferedReader().use { it.readText() }
+    proc.waitFor()
+    GhProcessResult(proc.exitValue(), output)
+}
+
 class AutoReviewOrchestrator(
     private val agentRunner: AgentRunner,
     private val workspaceManager: WorkspaceManager,
@@ -32,10 +46,11 @@ class AutoReviewOrchestrator(
     private val logger: StructuredLogger,
     private val workflowCache: WorkflowCache? = null,
     private val onReviewPassed: (suspend (Issue, targetUrl: String?) -> String?)? = null,
-    private val targetProjectDeployer: TargetProjectDeployer? = null,
+    private val targetProjectDeployer: ProjectDeployer? = null,
     private val deployRepoFullName: String? = null,
     private val demoFailureReporter: DemoFailureReporter? = null,
-    private val demoScenarioGenerator: DemoScenarioGenerator? = null
+    private val demoScenarioGenerator: DemoScenarioGenerator? = null,
+    private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner
 ) {
     private val reviewStage: StageAgentConfig?
         get() = projectConfig.agent.stages["in review"]
@@ -191,21 +206,19 @@ class AutoReviewOrchestrator(
             val bodyFile = ws.path.resolve(".review-body.txt")
             bodyFile.toFile().writeText(body)
             try {
-                val pb = ProcessBuilder("gh", "pr", "comment", prNumber.toString(), "--repo", repo, "--body-file", bodyFile.toString())
-                    .directory(ws.path.toFile())
-                    .redirectErrorStream(true)
-                val proc = pb.start()
-                proc.waitFor()
-                val output = proc.inputStream.bufferedReader().use { it.readText() }
-                if (proc.exitValue() == 0) {
-                    val commentUrl = output.trim().ifBlank { "(no url)" }
+                val result = ghProcessRunner(
+                    listOf("gh", "pr", "comment", prNumber.toString(), "--repo", repo, "--body-file", bodyFile.toString()),
+                    ws.path
+                )
+                if (result.exitCode == 0) {
+                    val commentUrl = result.output.trim().ifBlank { "(no url)" }
                     logger.info("pr_review_comment_posted", mapOf(
                         "issue_id" to issue.id,
                         "issue_identifier" to issue.identifier,
                         "comment_url" to commentUrl
                     ))
                 } else {
-                    val err = output.take(200)
+                    val err = result.output.take(200)
                     logger.warn("pr_review_comment_failed", mapOf(
                         "issue_id" to issue.id,
                         "error" to err
@@ -223,6 +236,12 @@ class AutoReviewOrchestrator(
     }
 
     private suspend fun handleReviewExhaustion(issue: Issue, totalAttempts: Int) {
+        try {
+            linearClient.createComment(issue.id, "Blocked: review gate failed after $totalAttempts attempt(s)")
+        } catch (e: Exception) {
+            logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+
         try {
             val blockedStateId = linearClient.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
             if (blockedStateId != null) {
@@ -337,13 +356,12 @@ class AutoReviewOrchestrator(
     private fun resolvePrNumber(workspacePath: Path): Int? {
         val repo = resolveRepoFullName(workspacePath) ?: return null
         return try {
-            val pb = ProcessBuilder("gh", "pr", "view", "--repo", repo, "--json", "number")
-                .directory(workspacePath.toFile())
-                .redirectErrorStream(true)
-                .start()
-            val output = pb.inputStream.bufferedReader().use { it.readText() }
-            if (pb.waitFor() == 0) {
-                val match = Regex(""""number":(\d+)""").find(output)
+            val result = ghProcessRunner(
+                listOf("gh", "pr", "view", "--repo", repo, "--json", "number"),
+                workspacePath
+            )
+            if (result.exitCode == 0) {
+                val match = Regex(""""number":(\d+)""").find(result.output)
                 match?.groupValues?.get(1)?.toIntOrNull()
             } else null
         } catch (_: Exception) { null }

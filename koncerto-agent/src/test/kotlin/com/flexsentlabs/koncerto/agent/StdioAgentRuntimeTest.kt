@@ -8,10 +8,6 @@ import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.nio.file.Files
-import java.util.Collections
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.concurrent.thread
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 
@@ -20,21 +16,6 @@ class StdioAgentRuntimeTest {
     private fun noopLogger() = StructuredLogger(listOf(object : LogSink {
         override fun write(line: String) {}
     }))
-
-    private fun collectEvents(runtime: OpencodeRuntime, timeoutMs: Long = 5_000): List<AgentEvent> {
-        val collected = Collections.synchronizedList(mutableListOf<AgentEvent>())
-        val collector = thread(start = true, isDaemon = true, name = "stdio-events") {
-            runBlocking {
-                runtime.events().collect { ev ->
-                    collected += ev
-                    cancel()
-                }
-            }
-        }
-        collector.join(timeoutMs)
-        if (collector.isAlive) collector.interrupt()
-        return collected.toList()
-    }
 
     @Test
     fun `isAlive reflects process lifecycle`() {
@@ -52,28 +33,15 @@ class StdioAgentRuntimeTest {
         val script = """
             echo 'stdout line'
             echo 'stderr line' >&2
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
 
-        val outputLines = CopyOnWriteArrayList<String>()
-        val collector = thread(start = true, isDaemon = true) {
-            runBlocking {
-                runtime.output.collect { line -> outputLines += line }
-            }
+        val outputLines = AgentRuntimeTestSupport.collectOutputDuring(runtime) {
+            runtime.start()
         }
 
-        runBlocking { runtime.start() }
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline &&
-               !(outputLines.any { it.contains("stdout line") } &&
-                 outputLines.any { it.contains("stderr line") })) {
-            Thread.sleep(50)
-        }
         runtime.stop()
-        collector.interrupt()
-        collector.join(1_000)
-
         assertThat(outputLines.any { it.contains("stdout line") }).isTrue()
         assertThat(outputLines.any { it.contains("stderr line") }).isTrue()
     }
@@ -82,28 +50,17 @@ class StdioAgentRuntimeTest {
     fun `writeRaw sends data to process`() {
         val ws = Files.createTempDirectory("stdio-write-")
         val runtime = OpencodeRuntime("cat", ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val outputLines = CopyOnWriteArrayList<String>()
-        val collector = thread(start = true, isDaemon = true) {
-            runBlocking {
-                runtime.output.collect { line -> outputLines += line }
-            }
+        val outputLines = AgentRuntimeTestSupport.collectOutputDuring(
+            runtime,
+            predicate = { lines -> lines.any { it.contains("test-data") } },
+        ) {
+            runtime.start()
+            runtime.writeRaw("test-data")
+            runtime.closeStdin()
         }
 
-        // close stdin immediately after write — cat will flush and echo "test-data"
-        // once bash finishes loading its login profile and exec's cat
-        runtime.writeRaw("test-data")
-        runtime.closeStdin()
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline &&
-               !outputLines.any { it.contains("test-data") }) {
-            Thread.sleep(50)
-        }
         runtime.stop()
-        collector.interrupt()
-        collector.join(1_000)
-
         assertThat(outputLines.any { it.contains("test-data") }).isTrue()
     }
 
@@ -133,26 +90,20 @@ class StdioAgentRuntimeTest {
     fun `sendMessage sends agent message request`() {
         val ws = Files.createTempDirectory("stdio-sendmsg-")
         val runtime = OpencodeRuntime("cat", ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val outputLines = CopyOnWriteArrayList<String>()
-        val collector = thread(start = true, isDaemon = true) {
-            runBlocking {
-                runtime.output.collect { line -> outputLines += line }
-            }
+        val outputLines = AgentRuntimeTestSupport.collectOutputDuring(
+            runtime,
+            predicate = { lines ->
+                lines.any { it.contains("\"method\":\"agent/message\"") } &&
+                    lines.any { it.contains("\"to_agent_id\":\"target-agent\"") }
+            },
+        ) {
+            runtime.start()
+            runtime.sendMessage("target-agent", "test payload")
+            runtime.closeStdin()
         }
 
-        runtime.sendMessage("target-agent", "test payload")
-        runtime.closeStdin()
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline &&
-               !outputLines.any { it.contains("\"method\":\"agent/message\"") }) {
-            Thread.sleep(50)
-        }
         runtime.stop()
-        collector.interrupt()
-        collector.join(1_000)
-
         assertThat(outputLines.any { it.contains("\"method\":\"agent/message\"") }).isTrue()
         assertThat(outputLines.any { it.contains("\"to_agent_id\":\"target-agent\"") }).isTrue()
     }
@@ -162,13 +113,15 @@ class StdioAgentRuntimeTest {
         val ws = Files.createTempDirectory("stdio-amsg-")
         val script = """
             printf '%s\n' '{"jsonrpc":"2.0","method":"agent/message","params":{"from_agent_id":"agent-1","payload":"hello","message_id":"msg-1"}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
+
         val event = collected.filterIsInstance<AgentEvent.AgentMessage>().firstOrNull()
         assertThat(event).isNotNull()
         assertThat(event!!.fromAgentId).isEqualTo("agent-1")
@@ -181,13 +134,15 @@ class StdioAgentRuntimeTest {
         val ws = Files.createTempDirectory("stdio-jsonl-ts-")
         val script = """
             printf '%s\n' '{"type":"thread.started","thread_id":"th-1"}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
+
         val event = collected.filterIsInstance<AgentEvent.SessionStarted>().firstOrNull()
         assertThat(event).isNotNull()
         assertThat(event!!.threadId).isEqualTo("th-1")
@@ -198,13 +153,15 @@ class StdioAgentRuntimeTest {
         val ws = Files.createTempDirectory("stdio-jsonl-tc-")
         val script = """
             printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":25,"total_tokens":75}}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
+
         val event = collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()
         assertThat(event).isNotNull()
         assertThat(event!!.usage).isNotNull()
@@ -217,13 +174,15 @@ class StdioAgentRuntimeTest {
         val ws = Files.createTempDirectory("stdio-jsonl-err-")
         val script = """
             printf '%s\n' '{"type":"error","message":"something went wrong"}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
-        runBlocking { runtime.start() }
 
-        val collected = collectEvents(runtime)
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
         runtime.stop()
+
         val event = collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()
         assertThat(event).isNotNull()
         assertThat(event!!.error).isEqualTo("something went wrong")
@@ -236,30 +195,75 @@ class StdioAgentRuntimeTest {
             printf '%s\n' '{"type":"turn.started"}'
             printf '%s\n' '{"type":"item.started"}'
             printf '%s\n' '{"type":"item.completed"}'
-            sleep 0.2
+            sleep 0.5
         """.trimIndent()
         val runtime = OpencodeRuntime(script, ws, noopLogger())
 
-        val outputLines = CopyOnWriteArrayList<String>()
-        val collector = thread(start = true, isDaemon = true) {
-            runBlocking {
-                runtime.output.collect { line -> outputLines += line }
-            }
+        val outputLines = AgentRuntimeTestSupport.collectOutputDuring(
+            runtime,
+            predicate = { lines ->
+                lines.any { it.contains("turn.started") } &&
+                    lines.any { it.contains("item.started") } &&
+                    lines.any { it.contains("item.completed") }
+            },
+        ) {
+            runtime.start()
         }
 
-        runBlocking { runtime.start() }
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline &&
-               !outputLines.any { it.contains("turn.started") }) {
-            Thread.sleep(50)
-        }
         runtime.stop()
-        collector.interrupt()
-        collector.join(1_000)
-
         assertThat(outputLines.any { it.contains("turn.started") }).isTrue()
         assertThat(outputLines.any { it.contains("item.started") }).isTrue()
         assertThat(outputLines.any { it.contains("item.completed") }).isTrue()
+    }
+
+    @Test
+    fun `JSONL stream ending without turn completed emits synthetic TurnCompleted`() {
+        val ws = Files.createTempDirectory("stdio-jsonl-synthetic-")
+        val script = """
+            printf '%s\n' '{"type":"turn.started"}'
+            sleep 0.5
+        """.trimIndent()
+        val runtime = OpencodeRuntime(script, ws, noopLogger())
+
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
+        runtime.stop()
+
+        assertThat(collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `malformed stdout emits Malformed event`() {
+        val ws = Files.createTempDirectory("stdio-malformed-")
+        val script = """
+            echo 'not-json-at-all'
+            sleep 0.5
+        """.trimIndent()
+        val runtime = OpencodeRuntime(script, ws, noopLogger())
+
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
+        runtime.stop()
+
+        val event = collected.filterIsInstance<AgentEvent.Malformed>().firstOrNull()
+        assertThat(event).isNotNull()
+        assertThat(event!!.raw).isEqualTo("not-json-at-all")
+    }
+
+    @Test
+    fun `startup failure emits StartupFailed event`() {
+        val ws = java.nio.file.Path.of("/nonexistent/workspace/path/that/does/not/exist")
+        val runtime = OpencodeRuntime("echo hello", ws, noopLogger())
+
+        val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            val started = runtime.start()
+            assertThat(started).isFalse()
+        }
+        runtime.stop()
+
+        assertThat(collected.filterIsInstance<AgentEvent.StartupFailed>().firstOrNull()).isNotNull()
     }
 
     @Test
@@ -270,7 +274,5 @@ class StdioAgentRuntimeTest {
         assertThat(runtime.isAlive()).isTrue()
         runtime.stop()
         assertThat(runtime.isAlive()).isFalse()
-        val collected = collectEvents(runtime, timeoutMs = 2_000)
-        assertThat(collected).isNotNull()
     }
 }

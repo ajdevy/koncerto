@@ -65,6 +65,22 @@ TODO ──dispatch()───┤                                               
 | `IN_REVIEW` | `TODO` | Review fails | Auto-review verdict is ❌ FAIL, re-dispatch |
 | `IN_REVIEW` | `DONE` | Review passes + no human review stage | Max review attempts exceeded |
 | `READY_FOR_HUMAN_REVIEW` | `DONE` | Human completes review | Manual state transition in Linear |
+| `ANY` | `BLOCKED` | Exhaustion or clarification needed | See **Blocked State Contract** below |
+
+### Blocked State Contract
+
+> **Invariant:** Every automated transition to the `Blocked` state **must** post a Linear comment on the issue before calling `updateIssueState`. The comment is the authoritative record of why the issue was blocked.
+
+Comment posting is best-effort — a failure to create the comment is logged but does not prevent the state transition. The three automated block paths and their required comments are:
+
+| Code Site | Trigger | Comment message |
+|-----------|---------|----------------|
+| `ModelRetryHandler.handleExhaustion` | All free models exhausted | `"Blocked: all free models exhausted after N retries (tried: …)"` |
+| `AutoReviewOrchestrator.handleReviewExhaustion` | Review gate failed after max attempts | `"Blocked: review gate failed after N attempt(s)"` |
+| `DispatchService.scheduleRetry` | Agent retry limit reached | `"Blocked: retry limit reached. Last error: …"` |
+| `DispatchService.handleClarification` | Clarification needed (human writes the comment) | Human-authored content from `.koncerto/clarification.md` |
+
+The last case (clarification) has always been compliant — the comment content comes directly from the clarification file.
 
 ### Extended Flow with Auto-Review
 

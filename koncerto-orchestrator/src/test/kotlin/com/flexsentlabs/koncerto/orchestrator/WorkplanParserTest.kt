@@ -70,6 +70,28 @@ class WorkplanParserTest {
     }
 
     @Test
+    fun `fail on empty subtasks list`(@TempDir tempDir: Path) {
+        val workplanDir = tempDir.resolve("_koncerto")
+        Files.createDirectories(workplanDir)
+        Files.writeString(workplanDir.resolve("workplan.json"), """{"issueId":"KONC-123","subtasks":[]}""")
+        val result = parser.parse(tempDir)
+        assertThat(result).isInstanceOf(Result.Failure::class)
+        val error = (result as Result.Failure).error
+        assertThat(error).isInstanceOf(ParseError.INVALID::class)
+        assertThat((error as ParseError.INVALID).message).isEqualTo("subtasks list is empty")
+    }
+
+    @Test
+    fun `fail on malformed JSON`(@TempDir tempDir: Path) {
+        val workplanDir = tempDir.resolve("_koncerto")
+        Files.createDirectories(workplanDir)
+        Files.writeString(workplanDir.resolve("workplan.json"), "{not valid json")
+        val result = parser.parse(tempDir)
+        assertThat(result).isInstanceOf(Result.Failure::class)
+        assertThat((result as Result.Failure).error).isInstanceOf(ParseError.INVALID::class)
+    }
+
+    @Test
     fun `fail on dependsOn referencing nonexistent ID`(@TempDir tempDir: Path) {
         val manifest = SubtaskManifest(
             issueId = "KONC-123",

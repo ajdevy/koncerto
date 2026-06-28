@@ -23,7 +23,7 @@ projects:
         - "In Review"
       terminal_states:
         - Done
-      blocked_state: "Blocked"
+      blocked_state: "Blocked"  # Invariant: every automated transition to this state posts a comment first (see architecture/issue-lifecycle-state-machine.md)
       project_admin: "user-1"
     reviewer:
       kind: human
@@ -36,6 +36,11 @@ projects:
         enabled: false
       max_turns: 5
       max_review_attempts: 3
+      limit_pause:
+        enabled: true
+        linear_comments: true
+        claude_default_resume_ms: 18000000
+        codex_default_resume_ms: 18000000
       stages:
         Todo:
           prompt: prompts/implement.md

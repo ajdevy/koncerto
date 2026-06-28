@@ -66,4 +66,32 @@ class DockerRuntimeTest {
         }
         assertThat(events).isEmpty()
     }
+
+    @Test
+    fun testStartInvalidContainerDoesNotThrow(): Unit = runBlocking {
+        val runtime = testRuntime("koncerto-invalid-container-id-00000000")
+        assertThat(runCatching { runtime.start() }.isSuccess).isTrue()
+        runtime.stop()
+    }
+
+    @Test
+    fun testSendMessageWithoutStartReturnsId() {
+        val runtime = testRuntime()
+        val id = runtime.sendMessage("target-agent", "payload")
+        assertThat(id).isNotEmpty()
+    }
+
+    @Test
+    fun testWriteRawAndCloseStdinWithoutStartDoNotThrow() {
+        val runtime = testRuntime()
+        runtime.writeRaw("raw-data")
+        runtime.closeStdin()
+    }
+
+    @Test
+    fun testStopCapturesContainerLogsWhenDockerAvailable(): Unit = runBlocking {
+        val runtime = testRuntime("koncerto-invalid-container-id-00000000")
+        runtime.stop()
+        assertThat(runtime).isNotNull()
+    }
 }

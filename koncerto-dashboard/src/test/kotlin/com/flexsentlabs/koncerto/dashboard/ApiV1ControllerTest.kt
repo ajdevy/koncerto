@@ -1,6 +1,7 @@
 package com.flexsentlabs.koncerto.dashboard
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
@@ -9,6 +10,7 @@ import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import assertk.assertions.hasSize
+import com.flexsentlabs.koncerto.agent.AgentAuthChecker
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
@@ -47,7 +49,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 
 private fun createOrchestrator(
     config: ServiceConfig,
@@ -94,6 +98,26 @@ private fun createOrchestrator(
 }
 
 class ApiV1ControllerTest {
+
+    @AfterEach
+    fun resetLoginState() {
+        AgentAuthChecker.markUnauthenticated("claude")
+        AgentAuthChecker.markUnauthenticated("codex")
+        com.flexsentlabs.koncerto.agent.ClaudeAuthSupport.clearToken()
+        val controllerClass = ApiV1Controller::class.java
+        listOf("codexProcess", "claudeProcess").forEach { name ->
+            val field = controllerClass.getDeclaredField(name)
+            field.isAccessible = true
+            (field.get(null) as? Process)?.destroyForcibly()
+            field.set(null, null)
+        }
+        listOf("codexUrl", "codexCode", "claudeUrl", "claudeCode", "claudeLoginOutput").forEach { name ->
+            val field = controllerClass.getDeclaredField(name)
+            field.isAccessible = true
+            field.set(null, null)
+        }
+        AgentAuthChecker.markAuthenticated("codex")
+    }
 
     private fun minimalConfig() = ServiceConfig(
         pollIntervalMs = 30000,
@@ -714,6 +738,408 @@ class ApiV1ControllerTest {
         assertThat(snapshot.tokenTotals.inputTokens).isEqualTo(100)
         assertThat(snapshot.tokenTotals.outputTokens).isEqualTo(50)
         assertThat(snapshot.tokenTotals.totalTokens).isEqualTo(150)
+    }
+
+    @Test
+    fun `state aggregates running entries across multiple projects`() {
+        val stateA = RuntimeState()
+        val stateB = RuntimeState()
+        stateA.running["1"] = RunningEntry(
+            issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null),
+            threadId = "t-1", turnId = "u-1", startedAt = Instant.now(), lastHeartbeatAt = null
+        )
+        stateB.running["2"] = RunningEntry(
+            issue = Issue("2", "XYZ-2", "Other", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null),
+            threadId = "t-2", turnId = "u-2", startedAt = Instant.now(), lastHeartbeatAt = null
+        )
+        val config = minimalConfig().copy(
+            projects = mapOf(
+                "proj-a" to minimalConfig().projects.getValue("default"),
+                "proj-b" to minimalConfig().projects.getValue("default")
+            )
+        )
+        val orchestrator = Orchestrator(
+            config = config,
+            linearClientFactory = { createOrchestrator(config, stateA).projects.getValue("proj-a").linear },
+            workspaceManagerFactory = { WorkspaceManager(Paths.get("/tmp"), HookExecutor { _, _ -> }) },
+            agentRunner = object : AgentRunner {
+                override fun events(): Flow<AgentEvent> = MutableSharedFlow<AgentEvent>().asSharedFlow()
+                override suspend fun run(
+                    issue: Issue, attempt: Int?, prompt: String,
+                    agentKindOverride: String?, commandOverride: String?,
+                    modelOverride: String?, effortOverride: String?,
+                    turnTimeoutMs: Long?, stallTimeoutMs: Long?
+                ): EmptyResult<IllegalStateException> = Result.Success(Unit)
+            },
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Job() + Dispatchers.Unconfined),
+            runtimeStates = mapOf("proj-a" to stateA, "proj-b" to stateB),
+            metricsRepository = null
+        )
+        val controller = ApiV1Controller(config, orchestrator)
+        val snapshot = controller.state().block()
+        assertThat(snapshot!!.running.size).isEqualTo(2)
+        assertThat(snapshot.running.map { it.projectSlug }.toSet()).isEqualTo(setOf("proj-a", "proj-b"))
+    }
+
+    @Test
+    fun `models uses requested project slug`() {
+        val stages = mapOf(
+            "todo" to StageAgentConfig(
+                prompt = "impl.md", model = "gpt-4", effort = null, maxConcurrent = null,
+                agentKind = "codex", command = null, onCompleteState = null
+            )
+        )
+        val pc = minimalConfig().projects["default"]!!
+        val config = minimalConfig().copy(
+            projects = mapOf(
+                "alpha" to pc.copy(agent = pc.agent.copy(kind = "codex", stages = stages)),
+                "beta" to pc.copy(agent = pc.agent.copy(kind = "opencode", stages = emptyMap()))
+            )
+        )
+        val controller = ApiV1Controller(config, createOrchestrator(config, RuntimeState(), slug = "alpha"))
+        val result = controller.models("alpha").block()
+        assertThat(result!!.agentKind).isEqualTo("codex")
+        assertThat(result.totalStages).isEqualTo(1)
+        assertThat(result.configuredStages[0].model).isEqualTo("gpt-4")
+    }
+
+    @Test
+    fun `withTimeout reads stream until deadline`() {
+        val method = ApiV1Controller::class.java.getDeclaredMethod(
+            "withTimeout",
+            java.io.InputStream::class.java,
+            Long::class.javaPrimitiveType
+        )
+        method.isAccessible = true
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val input = "hello https://example.com world".byteInputStream()
+        val text = method.invoke(controller, input, 1000L) as String
+        assertThat(text.contains("hello")).isTrue()
+    }
+
+    @Test
+    fun `getAgentAuthStatus returns configured agent kinds`() {
+        val cfg = minimalConfig().copy(
+            projects = mapOf(
+                "default" to minimalConfig().projects.values.first().copy(
+                    agent = minimalConfig().projects.values.first().agent.copy(
+                        stages = mapOf(
+                            "todo" to StageAgentConfig(
+                                prompt = null, model = null, effort = null, maxConcurrent = null,
+                                agentKind = "claude", command = null, onCompleteState = null,
+                                agent = null, followUp = null, crossProjectFollowUp = null
+                            )
+                        )
+                    )
+                )
+            )
+        )
+        val controller = ApiV1Controller(cfg, createOrchestrator(cfg, RuntimeState()))
+        val response = controller.getAgentAuthStatus()
+        assertThat(response.statusCode.value()).isEqualTo(200)
+        assertThat(response.body!!.any { it.agent == "claude" }).isTrue()
+    }
+
+    @Test
+    fun `getCodexLoginStatus returns idle when no login process`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getCodexLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("idle")
+    }
+
+    @Test
+    fun `getCodexLoginStatus returns completed when process exited`() {
+        AgentAuthChecker.markUnauthenticated("codex")
+        val process = ProcessBuilder("true").start()
+        process.waitFor()
+        setControllerField("codexProcess", process)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getCodexLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("completed")
+        assertThat(AgentAuthChecker.isAuthenticated("codex")).isTrue()
+    }
+
+    @Test
+    fun `getClaudeLoginStatus extracts token when process exited`(@TempDir tokenDir: java.nio.file.Path) {
+        AgentAuthChecker.markUnauthenticated("claude")
+        val tokenPath = tokenDir.resolve("claude-oauth-token")
+        System.setProperty("koncerto.claude.auth.token.path", tokenPath.toString())
+        try {
+            setControllerField(
+                "claudeLoginOutput",
+                """
+                Your OAuth token
+                sk-ant-oat01-testtoken123456789
+                Store this token securely
+                """.trimIndent()
+            )
+            val process = ProcessBuilder("true").start()
+            process.waitFor()
+            setControllerField("claudeProcess", process)
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.getClaudeLoginStatus()
+            assertThat(response.body!!.state).isEqualTo("completed")
+            assertThat(AgentAuthChecker.isAuthenticated("claude")).isTrue()
+        } finally {
+            System.clearProperty("koncerto.claude.auth.token.path")
+        }
+    }
+
+    @Test
+    fun `getCodexLoginStatus returns pending when process alive`() {
+        AgentAuthChecker.markUnauthenticated("codex")
+        val process = ProcessBuilder("sleep", "30").start()
+        setControllerField("codexProcess", process)
+        setControllerField("codexUrl", "https://auth.example.com")
+        setControllerField("codexCode", "ABCD-1234")
+        try {
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.getCodexLoginStatus()
+            assertThat(response.body!!.state).isEqualTo("pending")
+            assertThat(response.body!!.url).isEqualTo("https://auth.example.com")
+        } finally {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
+    @Test
+    fun `startCodexLogin returns pending when login already in progress`() {
+        AgentAuthChecker.markUnauthenticated("codex")
+        val process = ProcessBuilder("sleep", "30").start()
+        setControllerField("codexProcess", process)
+        setControllerField("codexUrl", "https://auth.example.com")
+        setControllerField("codexCode", "ABCD-1234")
+        try {
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.startCodexLogin().block()
+            assertThat(response!!.statusCode.value()).isEqualTo(200)
+            assertThat(response.body!!.state).isEqualTo("pending")
+            assertThat(response.body!!.url).isEqualTo("https://auth.example.com")
+        } finally {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
+    @Test
+    fun `startCodexLogin returns conflict when alive process has no url`() {
+        AgentAuthChecker.markUnauthenticated("codex")
+        val process = ProcessBuilder("sleep", "30").start()
+        setControllerField("codexProcess", process)
+        try {
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.startCodexLogin().block()
+            assertThat(response!!.statusCode.value()).isEqualTo(409)
+        } finally {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
+    @Test
+    fun `cancelCodexLogin destroys active process`() {
+        val process = ProcessBuilder("sleep", "30").start()
+        setControllerField("codexProcess", process)
+        setControllerField("codexUrl", "https://auth.example.com")
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.cancelCodexLogin()
+        assertThat(response.statusCode.value()).isEqualTo(200)
+        assertThat(process.isAlive).isFalse()
+    }
+
+    @Test
+    fun `getClaudeLoginStatus returns pending when process alive`() {
+        AgentAuthChecker.markUnauthenticated("claude")
+        val process = ProcessBuilder("sleep", "30").start()
+        setControllerField("claudeProcess", process)
+        setControllerField("claudeUrl", "https://claude.example.com")
+        setControllerField("claudeCode", "CLDE-0000")
+        try {
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.getClaudeLoginStatus()
+            assertThat(response.body!!.state).isEqualTo("pending")
+            assertThat(response.body!!.url).isEqualTo("https://claude.example.com")
+        } finally {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
+    @Test
+    fun `submitClaudeCode returns process_exited when login finished`() {
+        val process = ProcessBuilder("true").start()
+        process.waitFor()
+        setControllerField("claudeProcess", process)
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.submitClaudeCode(mapOf("code" to "1234-ABCD"))
+        assertThat(response.body!!.state).isEqualTo("process_exited")
+    }
+
+    @Test
+    fun `submitClaudeCode writes code to active process`() {
+        val process = ProcessBuilder("cat").start()
+        setControllerField("claudeProcess", process)
+        setControllerField("claudeUrl", "https://claude.example.com")
+        setControllerField("claudeCode", "CLDE-0000")
+        try {
+            val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+            val response = controller.submitClaudeCode(mapOf("code" to "1234-ABCD"))
+            assertThat(response.statusCode.value()).isEqualTo(200)
+            assertThat(response.body!!.state).isEqualTo("pending")
+        } finally {
+            process.destroyForcibly()
+            process.waitFor()
+        }
+    }
+
+    @Test
+    fun `cancelCodexLogin returns ok`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.cancelCodexLogin()
+        assertThat(response.statusCode.value()).isEqualTo(200)
+    }
+
+    @Test
+    fun `cancelClaudeLogin returns ok`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.cancelClaudeLogin()
+        assertThat(response.statusCode.value()).isEqualTo(200)
+    }
+
+    @Test
+    fun `getClaudeLoginStatus returns completed when authenticated`() {
+        AgentAuthChecker.markAuthenticated("claude")
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getClaudeLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("completed")
+    }
+
+    @Test
+    fun `startClaudeLogin returns completed when already authenticated`() {
+        AgentAuthChecker.markAuthenticated("claude")
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.startClaudeLogin().block()
+        assertThat(response!!.body!!.state).isEqualTo("completed")
+    }
+
+    @Test
+    fun `submitClaudeCode returns bad request without code`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.submitClaudeCode(emptyMap())
+        assertThat(response.statusCode.value()).isEqualTo(400)
+        assertThat(response.body!!.state).isEqualTo("error")
+    }
+
+    @Test
+    fun `submitClaudeCode returns no_process when login not started`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.submitClaudeCode(mapOf("code" to "1234-ABCD"))
+        assertThat(response.body!!.state).isEqualTo("no_process")
+    }
+
+    @Test
+    fun `StateSnapshot and RunningRow DTOs hold values`() {
+        val row = ApiV1Controller.RunningRow(
+            issueId = "1",
+            issueIdentifier = "ABC-1",
+            threadId = "t-1",
+            turnId = "u-1",
+            turnCount = 4,
+            inputTokens = 200,
+            outputTokens = 100,
+            totalTokens = 300,
+            url = "https://linear.app/issue/ABC-1",
+            projectSlug = "default",
+            paused = true
+        )
+        val snapshot = ApiV1Controller.StateSnapshot(
+            running = listOf(row),
+            retrying = emptyList(),
+            blocked = emptyList(),
+            tokenTotals = ApiV1Controller.Totals(200, 100, 300, 42),
+            rateLimits = mapOf("gpt-4" to "active")
+        )
+        assertThat(snapshot.running.single().issueIdentifier).isEqualTo("ABC-1")
+        assertThat(snapshot.running.single().paused).isTrue()
+        assertThat(snapshot.tokenTotals.totalTokens).isEqualTo(300)
+        assertThat(snapshot.tokenTotals.secondsRunning).isEqualTo(42)
+        assertThat(snapshot.rateLimits["gpt-4"]).isEqualTo("active")
+    }
+
+    @Test
+    fun `RetryingRow BlockedRow and auth DTOs hold values`() {
+        val retrying = ApiV1Controller.RetryingRow("1", "ABC-1", 2, 1_700_000_000_000L, "timeout")
+        val blocked = ApiV1Controller.BlockedRow(
+            issueId = "2",
+            issueIdentifier = "DEF-2",
+            title = "Blocked task",
+            url = "https://linear.app/issue/DEF-2",
+            blockedBy = listOf("ABC-1")
+        )
+        val auth = ApiV1Controller.AgentAuthStatus("codex", authenticated = true, needsAuth = true)
+        val device = ApiV1Controller.DeviceAuthResponse("https://auth.example.com", "ABCD-1234")
+        val login = ApiV1Controller.CodexLoginStatus("pending", device.url, device.code)
+        val rateLimit = ApiV1Controller.RateLimitStatsEntry(
+            availableTokens = 10,
+            requestsLastMinute = 2,
+            requestsLastHour = 15,
+            limitPerMinute = 60,
+            limitPerHour = 1000
+        )
+        assertThat(retrying.attempt).isEqualTo(2)
+        assertThat(blocked.blockedBy).containsExactly("ABC-1")
+        assertThat(auth.agent).isEqualTo("codex")
+        assertThat(device.code).isEqualTo("ABCD-1234")
+        assertThat(login.state).isEqualTo("pending")
+        assertThat(rateLimit.availableTokens).isEqualTo(10)
+    }
+
+    @Test
+    fun `getAgentAuthStatus returns default agent kinds when stages empty`() {
+        val cfg = minimalConfig()
+        val controller = ApiV1Controller(cfg, createOrchestrator(cfg, RuntimeState()))
+        val response = controller.getAgentAuthStatus()
+        assertThat(response.body!!.map { it.agent }).containsExactly("codex", "opencode", "claude")
+    }
+
+    @Test
+    fun `getClaudeLoginStatus returns idle when no login process`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.getClaudeLoginStatus()
+        assertThat(response.body!!.state).isEqualTo("idle")
+    }
+
+    @Test
+    fun `submitClaudeCode returns write_failed when stdin write throws`() {
+        val fakeProcess = object : Process() {
+            override fun getOutputStream() = object : java.io.OutputStream() {
+                override fun write(b: Int) { throw java.io.IOException("write failed") }
+                override fun write(b: ByteArray, off: Int, len: Int) { throw java.io.IOException("write failed") }
+            }
+            override fun getInputStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun getErrorStream() = java.io.ByteArrayInputStream(ByteArray(0))
+            override fun waitFor() = 0
+            override fun waitFor(timeout: Long, unit: java.util.concurrent.TimeUnit) = true
+            override fun exitValue() = 0
+            override fun destroy() {}
+            override fun isAlive() = true
+        }
+        setControllerField("claudeProcess", fakeProcess)
+        setControllerField("claudeUrl", "https://claude.example.com")
+        setControllerField("claudeCode", "CLDE-0000")
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val response = controller.submitClaudeCode(mapOf("code" to "1234-ABCD"))
+        assertThat(response.statusCode.value()).isEqualTo(500)
+        assertThat(response.body!!.state).isEqualTo("write_failed")
+    }
+
+    private fun setControllerField(name: String, value: Any?) {
+        val field = ApiV1Controller::class.java.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(null, value)
     }
 }
 

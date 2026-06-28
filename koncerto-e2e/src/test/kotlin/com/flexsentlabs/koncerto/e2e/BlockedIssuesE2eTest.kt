@@ -17,7 +17,9 @@ import com.flexsentlabs.koncerto.core.model.BlockerRef
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.result.EmptyResult
 import com.flexsentlabs.koncerto.core.result.Result
+import com.flexsentlabs.koncerto.linear.DefaultLinearClient
 import com.flexsentlabs.koncerto.linear.LinearClient
+import com.flexsentlabs.koncerto.linear.LinearGraphQLClient
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import com.flexsentlabs.koncerto.orchestrator.RuntimeState
@@ -34,6 +36,12 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 
@@ -112,6 +120,64 @@ class BlockedIssuesE2eTest {
         }
     }
 
+    @Test
+    fun `blocked issue is not dispatched when Linear GraphQL reports active blocker via inverseRelations`() = runBlocking {
+        val root = Files.createTempDirectory("koncerto-e2e-blocked-graphql-")
+        try {
+            val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+            val blockerNode = makeIssueNode("a", "FLE-52", "In Progress")
+            val blockedNode = makeIssueNodeWithBlocker("b", "FLE-53", "Todo", "a", "FLE-52", "In Progress")
+            val fakeGraphql = FakeLinearGraphqlClient(mutableListOf(blockerNode, blockedNode))
+            val linear = DefaultLinearClient(fakeGraphql, "proj")
+
+            val runner = CollectingE2eRunner()
+            val state = RuntimeState()
+            val cache = WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
+            val logger = StructuredLogger(emptyList())
+
+            val config = ServiceConfig(
+                pollIntervalMs = 200,
+                projects = mapOf("proj" to ProjectConfig(
+                    tracker = TrackerConfig(
+                        kind = "linear", endpoint = "x", apiKey = "k",
+                        projectSlug = "proj", requiredLabels = emptyList(),
+                        activeStates = listOf("Todo", "In Progress"),
+                        terminalStates = listOf("Done", "Closed"),
+                        blockedState = "Blocked", projectAdmin = null
+                    ),
+                    workspace = WorkspaceConfig(root = root.toString()),
+                    agent = AgentProjectConfig(maxConcurrentAgents = 10)
+                )),
+                hooks = HooksConfig(null, null, null, null, 60000),
+                gitConfig = GitConfig()
+            )
+
+            val orch = Orchestrator(
+                config = config,
+                linearClientFactory = { linear },
+                workspaceManagerFactory = { WorkspaceManager(root, HookExecutor { _, _ -> }) },
+                agentRunner = runner,
+                workflowCache = cache,
+                logger = logger,
+                scope = scope,
+                runtimeStates = mapOf("proj" to state)
+            )
+
+            orch.start()
+
+            waitFor({ runner.dispatched.any { it.identifier == "FLE-52" } }, 10000)
+
+            delay(600)
+            assertThat(runner.dispatched.any { it.identifier == "FLE-53" }).isFalse()
+            assertThat(state.isBlocked("b")).isTrue()
+
+            orch.stop()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private suspend fun waitFor(condition: () -> Boolean, timeoutMs: Long) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -173,5 +239,78 @@ private class CollectingE2eRunner : AgentRunner {
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Success(Unit)
+    }
+}
+
+private fun makeIssueNode(id: String, identifier: String, state: String): JsonObject = buildJsonObject {
+    put("id", JsonPrimitive(id))
+    put("identifier", JsonPrimitive(identifier))
+    put("title", JsonPrimitive("T-$identifier"))
+    put("description", JsonNull)
+    put("priority", JsonNull)
+    put("url", JsonNull)
+    put("branchName", JsonNull)
+    put("createdAt", JsonNull)
+    put("updatedAt", JsonNull)
+    put("state", buildJsonObject { put("name", JsonPrimitive(state)) })
+    put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+    put("children", buildJsonObject { put("nodes", buildJsonArray {}) })
+    put("blockedBy", buildJsonObject { put("nodes", buildJsonArray {}) })
+}
+
+private fun makeIssueNodeWithBlocker(
+    id: String, identifier: String, state: String,
+    blockerId: String, blockerIdentifier: String, blockerState: String
+): JsonObject = buildJsonObject {
+    put("id", JsonPrimitive(id))
+    put("identifier", JsonPrimitive(identifier))
+    put("title", JsonPrimitive("T-$identifier"))
+    put("description", JsonNull)
+    put("priority", JsonNull)
+    put("url", JsonNull)
+    put("branchName", JsonNull)
+    put("createdAt", JsonNull)
+    put("updatedAt", JsonNull)
+    put("state", buildJsonObject { put("name", JsonPrimitive(state)) })
+    put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+    put("children", buildJsonObject { put("nodes", buildJsonArray {}) })
+    put("blockedBy", buildJsonObject {
+        put("nodes", buildJsonArray {
+            add(buildJsonObject {
+                put("type", JsonPrimitive("blocks"))
+                put("issue", buildJsonObject {
+                    put("id", JsonPrimitive(blockerId))
+                    put("identifier", JsonPrimitive(blockerIdentifier))
+                    put("state", buildJsonObject { put("name", JsonPrimitive(blockerState)) })
+                })
+            })
+        })
+    })
+}
+
+private class FakeLinearGraphqlClient(
+    private val issueNodes: MutableList<JsonObject>
+) : LinearGraphQLClient("http://localhost:1", "fake-key") {
+
+    override suspend fun execute(query: String, variables: JsonObject): JsonObject {
+        if (query.contains("ProjectSlugId")) {
+            val projectId = (variables["projectId"] as? JsonPrimitive)?.content ?: "proj"
+            return buildJsonObject {
+                put("data", buildJsonObject {
+                    put("project", buildJsonObject { put("slugId", JsonPrimitive(projectId)) })
+                })
+            }
+        }
+        return buildJsonObject {
+            put("data", buildJsonObject {
+                put("issues", buildJsonObject {
+                    put("pageInfo", buildJsonObject {
+                        put("hasNextPage", JsonPrimitive(false))
+                        put("endCursor", JsonNull)
+                    })
+                    put("nodes", buildJsonArray { issueNodes.forEach { add(it) } })
+                })
+            })
+        }
     }
 }

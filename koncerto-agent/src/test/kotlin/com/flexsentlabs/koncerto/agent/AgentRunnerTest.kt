@@ -14,6 +14,8 @@ import com.flexsentlabs.koncerto.core.config.ProjectConfig
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
 import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
+import com.flexsentlabs.koncerto.core.errors.AgentErrorType
+import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.model.TokenUsage
 import com.flexsentlabs.koncerto.logging.LogSink
@@ -22,6 +24,7 @@ import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import java.nio.file.Files
+import java.nio.file.Path
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
@@ -363,4 +366,228 @@ class AgentRunnerTest {
         val result = runner.run(issue, attempt = null, prompt = "Hi", commandOverride = "false")
         assertThat(result).isNotNull()
     }
+
+    @Test
+    fun `runner uses docker container when creation succeeds`() = runBlocking {
+        val root = Files.createTempDirectory("agent-runner-docker-ok-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val config = sampleConfig(command = script, agentKind = "opencode")
+        val dockerConfig = DockerConfig(enabled = true, network = false)
+        AgentDockerFake.withFakeDocker(AgentDockerFake.agentDockerScript()) {
+            val runner = DefaultAgentRunner(
+                config, mgr, noopLogger(),
+                dockerConfig = dockerConfig,
+                maxConcurrentAgents = 2
+            )
+            runBlocking {
+                val result = runner.run(
+                    sampleIssue(), attempt = 1, prompt = "Hi",
+                    agentKindOverride = "opencode", commandOverride = script,
+                    turnTimeoutMs = 5000, stallTimeoutMs = 5000
+                )
+                assertThat(result.exceptionOrNull()).isNull()
+            }
+        }
+    }
+
+    @Test
+    fun `runner completes codex exec command via writeRaw path`() = runBlocking {
+        val root = Files.createTempDirectory("ar-codex-exec-")
+        val script = root.resolve("fake-codex.sh")
+        Files.writeString(
+            script,
+            """
+            #!/bin/bash
+            if [[ "${'$'}*" == *exec* ]]; then
+              read -r _ || true
+              echo '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}'
+              exit 0
+            fi
+            exit 1
+            """.trimIndent()
+        )
+        script.toFile().setExecutable(true)
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "codex exec --json", agentKind = "codex")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger(), maxRetries = 1)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Do the task",
+            agentKindOverride = "codex", commandOverride = "$script exec --json",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNull()
+    }
+
+    @Test
+    fun circuitBreakerBlocksRunWhenOpen() {
+        runBlocking {
+            val root = Files.createTempDirectory("ar-circuit-")
+            val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val breaker = com.flexsentlabs.koncerto.core.agent.AgentCircuitBreaker(failureThreshold = 1, resetTimeoutMs = 60_000)
+            val agentKey = "opencode:echo hi:default"
+            breaker.recordFailure(agentKey)
+            val config = sampleConfig(command = "echo hi", agentKind = "opencode")
+            val runner = DefaultAgentRunner(
+                config, mgr, noopLogger(),
+                circuitBreaker = breaker,
+                maxRetries = 1
+            )
+            val result = runner.run(
+                sampleIssue(), attempt = 1, prompt = "Hi",
+                agentKindOverride = "opencode", commandOverride = "echo hi",
+                turnTimeoutMs = 5000, stallTimeoutMs = 5000
+            )
+            assertThat(result.exceptionOrNull()?.message.orEmpty()).contains("circuit_breaker_open")
+        }
+    }
+
+    @Test
+    fun classifyOutputLineDetectsSubscriptionLimit() {
+        val root = Files.createTempDirectory("ar-classify-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val classifier = PatternErrorClassifier(
+            listOf(
+                PatternErrorClassifier.ClassificationPattern(
+                    regex = Regex("usage limit", RegexOption.IGNORE_CASE),
+                    build = { _, msg -> AgentErrorType.SubscriptionLimitError(details = msg) }
+                )
+            )
+        )
+        val runner = DefaultAgentRunner(sampleConfig(), mgr, noopLogger(), errorClassifier = classifier)
+        val method = DefaultAgentRunner::class.java.getDeclaredMethod(
+            "classifyOutputLine",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            java.util.concurrent.atomic.AtomicReference::class.java
+        )
+        method.isAccessible = true
+        val hit = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        method.invoke(runner, "You've hit your usage limit", "issue-1", "codex", hit)
+        assertThat(hit.get()).isNotNull()
+    }
+
+    @Test
+    fun `runner retries once before failing on persistent error`() = runBlocking {
+        val root = Files.createTempDirectory("ar-retry-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val config = sampleConfig(command = "false", agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger(), maxRetries = 2, retryDelayMs = 1)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = "false",
+            turnTimeoutMs = 2000, stallTimeoutMs = 2000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+    }
+
+    @Test
+    fun `runner skips pr when clarification file exists`() = runBlocking {
+        val root = Files.createTempDirectory("ar-clarify-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val ws = mgr.ensureWorkspace("ABC-1")
+        val clarification = ws.path.resolve(".koncerto/clarification.md")
+        Files.createDirectories(clarification.parent)
+        Files.writeString(clarification, "Need more detail")
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val config = sampleConfig(command = script, agentKind = "opencode")
+        val runner = DefaultAgentRunner(config, mgr, noopLogger(), maxRetries = 1)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi",
+            agentKindOverride = "opencode", commandOverride = script,
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNull()
+        assertThat(Files.exists(clarification)).isTrue()
+    }
+
+    @Test
+    fun `runner uses docker container with network enabled`() = runTest {
+        val root = Files.createTempDirectory("agent-runner-docker-net-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val script = """
+            echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+            echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        """.trimIndent()
+        val config = sampleConfig(command = script, agentKind = "opencode")
+        val dockerConfig = DockerConfig(enabled = true, network = true)
+        AgentDockerFake.withFakeDocker(AgentDockerFake.agentDockerScript()) {
+            val runner = DefaultAgentRunner(
+                config, mgr, noopLogger(),
+                dockerConfig = dockerConfig,
+                maxConcurrentAgents = 2
+            )
+            runBlocking {
+                val result = runner.run(
+                    sampleIssue(), attempt = 1, prompt = "Hi",
+                    agentKindOverride = "opencode", commandOverride = script,
+                    turnTimeoutMs = 5000, stallTimeoutMs = 5000
+                )
+                assertThat(result.exceptionOrNull()).isNull()
+            }
+        }
+    }
+}
+
+private object AgentDockerFake {
+    fun withFakeDocker(script: String, block: () -> Unit) {
+        val binDir = Files.createTempDirectory("fake-agent-docker-bin")
+        val docker = binDir.resolve("docker")
+        Files.writeString(docker, script)
+        docker.toFile().setExecutable(true)
+        val originalPath = System.getenv("PATH") ?: ""
+        try {
+            prependPath("$binDir:$originalPath")
+            block()
+        } finally {
+            prependPath(originalPath)
+            binDir.toFile().deleteRecursively()
+        }
+    }
+
+    private fun prependPath(path: String) {
+        val pe = Class.forName("java.lang.ProcessEnvironment")
+        val env = pe.getDeclaredField("theEnvironment")
+        env.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        (env.get(null) as MutableMap<String, String>)["PATH"] = path
+        try {
+            val ciEnv = pe.getDeclaredField("theCaseInsensitiveEnvironment")
+            ciEnv.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            (ciEnv.get(null) as MutableMap<String, String>)["PATH"] = path
+        } catch (_: NoSuchFieldException) {
+        }
+    }
+
+    fun agentDockerScript() = """#!/usr/bin/env bash
+case "${'$'}1" in
+  info) exit 0 ;;
+  run)
+    echo "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    exit 0
+    ;;
+  exec)
+    while [ "${'$'}#" -gt 0 ]; do
+      if [ "${'$'}1" = "-lc" ]; then
+        echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
+        echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        exit 0
+      fi
+      shift
+    done
+    exit 0
+    ;;
+  inspect) echo "running"; exit 0 ;;
+  rm) exit 0 ;;
+esac
+exit 0
+"""
 }

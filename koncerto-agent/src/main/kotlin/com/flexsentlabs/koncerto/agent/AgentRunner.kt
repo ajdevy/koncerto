@@ -9,6 +9,7 @@ import com.flexsentlabs.koncerto.core.errors.ErrorClassifier
 import com.flexsentlabs.koncerto.core.errors.ErrorTracker
 import com.flexsentlabs.koncerto.core.errors.RetryDecision
 import com.flexsentlabs.koncerto.core.errors.RetryDecisionMaker
+import com.flexsentlabs.koncerto.core.errors.SubscriptionLimitException
 import com.flexsentlabs.koncerto.core.retry.RetryStrategy
 import com.flexsentlabs.koncerto.core.events.AgentLifecycleEvent
 import com.flexsentlabs.koncerto.core.events.EventBus
@@ -155,6 +156,13 @@ class DefaultAgentRunner(
 
                 val classified = errorClassifier?.classify("exception", errorMsg)
                 val isClassified = classified != null && classified !is AgentErrorType.UnknownError
+                if (classified is AgentErrorType.SubscriptionLimitError) {
+                    throw SubscriptionLimitException(
+                        message = errorMsg,
+                        provider = classified.provider ?: agentKey.substringBefore(":"),
+                        rawMessage = errorMsg
+                    )
+                }
                 if (isClassified) {
                     eventFlow.tryEmit(AgentEvent.LimitDetected(
                         agentError = AgentError(type = classified!!, message = errorMsg, source = "exception"),
@@ -255,6 +263,7 @@ class DefaultAgentRunner(
             withTimeout(effectiveTurnTimeout) {
                 coroutineScope {
                     val lastOutputMs = AtomicLong(System.currentTimeMillis())
+                    val subscriptionLimitHit = java.util.concurrent.atomic.AtomicReference<String?>(null)
 
                     val rendered = PromptRenderer.render(prompt, mapOf(
                         "issue" to issue.toTemplateMap(),
@@ -270,21 +279,7 @@ class DefaultAgentRunner(
                                 onAgentOutput(issue.id, line)
                             }
                             onAgentOutputSuspend(issue.id, line)
-                            if (errorClassifier != null && line.startsWith("[stderr]")) {
-                                val msg = line.removePrefix("[stderr] ").removePrefix("[stderr]")
-                                val classified = errorClassifier.classify("stderr", msg)
-                                if (classified !is AgentErrorType.UnknownError) {
-                                    eventFlow.tryEmit(AgentEvent.LimitDetected(
-                                        agentError = AgentError(
-                                            type = classified,
-                                            message = msg.trim(),
-                                            source = "stderr"
-                                        ),
-                                        issueId = issue.id,
-                                        line = line
-                                    ))
-                                }
-                            }
+                            classifyOutputLine(line, issue.id, effectiveKind, subscriptionLimitHit)
                         }
                     }
 
@@ -342,10 +337,20 @@ class DefaultAgentRunner(
 
                     turnDone.await()
                     eventWatcher.cancel()
-                    runtime.stop()
+                    if (errorClassifier != null) {
+                        delay(250)
+                    }
+                    subscriptionLimitHit.get()?.let { rawMsg ->
+                        throw SubscriptionLimitException(
+                            message = rawMsg,
+                            provider = effectiveKind,
+                            rawMessage = rawMsg
+                        )
+                    }
                     outputJob.cancel()
                     stallJob.cancel()
                     aliveJob.cancel()
+                    runtime.stop()
                 }
             }
         } catch (e: Exception) {
@@ -405,4 +410,34 @@ class DefaultAgentRunner(
         "created_at" to createdAt?.toString(),
         "updated_at" to updatedAt?.toString()
     )
+
+    private fun classifyOutputLine(
+        line: String,
+        issueId: String,
+        provider: String,
+        subscriptionLimitHit: java.util.concurrent.atomic.AtomicReference<String?>
+    ) {
+        if (errorClassifier == null) return
+        val msg = when {
+            line.startsWith("[stderr]") -> line.removePrefix("[stderr] ").trim()
+            line.startsWith("[stdout]") -> line.removePrefix("[stdout] ").trim()
+            else -> line.trim()
+        }
+        if (msg.isBlank()) return
+        val classified = errorClassifier.classify("output", msg)
+        if (classified is AgentErrorType.SubscriptionLimitError) {
+            subscriptionLimitHit.compareAndSet(null, msg)
+        }
+        if (classified !is AgentErrorType.UnknownError) {
+            eventFlow.tryEmit(AgentEvent.LimitDetected(
+                agentError = AgentError(
+                    type = classified,
+                    message = msg,
+                    source = "output"
+                ),
+                issueId = issueId,
+                line = line
+            ))
+        }
+    }
 }

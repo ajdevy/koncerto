@@ -70,4 +70,20 @@ class FrontMatterParserTest {
         val thrown = Assertions.assertThrows(IllegalStateException::class.java) { FrontMatterParser.parse(content) }
         assertThat(thrown.message ?: "").contains("workflow_parse_error")
     }
+
+    @Test
+    fun `CRLF line endings are normalized`() {
+        val content = "---\r\nkey: value\r\n---\r\n\r\nBody text"
+        val def = FrontMatterParser.parse(content)
+        assertThat(def.config["key"]).isEqualTo("value")
+        assertThat(def.promptTemplate).isEqualTo("Body text")
+    }
+
+    @Test
+    fun `closing delimiter with surrounding whitespace is recognized`() {
+        val content = "---\nkey: value\n  ---  \n\nBody text"
+        val def = FrontMatterParser.parse(content)
+        assertThat(def.config["key"]).isEqualTo("value")
+        assertThat(def.promptTemplate).isEqualTo("Body text")
+    }
 }

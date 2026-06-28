@@ -1,5 +1,4 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     kotlin("jvm") version "2.0.21" apply false
@@ -22,18 +21,18 @@ subprojects {
 
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_21)
             javaParameters.set(true)
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
         }
     }
 
     tasks.withType<JavaCompile>().configureEach {
-        sourceCompatibility = "21"
-        targetCompatibility = "21"
+        options.release.set(21)
     }
 
     tasks.withType<Test>().configureEach {
         useJUnitPlatform()
+        jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
     }
 
     val jacocoEnabled = providers.gradleProperty("jacoco").isPresent()
@@ -49,7 +48,7 @@ subprojects {
         }
     }
 
-    // Coverage verification - fails if line coverage < 75%
+    // Coverage verification - fails if line coverage < 75% per module
     val hasTests = tasks.matching { it.name == "test" }.isNotEmpty()
 
     if (hasTests && jacocoEnabled) {
@@ -64,7 +63,7 @@ subprojects {
                     limit {
                         counter = "LINE"
                         value = "COVEREDRATIO"
-                        minimum = 0.75.toBigDecimal()
+                        minimum = 0.80.toBigDecimal()
                     }
                 }
             }

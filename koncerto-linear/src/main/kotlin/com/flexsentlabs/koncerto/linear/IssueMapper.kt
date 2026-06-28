@@ -32,10 +32,13 @@ object IssueMapper {
         val blockedByNodes = (node["blockedBy"] as? JsonObject)?.get("nodes") as? JsonArray
         val blockedBy = blockedByNodes?.mapNotNull { node ->
             val obj = node as? JsonObject ?: return@mapNotNull null
-            val s = obj["state"] as? JsonObject
+            val relationType = obj.optionalString("type") ?: return@mapNotNull null
+            if (!relationType.equals("blocks", ignoreCase = true)) return@mapNotNull null
+            val issueNode = obj["issue"] as? JsonObject ?: return@mapNotNull null
+            val s = issueNode["state"] as? JsonObject
             BlockerRef(
-                id = obj.optionalString("id"),
-                identifier = obj.optionalString("identifier"),
+                id = issueNode.optionalString("id"),
+                identifier = issueNode.optionalString("identifier"),
                 state = s?.stringOrNull("name")
             )
         } ?: emptyList()

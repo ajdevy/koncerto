@@ -166,19 +166,16 @@ class LinearClientTest {
                 put("branchName", JsonNull)
                 put("createdAt", JsonNull)
                 put("updatedAt", JsonNull)
-                put("state", buildJsonObject {
-                    put("name", JsonPrimitive("Todo"))
-                })
-                put("labels", buildJsonObject {
-                    put("nodes", buildJsonArray {})
-                })
+                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
                 put("blockedBy", buildJsonObject {
                     put("nodes", buildJsonArray {
                         add(buildJsonObject {
-                            put("id", JsonPrimitive("blocker-1"))
-                            put("identifier", JsonPrimitive("ABC-2"))
-                            put("state", buildJsonObject {
-                                put("name", JsonPrimitive("Done"))
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("blocker-1"))
+                                put("identifier", JsonPrimitive("ABC-2"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
                             })
                         })
                     })
@@ -213,17 +210,19 @@ class LinearClientTest {
                 put("blockedBy", buildJsonObject {
                     put("nodes", buildJsonArray {
                         add(buildJsonObject {
-                            put("id", JsonPrimitive("b1"))
-                            put("identifier", JsonPrimitive("X-1"))
-                            put("state", buildJsonObject {
-                                put("name", JsonPrimitive("Done"))
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b1"))
+                                put("identifier", JsonPrimitive("X-1"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
                             })
                         })
                         add(buildJsonObject {
-                            put("id", JsonPrimitive("b2"))
-                            put("identifier", JsonPrimitive("X-2"))
-                            put("state", buildJsonObject {
-                                put("name", JsonPrimitive("In Progress"))
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b2"))
+                                put("identifier", JsonPrimitive("X-2"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("In Progress")) })
                             })
                         })
                     })
@@ -248,17 +247,16 @@ class LinearClientTest {
                 put("branchName", JsonNull)
                 put("createdAt", JsonNull)
                 put("updatedAt", JsonNull)
-                put("state", buildJsonObject {
-                    put("name", JsonPrimitive("Todo"))
-                })
-                put("labels", buildJsonObject {
-                    put("nodes", buildJsonArray {})
-                })
+                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
                 put("blockedBy", buildJsonObject {
                     put("nodes", buildJsonArray {
                         add(buildJsonObject {
-                            put("id", JsonPrimitive("b1"))
-                            put("identifier", JsonPrimitive("X-1"))
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b1"))
+                                put("identifier", JsonPrimitive("X-1"))
+                            })
                         })
                     })
                 })
@@ -569,20 +567,58 @@ class LinearClientTest {
                 put("branchName", JsonNull)
                 put("createdAt", JsonNull)
                 put("updatedAt", JsonNull)
-                put("state", buildJsonObject {
-                    put("name", JsonPrimitive("Todo"))
-                })
-                put("labels", buildJsonObject {
-                    put("nodes", buildJsonArray {})
-                })
+                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
                 put("blockedBy", buildJsonObject {
                     put("nodes", buildJsonArray {
                         add(JsonPrimitive("not-an-object"))
                         add(buildJsonObject {
-                            put("id", JsonPrimitive("b1"))
-                            put("identifier", JsonPrimitive("X-1"))
-                            put("state", buildJsonObject {
-                                put("name", JsonPrimitive("Done"))
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b1"))
+                                put("identifier", JsonPrimitive("X-1"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("Done")) })
+                            })
+                        })
+                    })
+                })
+            }
+
+            val issue = IssueMapper.fromLinear(json)
+            assertThat(issue.blockedBy.size).isEqualTo(1)
+            assertThat(issue.blockedBy[0].id).isEqualTo("b1")
+        }
+
+        @Test
+        fun `non-blocks relation type is excluded from blockedBy`() {
+            val json = buildJsonObject {
+                put("id", JsonPrimitive("id-1"))
+                put("identifier", JsonPrimitive("ABC-1"))
+                put("title", JsonPrimitive("T1"))
+                put("description", JsonNull)
+                put("priority", JsonNull)
+                put("url", JsonNull)
+                put("branchName", JsonNull)
+                put("createdAt", JsonNull)
+                put("updatedAt", JsonNull)
+                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+                put("blockedBy", buildJsonObject {
+                    put("nodes", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", JsonPrimitive("duplicate"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("d1"))
+                                put("identifier", JsonPrimitive("X-1"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("In Progress")) })
+                            })
+                        })
+                        add(buildJsonObject {
+                            put("type", JsonPrimitive("blocks"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b1"))
+                                put("identifier", JsonPrimitive("X-2"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("In Progress")) })
                             })
                         })
                     })
@@ -1007,6 +1043,109 @@ class LinearClientTest {
             assertThrows<LinearError.MissingApiKey> {
                 client.execute("query {}", buildJsonObject {})
             }
+        }
+    }
+
+    // ── fetchCandidateIssues with real inverseRelations shape ─────
+
+    @Nested
+    inner class FetchCandidateIssuesBlockerMappingTests {
+
+        private fun makeCandidatesPage(vararg nodes: JsonObject) = buildJsonObject {
+            put("data", buildJsonObject {
+                put("issues", buildJsonObject {
+                    put("pageInfo", buildJsonObject {
+                        put("hasNextPage", JsonPrimitive(false))
+                        put("endCursor", JsonNull)
+                    })
+                    put("nodes", buildJsonArray { nodes.forEach { add(it) } })
+                })
+            })
+        }
+
+        private fun makeNodeWithBlocker(
+            id: String, identifier: String, state: String,
+            blockerId: String, blockerIdentifier: String, blockerState: String
+        ) = buildJsonObject {
+            put("id", JsonPrimitive(id))
+            put("identifier", JsonPrimitive(identifier))
+            put("title", JsonPrimitive("T-$identifier"))
+            put("description", JsonNull)
+            put("priority", JsonNull)
+            put("url", JsonNull)
+            put("branchName", JsonNull)
+            put("createdAt", JsonNull)
+            put("updatedAt", JsonNull)
+            put("state", buildJsonObject { put("name", JsonPrimitive(state)) })
+            put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("children", buildJsonObject { put("nodes", buildJsonArray {}) })
+            put("blockedBy", buildJsonObject {
+                put("nodes", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", JsonPrimitive("blocks"))
+                        put("issue", buildJsonObject {
+                            put("id", JsonPrimitive(blockerId))
+                            put("identifier", JsonPrimitive(blockerIdentifier))
+                            put("state", buildJsonObject { put("name", JsonPrimitive(blockerState)) })
+                        })
+                    })
+                })
+            })
+        }
+
+        @Test
+        fun `fetchCandidateIssues maps blockedBy from inverseRelations nested issue shape`() = runTest {
+            val blockerNode = makeIssueNode("b1", "FLE-52", "In Progress")
+            val blockedNode = makeNodeWithBlocker("b2", "FLE-53", "Todo", "b1", "FLE-52", "In Progress")
+            val response = makeCandidatesPage(blockerNode, blockedNode)
+            val graphql = FakeGraphqlClient(mutableListOf(response))
+            val sut = DefaultLinearClient(graphql, "proj")
+
+            val issues = sut.fetchCandidateIssues("proj", listOf("Todo", "In Progress"))
+
+            val blocked = issues.first { it.identifier == "FLE-53" }
+            assertThat(blocked.blockedBy.size).isEqualTo(1)
+            assertThat(blocked.blockedBy[0].id).isEqualTo("b1")
+            assertThat(blocked.blockedBy[0].identifier).isEqualTo("FLE-52")
+            assertThat(blocked.blockedBy[0].state).isEqualTo("In Progress")
+        }
+
+        @Test
+        fun `fetchCandidateIssues non-blocks relation is excluded from blockedBy`() = runTest {
+            val nodeWithDuplicate = buildJsonObject {
+                put("id", JsonPrimitive("b2"))
+                put("identifier", JsonPrimitive("FLE-53"))
+                put("title", JsonPrimitive("T"))
+                put("description", JsonNull)
+                put("priority", JsonNull)
+                put("url", JsonNull)
+                put("branchName", JsonNull)
+                put("createdAt", JsonNull)
+                put("updatedAt", JsonNull)
+                put("state", buildJsonObject { put("name", JsonPrimitive("Todo")) })
+                put("labels", buildJsonObject { put("nodes", buildJsonArray {}) })
+                put("children", buildJsonObject { put("nodes", buildJsonArray {}) })
+                put("blockedBy", buildJsonObject {
+                    put("nodes", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", JsonPrimitive("relates to"))
+                            put("issue", buildJsonObject {
+                                put("id", JsonPrimitive("b1"))
+                                put("identifier", JsonPrimitive("FLE-52"))
+                                put("state", buildJsonObject { put("name", JsonPrimitive("In Progress")) })
+                            })
+                        })
+                    })
+                })
+            }
+            val response = makeCandidatesPage(nodeWithDuplicate)
+            val graphql = FakeGraphqlClient(mutableListOf(response))
+            val sut = DefaultLinearClient(graphql, "proj")
+
+            val issues = sut.fetchCandidateIssues("proj", listOf("Todo", "In Progress"))
+
+            val issue = issues.first { it.identifier == "FLE-53" }
+            assertThat(issue.blockedBy.isEmpty()).isTrue()
         }
     }
 
