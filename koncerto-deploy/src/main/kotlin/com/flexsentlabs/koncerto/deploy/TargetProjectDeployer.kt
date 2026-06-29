@@ -73,7 +73,7 @@ class TargetProjectDeployer(
         }
     }
 
-    private val webPorts = setOf(80, 3000, 5000, 8000, 8080, 8443, 3001, 5173, 4200, 8001, 9090)
+    private val webPorts = setOf(80, 3000, 5000, 8000, 8080, 8443, 3001, 5173, 4200, 8001, 9090, 17349)
 
     private fun buildAndRun(config: DetectedDockerConfig, projectPath: Path, tag: String): DeployResult {
         return try {

@@ -78,4 +78,26 @@ class DockerConfigDetectorTest {
 
         assertThat(result!!.composeFile).isEqualTo(compose)
     }
+
+    @Test
+    fun `detect finds docker-compose demo file`(@TempDir tmpDir: Path) {
+        val compose = tmpDir.resolve("docker-compose.demo.yml")
+        Files.writeString(compose, "services: {}")
+
+        val result = detector.detect(tmpDir)
+
+        assertThat(result!!.type).isEqualTo(DockerConfigType.DOCKER_COMPOSE)
+        assertThat(result.composeFile).isEqualTo(compose)
+    }
+
+    @Test
+    fun `detect prefers docker-compose demo over docker-compose yml`(@TempDir tmpDir: Path) {
+        val demo = tmpDir.resolve("docker-compose.demo.yml")
+        Files.writeString(demo, "services: {}")
+        Files.writeString(tmpDir.resolve("docker-compose.yml"), "services: {}")
+
+        val result = detector.detect(tmpDir)
+
+        assertThat(result!!.composeFile).isEqualTo(demo)
+    }
 }
