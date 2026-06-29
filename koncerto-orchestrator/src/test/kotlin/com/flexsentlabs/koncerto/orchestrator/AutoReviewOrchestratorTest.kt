@@ -1698,4 +1698,70 @@ class AutoReviewOrchestratorTest {
         val result = method.invoke(orchestrator, issueDir) as Path?
         assertThat(result).isNull()
     }
+
+    @Test
+    fun `postDetailedReviewAsPrComment posts demo URL to PR when review file missing but demoUrl provided`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":16}""")
+                command.contains("comment") -> {
+                    val bodyFileIndex = command.indexOf("--body-file")
+                    if (bodyFileIndex >= 0) {
+                        capturedBody = Files.readString(Path.of(command[bodyFileIndex + 1]))
+                    }
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/16#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        val orchestrator = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, "https://demo.example.com/vid")
+
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!.contains("Watch Demo Recording")).isTrue()
+        assertThat(capturedBody!!.contains("https://demo.example.com/vid")).isTrue()
+        assertThat(capturedBody!!.contains("Claude Review #1")).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment skips when review file missing and demoUrl is null`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        var commentCalled = false
+        val ghRunner: GhProcessRunner = { command, _ ->
+            if (command.contains("comment")) commentCalled = true
+            GhProcessResult(0, """{"number":1}""")
+        }
+
+        val orchestrator = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner)
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, null)
+
+        assertThat(commentCalled).isFalse()
+    }
 }

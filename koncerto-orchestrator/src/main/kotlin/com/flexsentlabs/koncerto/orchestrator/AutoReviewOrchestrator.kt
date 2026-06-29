@@ -250,36 +250,33 @@ class AutoReviewOrchestrator(
 
     private fun postDetailedReviewAsPrComment(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?, sequence: Int, demoUrl: String? = null) {
         val ws = workspace ?: return
-        val detailedPath = ws.path.resolve(".review-output-detailed")
-        if (!Files.exists(detailedPath)) return
-        val raw = try {
-            Files.readString(detailedPath)
-        } catch (_: Exception) { return }
-        if (raw.isBlank()) return
 
-        val lines = raw.lines().dropWhile { line ->
-            line.isBlank() ||
-                line.startsWith("Claude configuration file not found") ||
-                line.startsWith("A backup file exists at:") ||
-                line.startsWith("You can manually restore")
-        }
-        val startIdx = lines.indexOfFirst { it.startsWith("---") }
-        val content = if (startIdx >= 0) {
-            lines.drop(startIdx + 1).joinToString("\n").trim()
-        } else {
-            val firstVerdict = lines.indexOfFirst { it.trimStart().startsWith("✅") || it.trimStart().startsWith("❌") }
-            if (firstVerdict >= 0) {
-                lines.drop(firstVerdict).joinToString("\n").trim()
-            } else {
-                lines.joinToString("\n").trim()
+        val detailedPath = ws.path.resolve(".review-output-detailed")
+        val content: String = if (Files.exists(detailedPath)) {
+            val raw = try { Files.readString(detailedPath) } catch (_: Exception) { "" }
+            val lines = raw.lines().dropWhile { line ->
+                line.isBlank() ||
+                    line.startsWith("Claude configuration file not found") ||
+                    line.startsWith("A backup file exists at:") ||
+                    line.startsWith("You can manually restore")
             }
-        }
-        if (content.isBlank()) return
+            val startIdx = lines.indexOfFirst { it.startsWith("---") }
+            if (startIdx >= 0) {
+                lines.drop(startIdx + 1).joinToString("\n").trim()
+            } else {
+                val firstVerdict = lines.indexOfFirst { it.trimStart().startsWith("✅") || it.trimStart().startsWith("❌") }
+                if (firstVerdict >= 0) lines.drop(firstVerdict).joinToString("\n").trim()
+                else lines.joinToString("\n").trim()
+            }
+        } else ""
+
+        // Always post if we have a demo URL, even with no review content
+        if (content.isBlank() && demoUrl.isNullOrBlank()) return
 
         val modelName = reviewStage?.model ?: "claude"
         val header = "### Claude Review #$sequence ($modelName)\n"
         val demoLink = if (!demoUrl.isNullOrBlank()) "\n---\n🎥 [Watch Demo Recording]($demoUrl)" else ""
-        val body = header + content + demoLink
+        val body = if (content.isBlank()) header + demoLink.trimStart('\n') else header + content + demoLink
 
         logger.info("pr_comment_debug", mapOf(
             "issue_id" to issue.id,

@@ -651,4 +651,60 @@ class R2DemoStorageTest {
         val result = storage.generateUrl("demo-recordings/task/demo.webm", 3600)
         assert(result is DemoResult.Failure)
     }
+
+    @Test
+    fun `uploadWithTags returns failure when generated URL resolves to localhost`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = "http://127.0.0.1:9000",
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = "fle52-demo",
+            publicUrlBase = "",  // blank → presigned URL uses endpoint (localhost)
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns ""
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val file = tempDir.resolve("demo.webm")
+        file.createNewFile()
+        val result = storage.uploadWithTags("task-1", file, "video/webm", emptyMap())
+        assert(result is DemoResult.Failure) {
+            "Expected failure for localhost URL but got success"
+        }
+        val error = (result as DemoResult.Failure).error.message ?: ""
+        assert(error.contains("localhost") || error.contains("127.0.0.1")) {
+            "Error message should mention localhost: $error"
+        }
+    }
+
+    @Test
+    fun `uploadWithTags succeeds when publicUrlBase is set even with localhost endpoint`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = "http://127.0.0.1:9000",
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = "fle52-demo",
+            publicUrlBase = "https://pub.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns ""
+                }
+            },
+            clock = { fixedInstant }
+        )
+        val file = tempDir.resolve("demo2.webm")
+        file.createNewFile()
+        val result = storage.uploadWithTags("task-2", file, "video/webm", emptyMap())
+        assert(result is DemoResult.Success) {
+            "Expected success when publicUrlBase is set: ${(result as? DemoResult.Failure)?.error?.message}"
+        }
+        val url = (result as DemoResult.Success).value.url
+        assert(url.startsWith("https://pub.example.com")) {
+            "URL should use publicUrlBase but was: $url"
+        }
+    }
 }
