@@ -571,6 +571,7 @@ class AutoReviewOrchestratorTest {
 
     private fun initGitOrigin(workspace: Path, repo: String = "owner/repo") {
         Files.createDirectories(workspace.resolve(".git"))
+        Files.writeString(workspace.resolve(".git/HEAD"), "ref: refs/heads/feature/T-1\n")
         Files.writeString(
             workspace.resolve(".git/config"),
             """
@@ -583,6 +584,7 @@ class AutoReviewOrchestratorTest {
     private fun initGitWorktreeOrigin(workspace: Path, repo: String = "owner/repo") {
         val gitDir = workspace.resolve(".gitdir")
         Files.createDirectories(gitDir)
+        Files.writeString(gitDir.resolve("HEAD"), "ref: refs/heads/feature/T-1\n")
         Files.writeString(
             gitDir.resolve("config"),
             """

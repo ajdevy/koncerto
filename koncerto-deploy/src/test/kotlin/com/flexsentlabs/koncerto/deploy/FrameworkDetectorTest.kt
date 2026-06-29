@@ -30,7 +30,8 @@ class FrameworkDetectorTest {
 
         assertThat(framework?.name).isEqualTo("python")
         assertThat(framework?.buildCmd).isEqualTo("pip install --default-timeout 60 --retries 10 .")
-        assertThat(generator.generate(framework!!)).contains("RUN pip install --default-timeout 60 --retries 10 .")
+        assertThat(generator.generate(framework!!)).contains("pypi.tuna.tsinghua.edu.cn")
+        assertThat(generator.generate(framework!!)).contains("RUN pip install")
     }
 
     @Test
