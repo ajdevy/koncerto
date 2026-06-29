@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isEmpty
+import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotEmpty
 import assertk.assertions.isTrue
@@ -93,5 +94,30 @@ class DockerRuntimeTest {
         val runtime = testRuntime("koncerto-invalid-container-id-00000000")
         runtime.stop()
         assertThat(runtime).isNotNull()
+    }
+
+    @Test
+    fun testDockerCmdUsesOverrideWhenConfigured() {
+        DockerRuntime.testDockerOverride.set("/tmp/fake-docker")
+        try {
+            val cmd = DockerRuntime.dockerCmd("info")
+            assertThat(cmd[0]).isEqualTo("/tmp/fake-docker")
+        } finally {
+            DockerRuntime.testDockerOverride.set(null)
+        }
+    }
+
+    @Test
+    fun testCheckContainerRunningReturnsFalseOnCommandFailure() {
+        DockerRuntime.testDockerOverride.set("/nonexistent/docker")
+        try {
+            val runtime = testRuntime("cid-fail")
+            val method = DockerRuntime::class.java.getDeclaredMethod("checkContainerRunning")
+            method.isAccessible = true
+            val running = method.invoke(runtime) as Boolean
+            assertThat(running).isFalse()
+        } finally {
+            DockerRuntime.testDockerOverride.set(null)
+        }
     }
 }

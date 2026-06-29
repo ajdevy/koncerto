@@ -79,4 +79,41 @@ class LimitResetParserTest {
         )
         assertThat(resume).isEqualTo(now + 60_000L)
     }
+
+    @Test
+    fun `parseTryAgainAt rolls forward to next year when parsed time already passed`() {
+        val zone = ZoneId.systemDefault()
+        val now = LocalDateTime.of(2026, 12, 31, 23, 30)
+        val nowMs = now.atZone(zone).toInstant().toEpochMilli()
+        val parsed = LimitResetParser.parseTryAgainAt(
+            message = "try again at Dec 30th, 2026 9:00 PM.",
+            nowMs = nowMs
+        )
+        assertThat(parsed).isNotNull()
+        assertThat(parsed!!).isGreaterThan(nowMs)
+    }
+
+    @Test
+    fun `defaultDelayMs handles uppercase provider`() {
+        assertThat(LimitResetParser.defaultDelayMs("CODEX", 1000L, 2000L)).isEqualTo(2000L)
+    }
+
+    @Test
+    fun `resolveResumeAtMs uses current time default parameter`() {
+        val before = System.currentTimeMillis()
+        val resume = LimitResetParser.resolveResumeAtMs(
+            message = "no parser match",
+            provider = "unknown"
+        )
+        assertThat(resume).isGreaterThan(before)
+    }
+
+    @Test
+    fun `parseTryAgainAt returns null for invalid timestamp`() {
+        val parsed = LimitResetParser.parseTryAgainAt(
+            message = "try again at not-a-real-date",
+            nowMs = System.currentTimeMillis()
+        )
+        assertThat(parsed).isNull()
+    }
 }

@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import java.nio.file.Files
 import org.junit.jupiter.api.Test
@@ -235,5 +236,19 @@ class AgentAuthCheckerTest {
         }
         AgentAuthChecker.authProcessBuilder("echo probe")
         assertThat(seen).isEqualTo("echo probe")
+    }
+
+    @Test
+    fun `setClaudeAuthToken ignores blank token`() {
+        AgentAuthChecker.reset()
+        AgentAuthChecker.setClaudeAuthToken("   ")
+        assertThat(AgentAuthChecker.getClaudeAuthToken()).isNull()
+    }
+
+    @Test
+    fun `isAuthenticated returns false when auth process builder throws`() {
+        AgentAuthChecker.reset()
+        AgentAuthChecker.testAuthProcessFactory = { _ -> throw IllegalStateException("boom") }
+        assertThat(AgentAuthChecker.isAuthenticated("codex")).isFalse()
     }
 }

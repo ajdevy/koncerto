@@ -188,6 +188,25 @@ class CrossProjectChainerTest {
     }
 
     @Test
+    fun `createFollowUp with blank link type skips linking`() {
+        val trackingClient = LinkFailingClient()
+        val chainer = createChainer { slug -> if (slug == "target-proj") trackingClient else null }
+        val issue = testIssue()
+        val config = CrossProjectFollowUpConfig(
+            targetProjectSlug = "target-proj",
+            titleTemplate = "Follow-up {sourceId}",
+            linkType = "   "
+        )
+
+        runBlocking {
+            chainer.createFollowUp(issue, config, "source-proj")
+        }
+
+        assertThat(trackingClient.createCount).isEqualTo(1)
+        assertThat(trackingClient.linkCalled).isFalse()
+    }
+
+    @Test
     fun `createFollowUp catches exceptions from provider`() {
         val chainer = createChainer { throw RuntimeException("provider failed") }
         val issue = testIssue()
@@ -198,6 +217,22 @@ class CrossProjectChainerTest {
 
         runBlocking {
             chainer.createFollowUp(issue, config, "source-proj")
+        }
+    }
+
+    @Test
+    fun `default max depth constructor path works`() {
+        val chainer = DefaultCrossProjectChainer(
+            config = ServiceConfig(),
+            linearClientProvider = { null },
+            logger = StructuredLogger(emptyList())
+        )
+        runBlocking {
+            chainer.createFollowUp(
+                testIssue(),
+                CrossProjectFollowUpConfig(targetProjectSlug = "none", titleTemplate = "x"),
+                "source-proj"
+            )
         }
     }
 

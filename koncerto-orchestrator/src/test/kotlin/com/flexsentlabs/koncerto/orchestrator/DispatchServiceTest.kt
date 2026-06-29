@@ -60,6 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -2404,6 +2405,64 @@ class DispatchServiceTest {
         assertThat(tracking.linkedTargetId).isEqualTo("2")
     }
 
+    @Test
+    fun `scheduleRetry writes scheduled and exhausted trace steps`(@TempDir root: Path) = runBlocking {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = workspaces.ensureWorkspace("T-1")
+        val projectConfig = config().copy(agent = config().agent.copy(maxRetries = 1))
+        val svc = createService(
+            projectConfig = projectConfig,
+            state = RuntimeState(),
+            workspaces = workspaces
+        )
+        val testIssue = issue("1", "T-1", "Todo")
+
+        svc.scheduleRetry(testIssue, "first failure")
+        svc.scheduleRetry(testIssue, "second failure")
+
+        val traceFile = Files.list(workspace.path.resolve(".koncerto")).use { stream ->
+            stream.filter {
+                it.fileName.toString().startsWith("dispatch-trace-") && it.fileName.toString().endsWith(".jsonl")
+            }.findFirst().orElseThrow()
+        }
+        val trace = Files.readString(traceFile)
+        assertThat(trace.contains("\"step\":\"retry\"")).isTrue()
+        assertThat(trace.contains("\"status\":\"scheduled\"")).isTrue()
+        assertThat(trace.contains("\"status\":\"exhausted\"")).isTrue()
+    }
+
+    @Test
+    fun `scheduleRetry tolerates trace write failures`(@TempDir root: Path) = runBlocking {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = workspaces.ensureWorkspace("T-1")
+        Files.writeString(workspace.path.resolve(".koncerto"), "not-a-dir")
+
+        val svc = createService(
+            projectConfig = config().copy(agent = config().agent.copy(maxRetries = 2)),
+            state = RuntimeState(),
+            workspaces = workspaces
+        )
+        svc.scheduleRetry(issue("1", "T-1", "Todo"), "boom")
+        assertThat(svc.state.retryAttempts["1"]?.attempt).isEqualTo(1)
+    }
+
+    @Test
+    fun `transitionOnComplete falls back when workspace resolution fails for review state`(@TempDir root: Path) = runBlocking {
+        val rootFile = root.resolve("workspace-root-file")
+        Files.writeString(rootFile, "not-a-directory")
+        val cfg = config().copy(workspace = WorkspaceConfig(root = rootFile.toString()))
+        val tracking = TrackingLinearClient()
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val svc = createService(projectConfig = cfg, state = RuntimeState(), linear = tracking)
+        svc.transitionOnComplete(issue("1", "T-1", "Todo"), stage)
+        assertThat(tracking.transitionedIssueId).isEqualTo("1")
+    }
+
     private fun setEnvVar(name: String, value: String) {
         val pe = Class.forName("java.lang.ProcessEnvironment")
         val env = pe.getDeclaredField("theEnvironment")
@@ -2482,6 +2541,62 @@ class DispatchServiceTest {
         svc.scheduleRetry(testIssue, "err2")
         svc.scheduleRetry(testIssue, "err3")
         assertThat(backing.transitionedIssueId).isEqualTo("1")
+    }
+
+    @Test
+    fun `dispatchDueRetries requeues entry when redispatch fails`() = runBlocking {
+        AgentAuthChecker.markUnauthenticated("codex")
+        try {
+            val state = RuntimeState()
+            state.retryAttempts["1"] = RetryEntry(
+                issueId = "1",
+                identifier = "A-1",
+                attempt = 2,
+                dueAtMs = System.currentTimeMillis() - 10_000,
+                error = "timeout"
+            )
+            val svc = createService(
+                state = state,
+                candidates = listOf(issue("1", "A-1", "Todo"))
+            )
+            svc.dispatchDueRetries(CoroutineScope(coroutineContext))
+            assertThat(state.retryAttempts.containsKey("1")).isTrue()
+        } finally {
+            AgentAuthChecker.markAuthenticated("codex")
+        }
+    }
+
+    @Test
+    fun `dispatchDueLimitPauses keeps entry when issue claimed`() = runBlocking {
+        val state = RuntimeState()
+        val pauseEntry = LimitPauseEntry(
+            issueId = "1",
+            identifier = "A-1",
+            stageName = "todo",
+            agentKind = "codex",
+            provider = "codex",
+            error = "limit",
+            resumeAtMs = System.currentTimeMillis() - 1
+        )
+        state.limitPauses["1"] = pauseEntry
+        state.claimed["1"] = true
+        val svc = createService(state = state, candidates = listOf(issue("1", "A-1", "Todo")))
+        svc.dispatchDueLimitPauses(CoroutineScope(coroutineContext))
+        assertThat(state.limitPauses["1"]).isEqualTo(pauseEntry)
+    }
+
+    @Test
+    fun `awaitBackgroundJobs removes completed jobs`() = runBlocking {
+        val svc = createService(candidates = emptyList())
+        val field = DispatchService::class.java.getDeclaredField("backgroundJobs")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val jobs = field.get(svc) as MutableList<Job>
+        val completed = launch { }
+        completed.join()
+        jobs.add(completed)
+        svc.awaitBackgroundJobs()
+        assertThat(jobs.isEmpty()).isTrue()
     }
 }
 

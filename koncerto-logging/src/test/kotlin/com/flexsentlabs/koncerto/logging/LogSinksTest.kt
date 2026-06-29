@@ -1,10 +1,14 @@
 package com.flexsentlabs.koncerto.logging
 
 import assertk.assertThat
+import assertk.assertions.containsExactly
 import assertk.assertions.isEqualTo
 import assertk.assertions.contains
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.nio.file.Path
 
 class LogSinksTest {
@@ -40,6 +44,43 @@ class LogSinksTest {
         val lines = file.toFile().readLines()
         assertThat(lines.size).isEqualTo(5)
         assertThat(lines[4]).isEqualTo("entry 4")
+    }
+
+    @Test
+    fun `RollingFileSink writes to a date stamped file and prunes old files`() {
+        val zone = ZoneId.of("UTC")
+        val today = LocalDate.now(zone)
+        val formatter = DateTimeFormatter.ISO_LOCAL_DATE
+        val stale = tempDir.resolve("koncerto-${formatter.format(today.minusDays(8))}.log")
+        val boundary = tempDir.resolve("koncerto-${formatter.format(today.minusDays(7))}.log")
+        val current = tempDir.resolve("koncerto-${formatter.format(today)}.log")
+        stale.toFile().writeText("old")
+        boundary.toFile().writeText("keep")
+
+        val sink = RollingFileSink(tempDir, retentionDays = 7, zoneId = zone)
+        sink.write("hello rolling")
+
+        assertThat(stale.toFile().exists()).isEqualTo(false)
+        assertThat(boundary.toFile().exists()).isEqualTo(true)
+        assertThat(current.toFile().readLines()).containsExactly("hello rolling")
+    }
+
+    @Test
+    fun `RollingTraceFiles appends jsonl lines and prunes old files`() {
+        val zone = ZoneId.of("UTC")
+        val today = LocalDate.now(zone)
+        val formatter = DateTimeFormatter.ISO_LOCAL_DATE
+        val stale = tempDir.resolve("trace-${formatter.format(today.minusDays(8))}.jsonl")
+        val boundary = tempDir.resolve("trace-${formatter.format(today.minusDays(7))}.jsonl")
+        stale.toFile().writeText("""{"old":true}""")
+        boundary.toFile().writeText("""{"keep":true}""")
+
+        RollingTraceFiles.append(tempDir, "trace", """{"step":"one"}""", retentionDays = 7, zoneId = zone)
+
+        val current = tempDir.resolve("trace-${formatter.format(today)}.jsonl")
+        assertThat(stale.toFile().exists()).isEqualTo(false)
+        assertThat(boundary.toFile().exists()).isEqualTo(true)
+        assertThat(current.toFile().readLines()).containsExactly("""{"step":"one"}""")
     }
 
     @Test

@@ -5,6 +5,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
+import assertk.assertions.isTrue
 import org.junit.jupiter.api.Test
 
 class PatternErrorClassifierTest {
@@ -185,5 +186,21 @@ class PatternErrorClassifierTest {
         assertThat(error).isInstanceOf(AgentErrorType.UnknownError::class)
         val ue = error as AgentErrorType.UnknownError
         assertThat(ue.details).isEqualTo("")
+    }
+
+    @Test
+    fun `subscription inference prefers claude provider when message names claude`() {
+        val error = classifier.classify("stderr", "Claude API Error: Rate limit reached")
+        assertThat(error).isInstanceOf(AgentErrorType.SubscriptionLimitError::class)
+        val limit = error as AgentErrorType.SubscriptionLimitError
+        assertThat(limit.provider).isEqualTo("claude")
+    }
+
+    @Test
+    fun `subscription inference uses codex for purchase credits message`() {
+        val error = classifier.classify("stderr", "Please purchase more credits before continuing")
+        assertThat(error).isInstanceOf(AgentErrorType.SubscriptionLimitError::class)
+        val limit = error as AgentErrorType.SubscriptionLimitError
+        assertThat(limit.details.contains("purchase more credits")).isTrue()
     }
 }

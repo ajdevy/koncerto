@@ -181,29 +181,31 @@ class DockerContainerManagerTest {
 
     private fun fakeBashScript() = """#!/usr/bin/env bash
 CMD="${'$'}1"
-if echo "${'$'}CMD" | grep -q "docker run"; then
-  echo "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  exit 0
-fi
-if echo "${'$'}CMD" | grep -q "docker inspect"; then
-  echo running
-  exit 0
-fi
-if echo "${'$'}CMD" | grep -q "docker logs"; then
-  echo "container log line"
-  exit 0
-fi
-if echo "${'$'}CMD" | grep -q "docker rm"; then
-  exit 0
-fi
-if echo "${'$'}CMD" | grep -q "docker ps"; then
-  echo "old-id|2020-01-01 00:00:00 +0000 UTC"
-  exit 0
-fi
-if echo "${'$'}CMD" | grep -q "free -b"; then
-  echo 8000000000
-  exit 0
-fi
+case "${'$'}CMD" in
+  *"docker run"*)
+    echo "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    exit 0
+    ;;
+  *"docker inspect"*)
+    echo running
+    exit 0
+    ;;
+  *"docker logs"*)
+    echo "container log line"
+    exit 0
+    ;;
+  *"docker rm"*)
+    exit 0
+    ;;
+  *"docker ps"*)
+    echo "old-id|2020-01-01 00:00:00 +0000 UTC"
+    exit 0
+    ;;
+  *"free -b"*)
+    echo 8000000000
+    exit 0
+    ;;
+esac
 exit 1
 """
 
@@ -347,6 +349,93 @@ exit 0
             )
             val id = manager.createContainer()
             assertThat(id).isEqualTo("abc123containerid")
+        } finally {
+            DockerContainerManager.testBashOverride.set(null)
+            binDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `createContainer returns null when fake docker output is blank`() {
+        val script = """#!/usr/bin/env bash
+if [[ "${'$'}1" == *"docker run"* ]]; then exit 0; fi
+exit 0
+"""
+        val binDir = Files.createTempDirectory("fake-bash-create-blank-")
+        val bash = binDir.resolve("bash")
+        Files.writeString(bash, script)
+        bash.toFile().setExecutable(true)
+        try {
+            DockerContainerManager.testBashOverride.set(bash.toString())
+            val manager = DockerContainerManager(
+                DockerConfig(image = "koncerto-agent:test"),
+                Files.createTempDirectory("docker-create-blank-ws-"),
+                2,
+                noopLogger()
+            )
+            assertThat(manager.createContainer()).isNull()
+        } finally {
+            DockerContainerManager.testBashOverride.set(null)
+            binDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `isContainerRunning returns false when status is not running`() {
+        val script = """#!/usr/bin/env bash
+if [[ "${'$'}1" == *"docker inspect"* ]]; then echo exited; exit 0; fi
+exit 0
+"""
+        val binDir = Files.createTempDirectory("fake-bash-inspect-")
+        val bash = binDir.resolve("bash")
+        Files.writeString(bash, script)
+        bash.toFile().setExecutable(true)
+        try {
+            DockerContainerManager.testBashOverride.set(bash.toString())
+            val manager = DockerContainerManager(DockerConfig(), Files.createTempDirectory("docker-inspect-ws-"), 2, noopLogger())
+            assertThat(manager.isContainerRunning("cid")).isFalse()
+        } finally {
+            DockerContainerManager.testBashOverride.set(null)
+            binDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `captureLogs returns null when logs command exits non zero`() {
+        val script = """#!/usr/bin/env bash
+if [[ "${'$'}1" == *"docker logs"* ]]; then echo "boom"; exit 1; fi
+exit 0
+"""
+        val binDir = Files.createTempDirectory("fake-bash-logs-fail-")
+        val bash = binDir.resolve("bash")
+        Files.writeString(bash, script)
+        bash.toFile().setExecutable(true)
+        try {
+            DockerContainerManager.testBashOverride.set(bash.toString())
+            val manager = DockerContainerManager(DockerConfig(), Files.createTempDirectory("docker-logs-fail-ws-"), 2, noopLogger())
+            assertThat(manager.captureLogs("cid")).isNull()
+        } finally {
+            DockerContainerManager.testBashOverride.set(null)
+            binDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `pruneOldContainers skips invalid created at format`() {
+        val script = """#!/usr/bin/env bash
+if [[ "${'$'}1" == *"docker ps"* ]]; then
+  echo "badid|not-a-date"
+  exit 0
+fi
+exit 0
+"""
+        val binDir = Files.createTempDirectory("fake-bash-prune-invalid-date-")
+        val bash = binDir.resolve("bash")
+        Files.writeString(bash, script)
+        bash.toFile().setExecutable(true)
+        try {
+            DockerContainerManager.testBashOverride.set(bash.toString())
+            DockerContainerManager.pruneOldContainers(noopLogger(), olderThanHours = 1)
         } finally {
             DockerContainerManager.testBashOverride.set(null)
             binDir.toFile().deleteRecursively()

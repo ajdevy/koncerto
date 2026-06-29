@@ -179,9 +179,10 @@ class DemoRecordingTriggerTest {
     @Test
     fun `resolveRepoFullName regex returns null for GitHub URL without dot git suffix`() {
         val gitConfig = "[remote \"origin\"]\n\turl = git@github.com:owner/repo"
-        val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)""")
+        val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
             .find(gitConfig, gitConfig.indexOf("[remote \"origin\"]"))
-        assertThat(match).isNull()
+        assertThat(match).isNotNull()
+        assertThat(match!!.groupValues[1]).isEqualTo("owner/repo")
     }
 
     @Test
@@ -273,6 +274,20 @@ class DemoRecordingTriggerTest {
     }
 
     @Test
+    fun `resolveRepoFullName reads github remote without dot git suffix`(@TempDir tmpDir: Path) {
+        val gitDir = tmpDir.resolve(".git")
+        Files.createDirectories(gitDir)
+        Files.writeString(
+            gitDir.resolve("config"),
+            "[remote \"origin\"]\n\turl = https://github.com/acme/widget\n"
+        )
+
+        val result = invokeResolveRepoFullName(tmpDir)
+
+        assertThat(result).isEqualTo("acme/widget")
+    }
+
+    @Test
     fun `resolveRepoFullName returns null when git config missing`(@TempDir tmpDir: Path) {
         assertThat(invokeResolveRepoFullName(tmpDir)).isNull()
     }
@@ -303,6 +318,22 @@ class DemoRecordingTriggerTest {
         val result = invokeResolveRepoFullName(tmpDir)
 
         assertThat(result).isNull()
+    }
+
+    @Test
+    fun `resolveProjectPath falls back to repo root when issue dir has no git metadata`(@TempDir tmpDir: Path) {
+        val repoRoot = tmpDir.resolve("PromoMesh")
+        val issueDir = repoRoot.resolve("FLE-52")
+        Files.createDirectories(repoRoot.resolve(".git"))
+        Files.writeString(
+            repoRoot.resolve(".git").resolve("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:acme/widget.git\n"
+        )
+        Files.createDirectories(issueDir)
+
+        val result = invokeResolveProjectPath(issueDir)
+
+        assertThat(result).isEqualTo(repoRoot)
     }
 
     @Test
@@ -426,6 +457,20 @@ class DemoRecordingTriggerTest {
         method.isAccessible = true
         val config = ServiceConfig.fromMap(mapOf("poll_interval_ms" to 15000), ".")
         return method.invoke(DemoRecordingTrigger, workspacePath, config) as String?
+    }
+
+    private fun invokeResolveProjectPath(workspacePath: Path): Path? {
+        val method = DemoRecordingTrigger::class.java.getDeclaredMethod(
+            "resolveProjectPath",
+            Path::class.java,
+            com.flexsentlabs.koncerto.logging.StructuredLogger::class.java
+        )
+        method.isAccessible = true
+        return method.invoke(
+            DemoRecordingTrigger,
+            workspacePath,
+            com.flexsentlabs.koncerto.logging.StructuredLogger(emptyList())
+        ) as Path?
     }
 
     private fun invokeResolveIssueId(workspacePath: Path): String? {

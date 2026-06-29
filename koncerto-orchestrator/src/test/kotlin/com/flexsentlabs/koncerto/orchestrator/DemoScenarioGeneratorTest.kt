@@ -355,4 +355,49 @@ class DemoScenarioGeneratorTest {
         val prompt = generator().buildPrompt(issue, workspace)
         assertThat(prompt.contains("## PR Changes") || prompt.contains("updated readme")).isEqualTo(true)
     }
+
+    @Test
+    fun `buildPrompt tolerates git diff failures for missing workspace`() {
+        val missing = java.nio.file.Paths.get("/tmp/koncerto-missing-${System.nanoTime()}")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(missing, "T-1", createdNow = false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i-missing", identifier = "MISS-1", title = "Missing ws", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `defaultProcessRunner returns null on non-zero exit`() {
+        val output = DemoScenarioGenerator.defaultProcessRunner().run(
+            listOf("bash", "-lc", "exit 3"),
+            File("/tmp"),
+            2
+        )
+        assertThat(output).isNull()
+    }
+
+    @Test
+    fun `defaultProcessRunner returns null on timeout`() {
+        val output = DemoScenarioGenerator.defaultProcessRunner().run(
+            listOf("bash", "-lc", "sleep 2"),
+            File("/tmp"),
+            1
+        )
+        assertThat(output).isNull()
+    }
+
+    @Test
+    fun `generate returns null when scenario directory cannot be created`(@TempDir tmpDir: Path) = runTest {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "bad/issue-id", identifier = "DIR-FAIL", title = "Dir fail", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val result = generatorWithRunner { _, _, _ -> validScenarioOutput }.generate(issue, workspace)
+        assertThat(result).isNull()
+    }
 }

@@ -23,6 +23,7 @@ class PlaywrightRecorderTest {
         PlaywrightRecorder.testDependenciesAvailable = null
         PlaywrightRecorder.testRecordProcessBuilder = null
         PlaywrightRecorder.testMaxWaitSeconds = null
+        PlaywrightRecorder.testStartupWaitSeconds = null
     }
 
     private val config = RecordingConfig(
@@ -103,7 +104,16 @@ class PlaywrightRecorderTest {
         val output = File.createTempFile("pw-success-", ".webm")
         PlaywrightRecorder.testDependenciesAvailable = true
         PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
-            ProcessBuilder("bash", "-c", "echo ok > '${out.absolutePath}'; exit 0")
+            ProcessBuilder(
+                "bash",
+                "-c",
+                """
+                set -e
+                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
+                echo ok > '${out.absolutePath}'
+                exit 0
+                """.trimIndent()
+            )
         }
         val result = PlaywrightRecorder().record(config, output)
         assertThat(result).isInstanceOf(DemoResult.Success::class)
@@ -121,6 +131,43 @@ class PlaywrightRecorderTest {
         val result = PlaywrightRecorder().record(config, output)
         assertThat(result).isInstanceOf(DemoResult.Failure::class)
         assertThat((result as DemoResult.Failure).error).isInstanceOf(DemoError.RecordingFailed::class)
+    }
+
+    @Test
+    fun `record returns failure when recording never starts`() = runTest {
+        val output = File.createTempFile("pw-startup-timeout-", ".webm")
+        PlaywrightRecorder.testDependenciesAvailable = true
+        PlaywrightRecorder.testStartupWaitSeconds = 1L
+        PlaywrightRecorder.testRecordProcessBuilder = { _, _ ->
+            ProcessBuilder("bash", "-c", "sleep 5")
+        }
+        val result = PlaywrightRecorder().record(config, output)
+        assertThat(result).isInstanceOf(DemoResult.Failure::class)
+        assertThat((result as DemoResult.Failure).error).isInstanceOf(DemoError.RecordingFailed::class)
+    }
+
+    @Test
+    fun `record succeeds when recording start marker appears`() = runTest {
+        val output = File.createTempFile("pw-marker-", ".webm")
+        PlaywrightRecorder.testDependenciesAvailable = true
+        PlaywrightRecorder.testStartupWaitSeconds = 2L
+        PlaywrightRecorder.testMaxWaitSeconds = 3L
+        PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
+            ProcessBuilder(
+                "bash",
+                "-c",
+                """
+                set -e
+                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
+                sleep 1
+                echo done > '${out.absolutePath}'
+                exit 0
+                """.trimIndent()
+            )
+        }
+        val result = PlaywrightRecorder().record(config, output)
+        assertThat(result).isInstanceOf(DemoResult.Success::class)
+        assertThat(output.exists() && output.length() > 0).isTrue()
     }
 
     @Test
@@ -176,7 +223,16 @@ class PlaywrightRecorderTest {
         PlaywrightRecorder.testDependenciesAvailable = true
         PlaywrightRecorder.testRecordProcessBuilder = { cfg, out ->
             assertThat(cfg.scenarioPath).isEqualTo(scenario.absolutePath)
-            ProcessBuilder("bash", "-c", "echo ok > '${out.absolutePath}'; exit 0")
+            ProcessBuilder(
+                "bash",
+                "-c",
+                """
+                set -e
+                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
+                echo ok > '${out.absolutePath}'
+                exit 0
+                """.trimIndent()
+            )
         }
         val result = PlaywrightRecorder().record(
             config.copy(scenarioPath = scenario.absolutePath),

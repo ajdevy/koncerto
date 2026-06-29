@@ -124,4 +124,44 @@ class RetryStrategyTest {
         assertThat(result).isEqualTo("success")
         assertThat(attempts).isEqualTo(listOf(0, 1, 2))
     }
+
+    @Test
+    fun `retryWithBackoff with zero max retries throws immediately`() = runBlocking {
+        val config = RetryConfig(maxRetries = 0, initialDelayMs = 10)
+        var attempts = 0
+        val ex = assertThrows<IllegalStateException> {
+            RetryStrategy.retryWithBackoff(
+                block = {
+                    attempts++
+                    throw IllegalStateException("no retries")
+                },
+                config = config
+            )
+        }
+        assertThat(attempts).isEqualTo(1)
+        assertThat(ex.message).isEqualTo("no retries")
+    }
+
+    @Test
+    fun `nextDelay uses default config when omitted`() {
+        val delay = RetryStrategy.nextDelay(0)
+        Assertions.assertTrue(delay >= 1000)
+    }
+
+    @Test
+    fun `retryWithBackoff with negative retries throws fallback exception`() = runBlocking {
+        val ex = assertThrows<RuntimeException> {
+            RetryStrategy.retryWithBackoff(
+                block = { "never called" },
+                config = RetryConfig(maxRetries = -1)
+            )
+        }
+        assertThat(ex.message).isEqualTo("retryWithBackoff failed unexpectedly")
+    }
+
+    @Test
+    fun `retryWithBackoff uses default config when omitted`() = runBlocking {
+        val result = RetryStrategy.retryWithBackoff(block = { _: Int -> "ok" })
+        assertThat(result).isEqualTo("ok")
+    }
 }

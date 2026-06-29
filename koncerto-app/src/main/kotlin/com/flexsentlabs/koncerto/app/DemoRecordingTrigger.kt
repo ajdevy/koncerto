@@ -60,6 +60,11 @@ object DemoRecordingTrigger {
             println("Workspace not found for $issueIdentifier at $workspacePath")
             kotlin.system.exitProcess(1)
         }
+        val projectPath = resolveProjectPath(workspacePath, logger)
+        if (projectPath == null) {
+            println("Could not locate a git checkout for $issueIdentifier starting at $workspacePath")
+            kotlin.system.exitProcess(1)
+        }
 
         val resolvedIssueId = issueId ?: resolveIssueId(workspacePath, logger)
         if (resolvedIssueId == null) {
@@ -68,7 +73,7 @@ object DemoRecordingTrigger {
         }
 
         println("Deploying target project for $issueIdentifier...")
-        val deployResult = runBlocking { deployProject(config, workspacePath, issueIdentifier, logger) }
+        val deployResult = runBlocking { deployProject(config, projectPath, issueIdentifier, logger) }
         if (deployResult == null) {
             println("Deployment failed, aborting")
             kotlin.system.exitProcess(1)
@@ -110,7 +115,7 @@ object DemoRecordingTrigger {
             repoFullName = "ajdevy/PromoMesh",
             prBranch = issueIdentifier,
             baseBranch = "main",
-            projectPath = workspacePath
+            projectPath = projectPath
         )
         runBlocking { deployer.cleanup(deployConfig) }
         println("Cleanup complete")
@@ -148,6 +153,23 @@ object DemoRecordingTrigger {
             logger.warn("deploy_failed", mapOf("error" to (result.error ?: "unknown")))
         }
         return result
+    }
+
+    private fun resolveProjectPath(workspacePath: Path, logger: StructuredLogger): Path? {
+        if (hasGitMetadata(workspacePath)) return workspacePath
+        val parent = workspacePath.parent ?: return null
+        if (hasGitMetadata(parent)) {
+            logger.warn(
+                "deploy_workspace_fallback",
+                mapOf(
+                    "issue_path" to workspacePath.toString(),
+                    "repo_path" to parent.toString(),
+                    "reason" to "missing_git_metadata"
+                )
+            )
+            return parent
+        }
+        return null
     }
 
     private fun createRecordingService(
@@ -210,13 +232,46 @@ object DemoRecordingTrigger {
     }
 
     private fun resolveRepoFullName(workspacePath: Path, config: ServiceConfig): String? {
-        val gitConfigPath = workspacePath.resolve(".git/config")
-        if (!gitConfigPath.toFile().exists()) return null
+        val gitConfigPath = gitConfigFile(workspacePath) ?: return null
         return try {
             val content = gitConfigPath.toFile().readText()
-            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)""")
-                .find(content, content.indexOf("[remote \"origin\"]"))
-            match?.groupValues?.get(1)
+            extractRepoFullNameFromGitConfig(content)
         } catch (_: Exception) { null }
+    }
+
+    private fun extractRepoFullNameFromGitConfig(content: String): String? {
+        val lines = content.lineSequence().map { it.trim() }.toList()
+        val originIndex = lines.indexOf("[remote \"origin\"]")
+        if (originIndex < 0) return null
+        val remoteUrl = lines.drop(originIndex + 1)
+            .firstOrNull { it.startsWith("url =") }
+            ?.removePrefix("url =")
+            ?.trim()
+            .orEmpty()
+        val match = Regex("""github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$""").find(remoteUrl)
+        return match?.groupValues?.get(1)
+    }
+
+    private fun hasGitMetadata(path: Path): Boolean = gitConfigFile(path)?.toFile()?.exists() == true
+
+    private fun gitConfigFile(path: Path): Path? {
+        val dotGit = path.resolve(".git")
+        return when {
+            dotGit.toFile().isDirectory -> dotGit.resolve("config")
+            dotGit.toFile().isFile -> {
+                val gitDir = runCatching {
+                    dotGit.toFile().readText()
+                        .lineSequence()
+                        .firstOrNull { it.startsWith("gitdir:") }
+                        ?.removePrefix("gitdir:")
+                        ?.trim()
+                }.getOrNull()
+                if (gitDir.isNullOrBlank()) null else {
+                    val resolved = if (gitDir.startsWith("/")) Paths.get(gitDir) else path.resolve(gitDir)
+                    resolved.resolve("config")
+                }
+            }
+            else -> null
+        }
     }
 }

@@ -24,6 +24,7 @@ import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.core.tenant.TenantContext
 import com.flexsentlabs.koncerto.core.tenant.TenantResolver
 import com.flexsentlabs.koncerto.linear.LinearClient
+import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.metrics.MetricsRepository
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
@@ -33,6 +34,7 @@ import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.time.Instant
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
@@ -46,6 +48,8 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.takeWhile
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 private const val AGENT_LABEL_PREFIX = "agent:"
 private const val MODEL_LABEL_PREFIX = "model:"
@@ -91,11 +95,16 @@ class DispatchService(
 
     suspend fun fetchAndDispatch(scope: CoroutineScope) {
         if (shutdownRequested) return
+        logger.info("dispatch_cycle_start", mapOf("project_slug" to projectConfig.tracker.projectSlug))
         val candidates = try {
             scope.coroutineContext.ensureActive()
             linear.fetchCandidateIssues(projectConfig.tracker.projectSlug, projectConfig.tracker.activeStates)
         } catch (e: Exception) {
             logger.failure("fetch_candidates_failed", emptyMap(), e)
+            logger.warn("dispatch_cycle_failed", mapOf(
+                "project_slug" to projectConfig.tracker.projectSlug,
+                "phase" to "fetch_candidates"
+            ))
             return
         }
 
@@ -146,6 +155,11 @@ class DispatchService(
                 dispatch(issue, scope, stageNameOverride = stageOverride)
             }
         }
+        logger.info("dispatch_cycle_complete", mapOf(
+            "project_slug" to projectConfig.tracker.projectSlug,
+            "candidate_count" to candidates.size.toString(),
+            "frontier_count" to sorted.size.toString()
+        ))
     }
 
     suspend fun scheduleLimitPause(
@@ -158,6 +172,7 @@ class DispatchService(
     ) {
         val cfg = projectConfig.agent.limitPause
         if (!cfg.enabled) {
+            logger.info("limit_pause_fallback_retry", mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier))
             scheduleRetry(issue, error, null)
             return
         }
@@ -205,6 +220,12 @@ class DispatchService(
                 }
             }
         }
+        traceDispatchStep(issue, "limit_pause", "scheduled", mapOf(
+            "provider" to provider,
+            "resume_at_ms" to resumeAtMs.toString(),
+            "stage" to stageName,
+            "agent_kind" to agentKind
+        ))
     }
 
     suspend fun dispatchDueLimitPauses(scope: CoroutineScope) {
@@ -252,6 +273,10 @@ class DispatchService(
             }
             if (!success) {
                 state.limitPauses.computeIfAbsent(issueId) { pauseEntry }
+                traceDispatchStep(issue, "limit_pause", "redispatch_failed", mapOf(
+                    "provider" to pauseEntry.provider,
+                    "stage" to pauseEntry.stageName
+                ))
             }
         }
     }
@@ -269,6 +294,10 @@ class DispatchService(
                 mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
                 "max_retries" to maxRetries.toString()
             )
+            traceDispatchStep(issue, "retry", "exhausted", mapOf(
+                "error" to error,
+                "max_retries" to maxRetries.toString()
+            ))
             auditLogger?.log(AuditEvent(
                 timestamp = System.currentTimeMillis(),
                 type = AuditEventType.AGENT_FAILED,
@@ -305,6 +334,11 @@ class DispatchService(
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier),
             "attempt" to entry.attempt, "delay_ms" to (entry.dueAtMs - System.currentTimeMillis())
         )
+        traceDispatchStep(issue, "retry", "scheduled", mapOf(
+            "attempt" to entry.attempt.toString(),
+            "delay_ms" to (entry.dueAtMs - System.currentTimeMillis()).toString(),
+            "error" to error
+        ))
         auditLogger?.log(AuditEvent(
             timestamp = System.currentTimeMillis(),
             type = AuditEventType.AGENT_RETRY_SCHEDULED,
@@ -325,6 +359,34 @@ class DispatchService(
     private fun isBlockedForTodo(issue: Issue): Boolean {
         if (!issue.normalizedState.equals("todo", ignoreCase = true)) return false
         return state.isBlocked(issue.id)
+    }
+
+    private fun traceDispatchStep(
+        issue: Issue,
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        val workspace = workspaces?.let { runCatching { it.ensureWorkspace(issue.identifier) }.getOrNull() } ?: return
+        val traceDir = workspace.path.resolve(".koncerto")
+        try {
+            val payload = buildJsonObject {
+                put("timestamp", Instant.now().toString())
+                put("issue_id", issue.id)
+                put("issue_identifier", issue.identifier)
+                put("step", step)
+                put("status", status)
+                details.forEach { (k, v) -> put(k, v) }
+            }
+            RollingTraceFiles.append(traceDir, "dispatch-trace", payload.toString())
+        } catch (e: Exception) {
+            logger.warn("dispatch_trace_write_failed", mapOf(
+                "issue_id" to issue.id,
+                "step" to step,
+                "status" to status,
+                "error" to (e.message ?: "unknown")
+            ))
+        }
     }
 
     private fun evaluateRoutingRules(issue: Issue): ResolvedAgent? {
@@ -519,6 +581,10 @@ class DispatchService(
             "dispatch_start",
             mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier)
         )
+        traceDispatchStep(issue, "dispatch", "start", mapOf(
+            "attempt" to (attempt?.toString() ?: "1"),
+            "stage" to (stageNameOverride ?: issue.normalizedState)
+        ))
         val effectiveStage = stageNameOverride ?: issue.normalizedState
         val stageConfig = projectConfig.agent.stages[effectiveStage]
         val effectiveStageConfig = if (stageNameOverride != null && issue.normalizedState == "todo") {
@@ -540,6 +606,7 @@ class DispatchService(
                 "issue_identifier" to issue.identifier,
                 "agent_kind" to resolved.kind
             ))
+            traceDispatchStep(issue, "dispatch", "skipped_auth", mapOf("agent_kind" to resolved.kind))
             return null
         }
 
@@ -558,12 +625,14 @@ class DispatchService(
         logger.info("dispatch_context", contextMap)
 
         if (!state.tryClaim(issue.id)) return null
+        traceDispatchStep(issue, "dispatch", "claimed")
 
         try {
             // Check quota atomically with claim — null quotaConfig means no limit
             val quotaAcquired = quotaConfig == null || quotaEnforcer?.tryAcquire(projectConfig.tracker.projectSlug, quotaConfig) == true
             if (!quotaAcquired) {
                 state.releaseClaim(issue.id)
+                traceDispatchStep(issue, "dispatch", "quota_denied")
                 return null
             }
 
@@ -577,11 +646,16 @@ class DispatchService(
                             "issue_id" to issue.id,
                             "to_state" to "In Progress"
                         ))
+                        traceDispatchStep(issue, "dispatch", "state_transitioned", mapOf("to_state" to "In Progress"))
                     }
                 } catch (e: Exception) {
                     logger.warn("state_transition_failed", mapOf(
                         "issue_id" to issue.id,
                         "target_state" to "In Progress"
+                    ))
+                    traceDispatchStep(issue, "dispatch", "state_transition_failed", mapOf(
+                        "target_state" to "In Progress",
+                        "error" to (e.message ?: "unknown")
                     ))
                 }
             }
@@ -616,6 +690,7 @@ class DispatchService(
             )
         } catch (e: Exception) {
             state.releaseClaim(issue.id)
+            traceDispatchStep(issue, "dispatch", "prepare_failed", mapOf("error" to (e.message ?: "unknown")))
             throw e
         }
     }
@@ -673,6 +748,10 @@ class DispatchService(
                     outputTokens = finalEntry?.outputTokens ?: 0,
                     totalTokens = finalEntry?.totalTokens ?: 0
                 ))
+                traceDispatchStep(issue, "agent_run", "success", mapOf(
+                    "stage" to data.stageName,
+                    "agent_kind" to data.agentKind
+                ))
                 scope.coroutineContext.ensureActive()
                 try {
                     handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
@@ -705,6 +784,11 @@ class DispatchService(
                     issueId = issue.id,
                     issueIdentifier = issue.identifier,
                     error = err.message
+                ))
+                traceDispatchStep(issue, "agent_run", "failure", mapOf(
+                    "stage" to data.stageName,
+                    "agent_kind" to data.agentKind,
+                    "error" to (err.message ?: "unknown")
                 ))
                 when (val limitErr = err as? SubscriptionLimitException) {
                     null -> {

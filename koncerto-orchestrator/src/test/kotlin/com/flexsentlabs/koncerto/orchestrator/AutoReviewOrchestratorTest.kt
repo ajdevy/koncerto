@@ -8,6 +8,7 @@ import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import assertk.assertions.hasSize
 import com.flexsentlabs.koncerto.agent.AgentEvent
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.AgentProjectConfig
@@ -32,9 +33,14 @@ import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.test.runTest
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
+import kotlin.coroutines.resume
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -574,6 +580,22 @@ class AutoReviewOrchestratorTest {
         )
     }
 
+    private fun initGitWorktreeOrigin(workspace: Path, repo: String = "owner/repo") {
+        val gitDir = workspace.resolve(".gitdir")
+        Files.createDirectories(gitDir)
+        Files.writeString(
+            gitDir.resolve("config"),
+            """
+            [remote "origin"]
+                url = git@github.com:$repo.git
+            """.trimIndent()
+        )
+        Files.writeString(
+            workspace.resolve(".git"),
+            "gitdir: ${gitDir.toAbsolutePath()}"
+        )
+    }
+
     private class RecordingProjectDeployer(
         var deployResult: DeployResult = DeployResult.success("http://localhost:8080")
     ) : ProjectDeployer {
@@ -655,6 +677,18 @@ class AutoReviewOrchestratorTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `resolveRepoFullName reads owner repo from worktree gitdir file`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitWorktreeOrigin(issueDir, "acme/widget")
         Files.writeString(issueDir.resolve(".review-status"), "pass")
 
         val deployer = RecordingProjectDeployer()
@@ -860,6 +894,40 @@ class AutoReviewOrchestratorTest {
         assertThat(capturedBody).isNotNull()
         assertThat(capturedBody!!).contains("Watch Demo Recording")
         assertThat(capturedBody!!).contains("https://demo.example.com/vid")
+    }
+
+    @Test
+    fun `review trace captures successful pass pipeline`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "---\n✅ PASS\nLooks good\n")
+
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                else -> GhProcessResult(0, "")
+            }
+        }
+
+        passingReviewOrchestrator(
+            workspaceDir,
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ -> "https://demo.example.com/vid" }
+        ).onCodingComplete(issue())
+
+        val traceDir = issueDir.resolve(".koncerto")
+        val traceFile = Files.list(traceDir).use { stream ->
+            stream.filter {
+                it.fileName.toString().startsWith("review-trace-") && it.fileName.toString().endsWith(".jsonl")
+            }.findFirst().orElseThrow()
+        }
+        val trace = Files.readString(traceFile)
+        assertThat(trace.contains("review_pass")).isTrue()
+        assertThat(trace.contains("pr_comment")).isTrue()
+        assertThat(trace.contains("demo_recording")).isTrue()
     }
 
     @Test
@@ -1253,5 +1321,381 @@ class AutoReviewOrchestratorTest {
         )
         orchestrator.onCodingComplete(issue())
         assertThat(Files.exists(workspaceDir.resolve("T-1").resolve(".review-exhausted"))).isTrue()
+    }
+
+    @Test
+    fun `uses default maxReviewAttempts when stage value is null`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        Files.createDirectories(workspaceDir.resolve("T-1"))
+        val stage = reviewStage().copy(maxReviewAttempts = null, onFailureState = "In Progress")
+        val state = RuntimeState()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat(state.reviewAttempts["issue-1"]).isEqualTo(1)
+    }
+
+    @Test
+    fun `review backup copy failure does not stop pass flow`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.createDirectories(issueDir.resolve(".review-output"))
+
+        val decision = passingReviewOrchestrator(workspaceDir).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `pass pipeline tolerates scenario deploy callback and cleanup throws`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ PASS\nok")
+
+        val throwingGenerator = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { _, _, _ -> throw RuntimeException("scenario boom") }
+        )
+        val throwingDeployer = object : ProjectDeployer {
+            override suspend fun deploy(config: DeployConfig): DeployResult {
+                throw RuntimeException("deploy blew up")
+            }
+
+            override suspend fun cleanup(config: DeployConfig) {
+                throw RuntimeException("cleanup blew up")
+            }
+        }
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = throwingGenerator,
+            targetProjectDeployer = throwingDeployer,
+            onReviewPassed = { _, _ -> throw RuntimeException("demo callback boom") }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `pipeline wrapper catches postDetailedReview exceptions`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ PASS\nok")
+        Files.writeString(issueDir.resolve(".review-output"), "ok")
+
+        val explodingLogger = StructuredLogger(listOf(object : LogSink {
+            override fun write(line: String) {
+                throw RuntimeException("log sink failed")
+            }
+        }))
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = explodingLogger
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment skips when pr cannot be resolved`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ PASS\nok")
+
+        var commentCalled = false
+        val ghRunner: GhProcessRunner = { command, _ ->
+            if (command.contains("comment")) commentCalled = true
+            if (command.contains("view")) GhProcessResult(0, """{"unexpected":true}""") else GhProcessResult(0, "")
+        }
+        val decision = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(commentCalled).isFalse()
+    }
+
+    @Test
+    fun `deploy failure reporter path executes on deploy failure`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer(deployResult = DeployResult.failure("boom", logs = "stack"))
+        val reporter = com.flexsentlabs.koncerto.deploy.DemoFailureReporter(noopLogger())
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            targetProjectDeployer = deployer,
+            demoFailureReporter = reporter,
+            ghProcessRunner = { command, _ ->
+                if (command.contains("view")) GhProcessResult(1, "not found") else GhProcessResult(0, "")
+            }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `readReviewStatus catch path returns retry decision`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.createDirectories(issueDir.resolve(".review-status"))
+
+        val stage = reviewStage().copy(onFailureState = "In Progress")
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        ).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+    }
+
+    @Test
+    fun `writeReviewExhaustion catches io failures`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.createDirectories(issueDir.resolve(".review-exhausted.tmp"))
+
+        val stage = reviewStage().copy(maxReviewAttempts = 1)
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+    }
+
+    @Test
+    fun `traceReviewStep catch path is tolerated`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".koncerto"), "not-a-dir")
+
+        val decision = passingReviewOrchestrator(workspaceDir).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `buildDefaultReviewPrompt includes identifier and title`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("buildDefaultReviewPrompt", Issue::class.java)
+        method.isAccessible = true
+        val prompt = method.invoke(orchestrator, issue(id = "1", identifier = "ABC-7")) as String
+        assertThat(prompt.contains("ABC-7")).isTrue()
+        assertThat(prompt.contains("Test issue")).isTrue()
+    }
+
+    @Test
+    fun `pass pipeline traces scenario saved when generator succeeds`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val scenarioYaml = """
+            ```yaml demo_scenario
+            steps:
+              - action: navigate
+                url: http://localhost:8080
+            ```
+        """.trimIndent()
+        val generator = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { _, _, _ -> scenarioYaml }
+        )
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = generator
+        ).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `pass pipeline traces deploy success url`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val deployer = RecordingProjectDeployer(
+            deployResult = DeployResult.success("http://localhost:32768")
+        )
+        val decision = passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(deployer.deployCalls).hasSize(1)
+    }
+
+    @Test
+    fun `pass pipeline traces demo recording skipped when callback returns null`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val decision = passingReviewOrchestrator(
+            workspaceDir,
+            onReviewPassed = { _, _ -> null }
+        ).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `retry path traces review retry step`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "fail")
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        ).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+    }
+
+    @Test
+    fun `resolveGitConfigPath returns null for malformed gitdir file`(@TempDir tmpDir: Path) {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".git"), "not-a-gitdir-line")
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("resolveGitConfigPath", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(orchestrator, issueDir) as Path?
+        assertThat(result).isNull()
+    }
+
+    @Test
+    fun `readReviewStatus re-reads empty status file after delay`(@TempDir tmpDir: Path) = runTest {
+        val issueDir = tmpDir.resolve("T-1").also { Files.createDirectories(it) }
+        val statusFile = issueDir.resolve(".review-status")
+        Files.writeString(statusFile, "")
+        val writeJob = launch {
+            delay(50)
+            Files.writeString(statusFile, "pass")
+        }
+        val orchestrator = passingReviewOrchestrator(tmpDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "readReviewStatus",
+            Path::class.java,
+            Continuation::class.java
+        )
+        method.isAccessible = true
+        val passed = suspendCancellableCoroutine<Boolean> { cont ->
+            val invokeResult = runCatching { method.invoke(orchestrator, issueDir, cont) }
+            invokeResult.onFailure { cont.resumeWith(kotlin.Result.failure(it)) }
+            if (invokeResult.isSuccess && invokeResult.getOrNull() !== COROUTINE_SUSPENDED) {
+                cont.resume(invokeResult.getOrNull() as Boolean)
+            }
+        }
+        writeJob.join()
+        assertThat(passed).isTrue()
+    }
+
+    @Test
+    fun `cleanupReviewFiles tolerates delete failures on review status directory`(@TempDir tmpDir: Path) {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.createDirectories(issueDir.resolve(".review-status"))
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("cleanupReviewFiles", Path::class.java)
+        method.isAccessible = true
+        method.invoke(orchestrator, issueDir)
+    }
+
+    @Test
+    fun `onCodingComplete handles workspace resolution failure gracefully`(@TempDir tmpDir: Path) = runTest {
+        val workspaceRootFile = tmpDir.resolve("workspace-root-file")
+        Files.writeString(workspaceRootFile, "not-a-directory")
+        val state = RuntimeState()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceRootFile, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceRootFile.toString()),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat(state.reviewAttempts["issue-1"]).isEqualTo(1)
+    }
+
+    @Test
+    fun `resolveGitConfigPath returns null when gitdir path is invalid`(@TempDir tmpDir: Path) {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".git"), "gitdir: \u0000")
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("resolveGitConfigPath", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(orchestrator, issueDir) as Path?
+        assertThat(result).isNull()
     }
 }

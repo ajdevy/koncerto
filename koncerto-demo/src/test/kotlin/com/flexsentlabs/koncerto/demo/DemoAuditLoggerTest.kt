@@ -8,15 +8,20 @@ import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import java.io.File
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class DemoAuditLoggerTest {
 
-    private val logFile = File.createTempFile("demo-audit-", ".log")
-    private val logger = DemoAuditLogger(logFile.absolutePath)
+    private val tempDir = createTempDir(prefix = "demo-audit-")
+    private val logFile = File(tempDir, "audit.log")
+    private val zone = ZoneId.of("UTC")
+    private val logger = DemoAuditLogger(logFile.absolutePath, retentionDays = 7, zoneId = zone)
 
     @AfterEach
     fun tearDown() {
-        if (logFile.exists()) logFile.delete()
+        tempDir.deleteRecursively()
     }
 
     private fun createTask(
@@ -40,10 +45,10 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logTaskCreated writes proper format`() {
-        logFile.writeText("")
         val task = createTask()
         logger.logTaskCreated(task)
-        val line = logFile.readLines().last()
+        val current = datedLogFile()
+        val line = current.readLines().last()
         assert(line.contains("TASK_CREATED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("issue_id=${task.issueId}"))
@@ -53,10 +58,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logRecordingStarted writes proper format`() {
-        logFile.writeText("")
         val task = createTask()
         logger.logRecordingStarted(task)
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("RECORDING_STARTED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("platform=${task.platform.name}"))
@@ -64,10 +68,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logRecordingCompleted writes proper format`() {
-        logFile.writeText("")
         val task = createTask(fileSizeBytes = 4096L)
         logger.logRecordingCompleted(task, 3000L)
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("RECORDING_COMPLETED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("duration_ms=3000"))
@@ -76,10 +79,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logUploadCompleted writes proper format`() {
-        logFile.writeText("")
         val task = createTask()
         logger.logUploadCompleted(task, "demo-recordings/task-1/video.webm")
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("UPLOAD_COMPLETED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("storage_key=demo-recordings/task-1/video.webm"))
@@ -87,10 +89,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logReportPosted writes proper format`() {
-        logFile.writeText("")
         val task = createTask()
         logger.logReportPosted(task, "https://example.com/recording.webm")
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("REPORT_POSTED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("url=https://example.com/recording.webm"))
@@ -98,10 +99,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logTaskFailed writes proper format`() {
-        logFile.writeText("")
         val task = createTask(retryCount = 3)
         logger.logTaskFailed(task, "recording_failed: timeout")
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("TASK_FAILED"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("error=recording_failed: timeout"))
@@ -110,10 +110,9 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logFallback writes proper format`() {
-        logFile.writeText("")
         val task = createTask()
         logger.logFallback(task, "PLAYWRIGHT", "ASCIINEMA")
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("FALLBACK"))
         assert(line.contains("task_id=${task.id}"))
         assert(line.contains("from=PLAYWRIGHT"))
@@ -122,20 +121,23 @@ class DemoAuditLoggerTest {
 
     @Test
     fun `logCleanup writes proper format`() {
-        logFile.writeText("")
         logger.logCleanup(5)
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("CLEANUP"))
         assert(line.contains("deleted_count=5"))
     }
 
     @Test
     fun `logQuotaCheck writes proper format`() {
-        logFile.writeText("")
         logger.logQuotaCheck(1000L, 9000L)
-        val line = logFile.readLines().last()
+        val line = datedLogFile().readLines().last()
         assert(line.contains("QUOTA_CHECK"))
         assert(line.contains("used_bytes=1000"))
         assert(line.contains("available_bytes=9000"))
+    }
+
+    private fun datedLogFile(): File {
+        val date = LocalDate.now(zone).format(DateTimeFormatter.ISO_LOCAL_DATE)
+        return File(tempDir, "audit-$date.log")
     }
 }

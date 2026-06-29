@@ -62,7 +62,7 @@ internal object R2DemoStorageSupport {
         val dateStr = timestamp.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd"))
         val dateTimeStr = timestamp.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
         val credentialScope = "$dateStr/$region/s3/aws4_request"
-        val hostService = URI.create(endpoint).host
+        val hostService = canonicalHost(endpoint)
 
         val allHeaders = linkedMapOf<String, String>()
         allHeaders["host"] = hostService
@@ -101,7 +101,7 @@ internal object R2DemoStorageSupport {
         val credentialScope = "$dateStr/$region/s3/aws4_request"
         val algorithm = "AWS4-HMAC-SHA256"
 
-        val host = URI.create(endpoint).host
+        val host = canonicalHost(endpoint)
         val canonicalUri = "/$bucketName/$storageKey"
 
         val queryParams = linkedMapOf(
@@ -127,6 +127,18 @@ internal object R2DemoStorageSupport {
         val signature = hmacSha256Hex(signingKey, stringToSign)
 
         return "$endpoint/$bucketName/$storageKey?$canonicalQueryString&X-Amz-Signature=$signature"
+    }
+
+    fun canonicalHost(endpoint: String): String {
+        val uri = URI.create(endpoint)
+        val host = uri.host ?: return endpoint
+        val port = uri.port
+        return when {
+            port == -1 -> host
+            uri.scheme == "http" && port == 80 -> host
+            uri.scheme == "https" && port == 443 -> host
+            else -> "$host:$port"
+        }
     }
 
     fun computeQuotaInfo(usedBytes: Long, limitBytes: Long): DemoStorage.QuotaInfo =
