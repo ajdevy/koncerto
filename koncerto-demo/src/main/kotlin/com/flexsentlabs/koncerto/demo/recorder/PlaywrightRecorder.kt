@@ -4,7 +4,9 @@ import com.flexsentlabs.koncerto.demo.model.DemoError
 import com.flexsentlabs.koncerto.demo.model.DemoPlatform
 import com.flexsentlabs.koncerto.demo.model.DemoResult
 import com.flexsentlabs.koncerto.demo.model.RecordingConfig
+import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import java.io.File
+import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -20,9 +22,8 @@ class PlaywrightRecorder : DemoRecorder {
             val node = ProcessBuilder("which", "node").start()
             if (!(node.waitFor(5, TimeUnit.SECONDS) && node.exitValue() == 0)) return@withContext false
             val playwright = ProcessBuilder("node", "-e", "require('playwright')").start()
-            if (!(playwright.waitFor(5, TimeUnit.SECONDS) && playwright.exitValue() == 0)) return@withContext false
-            val chromium = ProcessBuilder("which", "chromium-browser").start()
-            if (!(chromium.waitFor(5, TimeUnit.SECONDS) && chromium.exitValue() == 0)) return@withContext false
+            if (!(playwright.waitFor(15, TimeUnit.SECONDS) && playwright.exitValue() == 0)) return@withContext false
+            if (resolveChromiumExecutablePath().isNullOrBlank()) return@withContext false
             val ffmpeg = ProcessBuilder("which", "ffmpeg").start()
             ffmpeg.waitFor(5, TimeUnit.SECONDS) && ffmpeg.exitValue() == 0
         } catch (_: Exception) {
@@ -34,12 +35,20 @@ class PlaywrightRecorder : DemoRecorder {
         withContext(Dispatchers.IO) {
             var pwScript: File? = null
             var shellScript: File? = null
+            var startedMarker: File? = null
+            val traceDir = File("/tmp/koncerto-demo").toPath()
             try {
                 if (!isAvailable()) {
                     return@withContext DemoResult.Failure(DemoError.RecorderNotAvailable("playwright"))
                 }
 
                 val startTime = System.currentTimeMillis()
+                traceRecordingStep(traceDir, "recording_attempt", "start", mapOf(
+                    "target_url" to config.targetUrl,
+                    "scenario_path" to config.scenarioPath,
+                    "output_path" to outputFile.absolutePath,
+                    "chromium_path" to (resolveChromiumExecutablePath() ?: ""),
+                ))
 
                 pwScript = File.createTempFile("pw-recorder-", ".js")
                 val scenarioArg = if (config.scenarioPath.isNotBlank() && File(config.scenarioPath).exists()) config.scenarioPath else ""
@@ -47,10 +56,16 @@ class PlaywrightRecorder : DemoRecorder {
                 pwScript.deleteOnExit()
 
                 shellScript = File.createTempFile("pw-record-", ".sh")
+                startedMarker = File.createTempFile("pw-recording-started-", ".flag").apply {
+                    delete()
+                    deleteOnExit()
+                }
                 shellScript.writeText(buildShellScript(config, outputFile.absolutePath, scenarioArg))
                 shellScript.setExecutable(true)
                 shellScript.deleteOnExit()
 
+                val chromiumPath = resolveChromiumExecutablePath()
+                val startedMarkerFile = requireNotNull(startedMarker) { "Recording started marker was not created" }
                 val pb = testRecordProcessBuilder?.invoke(config, outputFile)
                     ?: ProcessBuilder("bash", shellScript.absolutePath)
                     .redirectErrorStream(true)
@@ -58,15 +73,45 @@ class PlaywrightRecorder : DemoRecorder {
                 env["TARGET_URL"] = config.targetUrl
                 env["SCENARIO_PATH"] = scenarioArg
                 env["PW_SCRIPT_PATH"] = pwScript.absolutePath
+                env["PW_FFMPEG_STARTED_FILE"] = startedMarkerFile.absolutePath
+                if (!chromiumPath.isNullOrBlank()) {
+                    env["PW_CHROMIUM_PATH"] = chromiumPath
+                }
                 val process = pb.start()
 
-                val maxWaitSec = testMaxWaitSeconds ?: (config.maxDurationSeconds + 60L)
-                val completed = process.waitFor(maxWaitSec, TimeUnit.SECONDS)
+                val startupWaitSec = testStartupWaitSeconds ?: 90L
+                val captureWaitSec = testMaxWaitSeconds ?: (config.maxDurationSeconds + 120L)
+                if (!waitForFile(startedMarkerFile, startupWaitSec, process)) {
+                    process.destroyForcibly()
+                    runCleanup()
+                    traceRecordingStep(traceDir, "recording_attempt", "startup_timeout", mapOf(
+                        "target_url" to config.targetUrl,
+                        "scenario_path" to scenarioArg,
+                        "output_path" to outputFile.absolutePath
+                    ))
+                    return@withContext DemoResult.Failure(
+                        DemoError.RecordingFailed(RuntimeException("Recording startup timed out"))
+                    )
+                }
+
+                traceRecordingStep(traceDir, "recording_attempt", "ffmpeg_started", mapOf(
+                    "target_url" to config.targetUrl,
+                    "scenario_path" to scenarioArg,
+                    "output_path" to outputFile.absolutePath
+                ))
+
+                val completed = process.waitFor(captureWaitSec, TimeUnit.SECONDS)
                 val durationMs = System.currentTimeMillis() - startTime
 
                 if (!completed) {
                     process.destroyForcibly()
                     runCleanup()
+                    traceRecordingStep(traceDir, "recording_attempt", "timeout", mapOf(
+                        "target_url" to config.targetUrl,
+                        "scenario_path" to scenarioArg,
+                        "output_path" to outputFile.absolutePath,
+                        "wait_sec" to captureWaitSec.toString()
+                    ))
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(RuntimeException("Recording timed out"))
                     )
@@ -77,6 +122,11 @@ class PlaywrightRecorder : DemoRecorder {
 
                 if (exitCode == 2) {
                     runCleanup()
+                    traceRecordingStep(traceDir, "recording_attempt", "content_validation_failed", mapOf(
+                        "target_url" to config.targetUrl,
+                        "scenario_path" to scenarioArg,
+                        "output_path" to outputFile.absolutePath
+                    ))
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(RuntimeException("Content validation failed"))
                     )
@@ -84,6 +134,13 @@ class PlaywrightRecorder : DemoRecorder {
 
                 if (exitCode != 0) {
                     runCleanup()
+                    traceRecordingStep(traceDir, "recording_attempt", "failed", mapOf(
+                        "target_url" to config.targetUrl,
+                        "scenario_path" to scenarioArg,
+                        "output_path" to outputFile.absolutePath,
+                        "exit_code" to exitCode.toString(),
+                        "output_excerpt" to output.take(300)
+                    ))
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(RuntimeException("Recording exited with code $exitCode: $output"))
                     )
@@ -91,11 +148,23 @@ class PlaywrightRecorder : DemoRecorder {
 
                 if (!outputFile.exists() || outputFile.length() == 0L) {
                     runCleanup()
+                    traceRecordingStep(traceDir, "recording_attempt", "empty_output", mapOf(
+                        "target_url" to config.targetUrl,
+                        "scenario_path" to scenarioArg,
+                        "output_path" to outputFile.absolutePath
+                    ))
                     return@withContext DemoResult.Failure(
                         DemoError.RecordingFailed(RuntimeException("Output file is empty or missing"))
                     )
                 }
 
+                traceRecordingStep(traceDir, "recording_attempt", "completed", mapOf(
+                    "target_url" to config.targetUrl,
+                    "scenario_path" to scenarioArg,
+                    "output_path" to outputFile.absolutePath,
+                    "duration_ms" to durationMs.toString(),
+                    "file_size" to outputFile.length().toString()
+                ))
                 DemoResult.Success(DemoRecorder.RecordingResult(
                     file = outputFile,
                     durationMs = durationMs,
@@ -104,10 +173,17 @@ class PlaywrightRecorder : DemoRecorder {
                 ))
             } catch (e: Exception) {
                 runCleanup()
+                traceRecordingStep(traceDir, "recording_attempt", "error", mapOf(
+                    "target_url" to config.targetUrl,
+                    "scenario_path" to config.scenarioPath,
+                    "output_path" to outputFile.absolutePath,
+                    "error" to (e.message ?: "unknown")
+                ))
                 DemoResult.Failure(DemoError.RecordingFailed(e))
             } finally {
                 pwScript?.delete()
                 shellScript?.delete()
+                startedMarker?.delete()
             }
         }
 
@@ -116,11 +192,12 @@ set -e
 export DISPLAY=:99
 
 READY_FILE=$(mktemp /tmp/pw-ready-XXXXXX)
+FFMPEG_STARTED_FILE="${'$'}{PW_FFMPEG_STARTED_FILE}"
 NODE_PID=""
 XVFB_PID=""
 
 cleanup() {
-  rm -f "${'$'}{READY_FILE}" 2>/dev/null || true
+rm -f "${'$'}{READY_FILE}" 2>/dev/null || true
   if [ -n "${'$'}{NODE_PID}" ]; then
     kill ${'$'}{NODE_PID} 2>/dev/null || true
     wait ${'$'}{NODE_PID} 2>/dev/null || true
@@ -156,6 +233,9 @@ for i in $(seq 1 30); do
 done
 
 rm -f "${'$'}{READY_FILE}"
+if [ -n "${'$'}{FFMPEG_STARTED_FILE}" ]; then
+  printf "STARTED" > "${'$'}{FFMPEG_STARTED_FILE}" 2>/dev/null || true
+fi
 
 ffmpeg -y -f x11grab -draw_mouse 0 -r ${config.frameRate} -s ${config.width}x${config.height} -i :99.0 \
   -c:v libvpx-vp9 -b:v 200k -t ${config.maxDurationSeconds} "${outputPath}" 2>/dev/null
@@ -172,6 +252,40 @@ exit ${'$'}?
         } catch (_: Exception) {}
     }
 
+    private fun waitForFile(file: File?, timeoutSec: Long, process: Process): Boolean {
+        if (file == null) return false
+        val deadlineMs = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(timeoutSec)
+        while (System.currentTimeMillis() < deadlineMs) {
+            if (file.exists()) return true
+            if (!process.isAlive) return false
+            Thread.sleep(250)
+        }
+        return file.exists()
+    }
+
+    private fun resolveChromiumExecutablePath(): String? {
+        val envOverride = System.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")?.trim()
+        if (!envOverride.isNullOrBlank()) return envOverride
+        val candidates = listOf(
+            "chromium-browser",
+            "chromium",
+            "/usr/bin/chromium-browser",
+            "/usr/lib/chromium/chromium"
+        )
+        for (candidate in candidates) {
+            if (candidate.startsWith("/")) {
+                if (File(candidate).canExecute()) return candidate
+                continue
+            }
+            val proc = ProcessBuilder("sh", "-lc", "command -v ${candidate}").start()
+            if (proc.waitFor(5, TimeUnit.SECONDS) && proc.exitValue() == 0) {
+                val output = proc.inputStream.bufferedReader().readText().trim()
+                if (output.isNotBlank()) return output
+            }
+        }
+        return null
+    }
+
     companion object {
         /** Test seam: when set, bypasses dependency probing in [isAvailable]. */
         @JvmStatic
@@ -184,6 +298,10 @@ exit ${'$'}?
         /** Test seam: overrides process wait timeout seconds in [record]. */
         @JvmStatic
         var testMaxWaitSeconds: Long? = null
+
+        /** Test seam: overrides startup wait timeout seconds in [record]. */
+        @JvmStatic
+        var testStartupWaitSeconds: Long? = null
 
         private val PLAYWRIGHT_SCRIPT = """#!/usr/bin/env node
 const { chromium } = require('playwright');
@@ -416,9 +534,10 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
 }
 
 (async () => {
+  const chromiumPath = process.env.PW_CHROMIUM_PATH || '/usr/bin/chromium-browser';
   const browser = await chromium.launch({
     headless: false,
-    executablePath: '/usr/bin/chromium-browser',
+    executablePath: chromiumPath,
     args: [
       '--no-sandbox',
       '--disable-gpu',
@@ -601,5 +720,36 @@ function parseSimpleYaml(yaml) {
   return result;
 }
 """
+    }
+}
+
+private fun traceRecordingStep(
+    traceDir: java.nio.file.Path,
+    step: String,
+    status: String,
+    details: Map<String, String> = emptyMap()
+) {
+    try {
+        val payload = buildString {
+            append('{')
+            append("\"timestamp\":\"")
+            append(Instant.now().toString())
+            append("\",\"step\":\"")
+            append(step)
+            append("\",\"status\":\"")
+            append(status)
+            append('"')
+            details.forEach { (key, value) ->
+                append(",\"")
+                append(key)
+                append("\":")
+                append('"')
+                append(value.replace("\"", "\\\""))
+                append('"')
+            }
+            append('}')
+        }
+        RollingTraceFiles.append(traceDir, "demo-trace", payload)
+    } catch (_: Exception) {
     }
 }

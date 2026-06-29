@@ -4,6 +4,7 @@ import com.flexsentlabs.koncerto.demo.model.DemoResult
 import io.mockk.every
 import io.mockk.mockk
 import java.io.File
+import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Instant
 import kotlinx.coroutines.test.runTest
@@ -66,9 +67,33 @@ class R2DemoStorageTest {
     }
 
     @Test
+    fun `generatePresignedUrl works with default timestamp argument`() {
+        val url = R2DemoStorageSupport.generatePresignedUrl(
+            storageKey = "demo-recordings/task-default/demo.webm",
+            expiresInSeconds = 120,
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            region = "auto"
+        )
+
+        assert(url.contains("X-Amz-Date="))
+        assert(url.contains("X-Amz-Signature="))
+    }
+
+    @Test
     fun `urlEncode follows S3 encoding rules`() {
         assert(R2DemoStorageSupport.urlEncode("hello world") == "hello%20world")
         assert(R2DemoStorageSupport.urlEncode("a*b~c") == "a%2Ab~c")
+    }
+
+    @Test
+    fun `canonicalHost preserves non-default ports`() {
+        assert(R2DemoStorageSupport.canonicalHost("http://127.0.0.1:9000") == "127.0.0.1:9000")
+        assert(R2DemoStorageSupport.canonicalHost("https://example.com") == "example.com")
+        assert(R2DemoStorageSupport.canonicalHost("https://example.com:443") == "example.com")
+        assert(R2DemoStorageSupport.canonicalHost("http://example.com:80") == "example.com")
     }
 
     @Test
@@ -105,6 +130,30 @@ class R2DemoStorageTest {
         assert(page.totalSizeBytes == 300L)
         assert(page.items.size == 2)
         assert(page.continuationToken == "token-abc")
+    }
+
+    @Test
+    fun `parseListBucketPage skips entries missing key and defaults missing size`() {
+        val xml = """
+            <ListBucketResult>
+              <Contents>
+                <Size>10</Size>
+                <LastModified>2026-06-05T00:00:00.000Z</LastModified>
+              </Contents>
+              <Contents>
+                <Key>demo-recordings/good/file.webm</Key>
+                <LastModified>2026-06-06T00:00:00.000Z</LastModified>
+              </Contents>
+              <IsTruncated>true</IsTruncated>
+            </ListBucketResult>
+        """.trimIndent()
+
+        val page = R2DemoStorageSupport.parseListBucketPage(xml)
+
+        assert(page.items.size == 1)
+        assert(page.items[0].storageKey == "demo-recordings/good/file.webm")
+        assert(page.items[0].sizeBytes == 0L)
+        assert(page.continuationToken == null)
     }
 
     @Test
@@ -206,6 +255,37 @@ class R2DemoStorageTest {
         assert(quota.usedBytes == 800L)
         assert(quota.availableBytes == 200L)
         assert(callCount == 2)
+    }
+
+    @Test
+    fun `checkQuota uses bucket root path without trailing slash`() = runTest {
+        var captured: HttpRequest? = null
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = { request ->
+                captured = request
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns """
+                        <ListBucketResult>
+                          <IsTruncated>false</IsTruncated>
+                        </ListBucketResult>
+                    """.trimIndent()
+                }
+            },
+            clock = { fixedInstant }
+        )
+
+        val result = storage.checkQuota()
+
+        assert(result is DemoResult.Success)
+        assert(captured != null)
+        assert(captured!!.uri().path == "/$bucket")
+        assert(captured!!.uri().query == "list-type=2")
     }
 
     @Test
@@ -339,6 +419,24 @@ class R2DemoStorageTest {
     }
 
     @Test
+    fun `upload returns failure when HTTP sender throws`() = runTest {
+        val file = File(tempDir, "throws.webm").apply { writeText("data") }
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "",
+            httpSender = { throw RuntimeException("boom") },
+            clock = { fixedInstant }
+        )
+
+        val result = storage.upload("task-throw", file, "video/webm")
+
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
     fun `delete returns failure when HTTP status is not success`() = runTest {
         val storage = R2DemoStorage(
             endpoint = endpoint,
@@ -375,6 +473,28 @@ class R2DemoStorageTest {
             clock = { fixedInstant }
         )
         val result = storage.checkQuota()
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `checkQuota returns failure when response body is invalid XML`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 200
+                    every { body() } returns "<ListBucketResult><Contents>"
+                }
+            },
+            clock = { fixedInstant }
+        )
+
+        val result = storage.checkQuota()
+
         assert(result is DemoResult.Failure)
     }
 
@@ -437,6 +557,28 @@ class R2DemoStorageTest {
         val result = storage.listOldest(10)
         assert(result is DemoResult.Success)
         assert((result as DemoResult.Success).value.size == 2)
+    }
+
+    @Test
+    fun `listOldest returns failure when list request fails`() = runTest {
+        val storage = R2DemoStorage(
+            endpoint = endpoint,
+            accessKey = accessKey,
+            secretKey = secretKey,
+            bucketName = bucket,
+            publicUrlBase = "https://cdn.example.com",
+            httpSender = {
+                mockk {
+                    every { statusCode() } returns 503
+                    every { body() } returns "unavailable"
+                }
+            },
+            clock = { fixedInstant }
+        )
+
+        val result = storage.listOldest(5)
+
+        assert(result is DemoResult.Failure)
     }
 
     @Test

@@ -311,4 +311,37 @@ class StdioAgentRuntimeTest {
         runtime.closeStdin()
         runtime.stop()
     }
+
+    @Test
+    fun `JSONL unknown event type is emitted to output`() {
+        val ws = Files.createTempDirectory("stdio-jsonl-unknown-")
+        val script = """
+            printf '%s\n' '{"type":"custom.event"}'
+            sleep 0.2
+        """.trimIndent()
+        val runtime = OpencodeRuntime(script, ws, noopLogger())
+        val output = AgentRuntimeTestSupport.collectOutputDuring(runtime) {
+            runtime.start()
+        }
+        runtime.stop()
+        assertThat(output.any { it.contains("[jsonl] custom.event") }).isTrue()
+    }
+
+    @Test
+    fun `turn cancelled notification emits TurnCancelled event`() {
+        val ws = Files.createTempDirectory("stdio-turn-cancelled-")
+        val script = """
+            printf '%s\n' '{"jsonrpc":"2.0","method":"turn/cancelled","params":{"thread_id":"th-1","turn_id":"tu-1"}}'
+            sleep 0.2
+        """.trimIndent()
+        val runtime = OpencodeRuntime(script, ws, noopLogger())
+        val events = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
+            runtime.start()
+        }
+        runtime.stop()
+        val cancelled = events.filterIsInstance<AgentEvent.TurnCancelled>().firstOrNull()
+        assertThat(cancelled).isNotNull()
+        assertThat(cancelled!!.threadId).isEqualTo("th-1")
+        assertThat(cancelled.turnId).isEqualTo("tu-1")
+    }
 }

@@ -357,6 +357,48 @@ class RuntimeStateTest {
         assertThat(evictedCount).isEqualTo(1)
     }
 
+    @Test
+    fun `default state values are initialized`() {
+        val s = RuntimeState()
+        assertThat(s.pollIntervalMs > 0).isTrue()
+        assertThat(s.maxConcurrentAgents > 0).isTrue()
+        assertThat(s.workspaceRoot.toString().isNotBlank()).isTrue()
+        assertThat(s.tokenTotals.secondsRunning).isEqualTo(0)
+    }
+
+    @Test
+    fun `limit pause entry defaults paused timestamp`() {
+        val before = System.currentTimeMillis()
+        val entry = LimitPauseEntry(
+            issueId = "id-1",
+            identifier = "T-1",
+            stageName = "todo",
+            agentKind = "codex",
+            provider = "codex",
+            error = "limit",
+            resumeAtMs = before + 1000
+        )
+        assertThat(entry.pausedAtMs >= before).isTrue()
+    }
+
+    @Test
+    fun `token totals supports custom seconds running`() {
+        val totals = TokenTotals(secondsRunning = 42)
+        assertThat(totals.secondsRunning).isEqualTo(42)
+    }
+
+    @Test
+    fun `blockedKeys cache handles concurrent access`() {
+        val s = RuntimeState()
+        s.addBlocked("a")
+        s.addBlocked("b")
+        val keys = (1..20).map {
+            Thread { s.blockedKeys }.apply { start() }
+        }
+        keys.forEach { it.join() }
+        assertThat(s.blockedKeys).containsExactlyInAnyOrder("a", "b")
+    }
+
     private fun runningEntry(id: String, identifier: String) = RunningEntry(
         issue = Issue(
             id = id, identifier = identifier, title = "t", description = null,

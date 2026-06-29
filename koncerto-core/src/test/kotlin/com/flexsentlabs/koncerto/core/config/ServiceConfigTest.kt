@@ -1510,4 +1510,22 @@ class ServiceConfigTest {
             System.clearProperty("TEST_R2_BUCKET")
         }
     }
+
+    @Test
+    fun `poll_interval_ms takes precedence over legacy polling interval`() {
+        val config = ServiceConfig.fromMap(
+            mapOf(
+                "poll_interval_ms" to 11_000,
+                "polling" to mapOf("interval_ms" to 99_000)
+            ),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.pollIntervalMs).isEqualTo(11_000L)
+        assertThat(config.deprecationWarnings).isEqualTo(emptyList())
+    }
+
+    @Test
+    fun `resolveEnvRef returns literal when not env reference`() {
+        assertThat(ServiceConfig.resolveEnvRef("plain-value")).isEqualTo("plain-value")
+    }
 }

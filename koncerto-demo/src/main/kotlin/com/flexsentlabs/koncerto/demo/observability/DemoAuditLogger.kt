@@ -1,15 +1,24 @@
 package com.flexsentlabs.koncerto.demo.observability
 
 import com.flexsentlabs.koncerto.demo.model.DemoTask
-import java.io.File
-import java.nio.file.Files
-import java.nio.file.StandardOpenOption
+import com.flexsentlabs.koncerto.logging.RollingFileSink
+import java.nio.file.Path
+import java.nio.file.Paths
+import java.time.ZoneId
 import java.time.Instant
 
 class DemoAuditLogger(
-    private val logPath: String = "/tmp/koncerto-demo/audit.log"
+    private val logPath: String = "/tmp/koncerto-demo/audit.log",
+    private val retentionDays: Long = 7,
+    private val zoneId: ZoneId = ZoneId.systemDefault()
 ) {
     private val lock = Any()
+    private val sink = RollingFileSink(
+        directory = logDirectory(logPath),
+        baseName = baseName(logPath),
+        retentionDays = retentionDays,
+        zoneId = zoneId
+    )
 
     fun logTaskCreated(task: DemoTask) {
         write("TASK_CREATED", mapOf(
@@ -79,18 +88,19 @@ class DemoAuditLogger(
     private fun write(event: String, data: Map<String, String>) {
         val timestamp = Instant.now().toString()
         val dataStr = data.entries.joinToString(" ") { "${it.key}=${it.value}" }
-        val line = "[$timestamp] $event $dataStr\n"
+        val line = "[$timestamp] $event $dataStr"
         try {
             synchronized(lock) {
-                val dir = File(logPath).parentFile
-                if (dir != null && !dir.exists()) dir.mkdirs()
-                Files.writeString(
-                    File(logPath).toPath(),
-                    line,
-                    StandardOpenOption.CREATE, StandardOpenOption.APPEND
-                )
+                sink.write(line)
             }
         } catch (_: Exception) {
         }
+    }
+
+    private fun logDirectory(path: String): Path = Paths.get(path).parent ?: Paths.get(".")
+
+    private fun baseName(path: String): String {
+        val fileName = Paths.get(path).fileName?.toString().orEmpty()
+        return fileName.removeSuffix(".log").ifBlank { "audit" }
     }
 }

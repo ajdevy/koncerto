@@ -151,12 +151,13 @@ class R2DemoStorage(
                     queryParts.add("continuation-token=${R2DemoStorageSupport.urlEncode(continuationToken)}")
                 }
                 val queryString = queryParts.joinToString("&")
-                val url = "$endpoint/$bucketName/?$queryString"
+                val canonicalUri = "/$bucketName"
+                val url = "$endpoint/$bucketName?$queryString"
                 val now = clock()
                 val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
                 val headers = mapOf("x-amz-date" to amzDate, "x-amz-content-sha256" to emptyHash)
                 val authHeader = R2DemoStorageSupport.buildSigV4AuthHeader(
-                    "GET", "/$bucketName/", queryString, headers, emptyHash, now,
+                    "GET", canonicalUri, queryString, headers, emptyHash, now,
                     endpoint, accessKey, secretKey, region
                 )
 
@@ -198,12 +199,13 @@ class R2DemoStorage(
                     queryParts.add("continuation-token=${R2DemoStorageSupport.urlEncode(continuationToken)}")
                 }
                 val queryString = queryParts.joinToString("&")
-                val url = "$endpoint/$bucketName/?$queryString"
+                val canonicalUri = "/$bucketName"
+                val url = "$endpoint/$bucketName?$queryString"
                 val now = clock()
                 val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
                 val headers = mapOf("x-amz-date" to amzDate, "x-amz-content-sha256" to emptyHash)
                 val authHeader = R2DemoStorageSupport.buildSigV4AuthHeader(
-                    "GET", "/$bucketName/", queryString, headers, emptyHash, now,
+                    "GET", canonicalUri, queryString, headers, emptyHash, now,
                     endpoint, accessKey, secretKey, region
                 )
 
@@ -251,7 +253,8 @@ class R2DemoStorage(
             val bodyBytes = xmlBody.toByteArray()
             val contentSha256 = R2DemoStorageSupport.sha256Hex(xmlBody)
             val queryString = "delete"
-            val url = "$endpoint/$bucketName/?$queryString"
+            val canonicalUri = "/$bucketName"
+            val url = "$endpoint/$bucketName?$queryString"
             val now = clock()
             val amzDate = now.atZone(ZoneId.of("UTC")).format(DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'"))
             val headers = mapOf(
@@ -259,7 +262,7 @@ class R2DemoStorage(
                 "x-amz-date" to amzDate
             )
             val authHeader = R2DemoStorageSupport.buildSigV4AuthHeader(
-                "POST", "/$bucketName/", queryString, headers, contentSha256, now,
+                "POST", canonicalUri, queryString, headers, contentSha256, now,
                 endpoint, accessKey, secretKey, region
             )
 

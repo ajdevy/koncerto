@@ -1233,6 +1233,51 @@ class BeansTest {
     }
 
     @Test
+    fun `parseRemoteFromWorkspace returns null when workspace has no git dir`() {
+        val wsRoot = Files.createTempDirectory("beans-no-git")
+        try {
+            val method = Beans::class.java.getDeclaredMethod("parseRemoteFromWorkspace", String::class.java)
+            method.isAccessible = true
+            val repo = method.invoke(beans, wsRoot.toString()) as String?
+            assertThat(repo).isNull()
+        } finally {
+            wsRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseRemoteFromWorkspace returns null when origin section missing`() {
+        val wsRoot = Files.createTempDirectory("beans-no-origin")
+        try {
+            val gitDir = wsRoot.resolve(".git")
+            Files.createDirectories(gitDir)
+            Files.writeString(gitDir.resolve("config"), "[core]\n  filemode = true\n")
+            val method = Beans::class.java.getDeclaredMethod("parseRemoteFromWorkspace", String::class.java)
+            method.isAccessible = true
+            val repo = method.invoke(beans, wsRoot.toString()) as String?
+            assertThat(repo).isNull()
+        } finally {
+            wsRoot.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `parseRepoFullName returns null when remote blank and no projects`() {
+        val method = Beans::class.java.getDeclaredMethod("parseRepoFullName", ServiceConfig::class.java)
+        method.isAccessible = true
+        val repo = method.invoke(beans, ServiceConfig(gitConfig = GitConfig(enabled = false, remoteUrl = ""))) as String?
+        assertThat(repo).isNull()
+    }
+
+    @Test
+    fun `extractRepoFullNameFromGitConfig returns null when url missing`() {
+        val method = Beans::class.java.getDeclaredMethod("extractRepoFullNameFromGitConfig", String::class.java)
+        method.isAccessible = true
+        val repo = method.invoke(beans, "[remote \"origin\"]\n  fetch = +refs/heads/*:refs/remotes/origin/*\n") as String?
+        assertThat(repo).isNull()
+    }
+
+    @Test
     fun `demoController creates controller when service exists`() {
         val demoConfig = DemoConfig(
             enabled = true,

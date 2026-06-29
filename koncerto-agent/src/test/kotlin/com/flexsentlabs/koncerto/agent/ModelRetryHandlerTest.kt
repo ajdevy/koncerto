@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.agent
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
@@ -34,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
 
 class ModelRetryHandlerTest {
 
@@ -276,5 +278,63 @@ class ModelRetryHandlerTest {
         coVerify { linearClient.updateIssueState("issue-1", "blocked-state-id") }
 
         root.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `handleExhaustion continues when notification send fails`() = runTest {
+        val root = Files.createTempDirectory("model-retry-notify-fail-")
+        val config = sampleConfig().projects["default"]!!.copy(workspace = WorkspaceConfig(root = root.toString()))
+        val cycler = FreeModelCycler(listOf("model-a"), 1, noopLogger())
+        val linearClient = mockk<TrackerClient>()
+        val notifier = mockk<CompositeNotifier>()
+
+        coEvery { linearClient.createComment(any(), any()) } just runs
+        coEvery { linearClient.resolveStateId(any(), any()) } returns "blocked-state-id"
+        coEvery { linearClient.updateIssueState(any(), any()) } just runs
+        coEvery { linearClient.fetchIssueById(any()) } returns Issue(
+            id = "issue-1",
+            identifier = "FLE-1",
+            title = "Test issue",
+            description = null,
+            priority = null,
+            state = "Todo",
+            branchName = null,
+            url = null,
+            labels = emptyList(),
+            blockedBy = emptyList(),
+            createdAt = Instant.now(),
+            updatedAt = Instant.now(),
+        )
+        coEvery { notifier.send(any()) } throws RuntimeException("notify down")
+
+        val handler = ModelRetryHandler(cycler, config, linearClient, notifier, noopLogger())
+        val result = handler.executeWithRetry("issue-1") { _ ->
+            Result.Failure(ModelExhaustedException(listOf("model-a"), 1, "err"))
+        }
+
+        assertThat(result is Result.Failure).isTrue()
+        coVerify { linearClient.updateIssueState("issue-1", "blocked-state-id") }
+        root.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `executeWithRetry throws illegal state when model selection fails unexpectedly`() = runTest {
+        val cycler = mockk<FreeModelCycler>()
+        val linearClient = mockk<TrackerClient>(relaxed = true)
+        val notifier = mockk<CompositeNotifier>(relaxed = true)
+        val logger = noopLogger()
+        @Suppress("UNCHECKED_CAST")
+        val unexpectedFailure = Result.Failure(Exception("selection failed")) as Result<String, ModelExhaustedException>
+        coEvery { cycler.nextModel() } returns unexpectedFailure
+        coEvery { cycler.getStatus() } returns mapOf("retry_counts" to emptyMap<String, Int>())
+        coEvery { cycler.reportFailure(any(), any()) } just runs
+        val handler = ModelRetryHandler(cycler, sampleConfig().projects["default"]!!, linearClient, notifier, logger)
+
+        val ex = assertThrows<IllegalStateException> {
+            runBlocking {
+                handler.executeWithRetry("issue-1") { Result.Success(Unit) }
+            }
+        }
+        assertThat(ex.message).isEqualTo("Unexpected failure in model selection")
     }
 }

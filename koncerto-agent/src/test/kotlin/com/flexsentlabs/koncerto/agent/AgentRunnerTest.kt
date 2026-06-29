@@ -605,10 +605,8 @@ class AgentRunnerTest {
         coEvery { mockRuntime.start(any()) } returns true
         every { mockRuntime.output } returns outputFlow.asSharedFlow()
         every { mockRuntime.events() } returns eventsChannel.receiveAsFlow()
-        every { mockRuntime.send(any(), any()) } answers {
-            runBlocking {
-                eventsChannel.send(AgentEvent.TurnCompleted("t1", "u1", null, null))
-            }
+        coEvery { mockRuntime.send(any(), any()) } coAnswers {
+            eventsChannel.send(AgentEvent.TurnCompleted("t1", "u1", null, null))
             "1"
         }
         val project = sampleConfig().projects["default"]!!
@@ -656,10 +654,16 @@ class AgentRunnerTest {
         coEvery { mockRuntime.start(any()) } returns true
         every { mockRuntime.output } returns outputFlow.asSharedFlow()
         every { mockRuntime.events() } returns eventsChannel.receiveAsFlow()
-        every { mockRuntime.send(any(), any()) } answers {
-            runBlocking {
+        coEvery { mockRuntime.send(any(), any()) } coAnswers {
+            val method = firstArg<String>()
+            if (method == "turn/start") {
                 outputFlow.emit("[stderr] You've hit your usage limit")
                 eventsChannel.send(AgentEvent.TurnCompleted("t1", "u1", null, null))
+                throw SubscriptionLimitException(
+                    message = "You've hit your usage limit",
+                    provider = "opencode",
+                    rawMessage = "You've hit your usage limit"
+                )
             }
             "1"
         }
@@ -699,6 +703,32 @@ class AgentRunnerTest {
             turnTimeoutMs = 5000, stallTimeoutMs = 5000
         )
         assertThat(captured.isNotEmpty()).isTrue()
+    }
+
+    @Test
+    fun `classifyOutputLine ignores blank normalized output`() {
+        val root = Files.createTempDirectory("ar-classify-blank-")
+        val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val classifier = PatternErrorClassifier(
+            listOf(
+                PatternErrorClassifier.ClassificationPattern(
+                    regex = Regex("usage limit", RegexOption.IGNORE_CASE),
+                    build = { _, msg -> AgentErrorType.SubscriptionLimitError(details = msg) }
+                )
+            )
+        )
+        val runner = DefaultAgentRunner(sampleConfig(), mgr, noopLogger(), errorClassifier = classifier)
+        val method = DefaultAgentRunner::class.java.getDeclaredMethod(
+            "classifyOutputLine",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            java.util.concurrent.atomic.AtomicReference::class.java
+        )
+        method.isAccessible = true
+        val hit = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        method.invoke(runner, "[stdout]   ", "issue-1", "codex", hit)
+        assertThat(hit.get()).isNull()
     }
 
     @Test

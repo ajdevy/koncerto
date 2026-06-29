@@ -147,4 +147,30 @@ class ClaudeReviewRuntimeTest {
         assertThat(runtime.isAlive()).isFalse()
         runtime.stop()
     }
+
+    @Test
+    fun `start returns true`() = runBlocking {
+        val ws = Files.createTempDirectory("claude-review-start-")
+        val runtime = ClaudeReviewRuntime("cat", ws, noopLogger())
+        assertThat(runtime.start(null)).isTrue()
+        runtime.stop()
+    }
+
+    @Test
+    fun `review output filters claude config noise lines`() = runBlocking {
+        val ws = Files.createTempDirectory("claude-review-filter-")
+        val runtime = ClaudeReviewRuntime(
+            """bash -lc 'printf "%s\n" "Claude configuration file not found at: x" "A backup file exists at: y" "You can manually restore z" "✅ PASS"'""",
+            ws,
+            noopLogger()
+        )
+        runtime.start(null)
+        AgentRuntimeTestSupport.collectEventsDuring(runtime, timeoutMs = 10_000) {
+            runtime.send("turn/start", buildJsonObject { put("input", JsonPrimitive("review")) })
+        }
+        runtime.stop()
+        val output = Files.readString(ws.resolve(".review-output"))
+        assertThat(output.contains("configuration file not found")).isFalse()
+        assertThat(output.contains("✅ PASS")).isTrue()
+    }
 }

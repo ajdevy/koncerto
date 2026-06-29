@@ -2073,6 +2073,55 @@ class LinearClientTest {
 
             assertThat(creator).isNull()
         }
+
+        @Test
+        fun `project slug id is cached after first lookup`() = runTest {
+            val fake = FakeGraphqlClient(
+                responses = mutableListOf(
+                    buildJsonObject {
+                        put("data", buildJsonObject {
+                            put("issues", buildJsonObject {
+                                put("pageInfo", buildJsonObject { put("hasNextPage", JsonPrimitive(false)) })
+                                put("nodes", buildJsonArray {})
+                            })
+                        })
+                    },
+                    buildJsonObject {
+                        put("data", buildJsonObject {
+                            put("issues", buildJsonObject {
+                                put("pageInfo", buildJsonObject { put("hasNextPage", JsonPrimitive(false)) })
+                                put("nodes", buildJsonArray {})
+                            })
+                        })
+                    }
+                )
+            )
+            val sut = DefaultLinearClient(fake, "proj")
+            sut.fetchCandidateIssues("proj", listOf("Todo"))
+            sut.fetchCandidateIssues("proj", listOf("Todo"))
+            val slugLookups = fake.calls.count { (query, _) -> query.contains("ProjectSlugId") }
+            assertThat(slugLookups).isEqualTo(1)
+        }
+
+        @Test
+        fun `fetchCandidateIssues returns empty when slug id cannot be resolved`() = runTest {
+            val graphql = object : LinearGraphQLClient("http://localhost:1", "fake-key") {
+                override suspend fun execute(query: String, variables: JsonObject): JsonObject {
+                    return if (query.contains("ProjectSlugId")) {
+                        buildJsonObject {
+                            put("data", buildJsonObject {
+                                put("project", buildJsonObject {})
+                            })
+                        }
+                    } else {
+                        error("candidate query should not execute when slug lookup fails")
+                    }
+                }
+            }
+            val sut = DefaultLinearClient(graphql, "proj")
+            val result = sut.fetchCandidateIssues("proj", listOf("Todo"))
+            assertThat(result).isEqualTo(emptyList())
+        }
     }
 
     // ── DefaultLinearClient createIssue ──────────────────────────

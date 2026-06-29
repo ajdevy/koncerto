@@ -428,6 +428,26 @@ class ApiV1ControllerTest {
     }
 
     @Test
+    fun `streamOutput returns empty when project does not exist`() {
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), RuntimeState()))
+        val flux = controller.streamOutput("ABC-1", "missing-project")
+        assertThat(flux.next().block()).isNull()
+    }
+
+    @Test
+    fun `streamOutput returns empty when entry has no output flow`() {
+        val state = RuntimeState()
+        val issue = Issue("1", "ABC-1", "Test", null, 1, "Todo", null, null, emptyList(), emptyList(), null, null, null)
+        state.running["1"] = RunningEntry(
+            issue = issue, threadId = "t-1", turnId = "u-1",
+            startedAt = Instant.now(), lastHeartbeatAt = null
+        )
+        val controller = ApiV1Controller(minimalConfig(), createOrchestrator(minimalConfig(), state))
+        val flux = controller.streamOutput("ABC-1", "")
+        assertThat(flux.next().block()).isNull()
+    }
+
+    @Test
     fun `streamOutput finds running agent across projects when project omitted`() {
         val emptyState = RuntimeState()
         val activeState = RuntimeState()

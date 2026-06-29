@@ -17,6 +17,7 @@ import com.flexsentlabs.koncerto.demo.report.DemoReporter
 import com.flexsentlabs.koncerto.demo.report.DemoReportGenerator
 import com.flexsentlabs.koncerto.demo.repository.DemoTaskRepository
 import com.flexsentlabs.koncerto.demo.storage.DemoStorage
+import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import java.io.File
 import java.nio.file.Files
 import java.time.Instant
@@ -24,6 +25,8 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class DemoRecordingService(
     private val config: DemoConfig,
@@ -63,10 +66,15 @@ class DemoRecordingService(
             return DemoResult.Failure(DemoError.InvalidConfig("Task $taskId is not pending"))
         }
 
+        traceDemoStep(task, "execute_task", "start", mapOf("target_url" to (targetUrl ?: "")))
+
         val preflight = runPreflightChecks(task.platform)
         if (preflight is DemoResult.Failure) {
             taskRepository.updateStatus(taskId, DemoStatus.FAILED, preflight.error.message)
             auditLogger.logTaskFailed(task, preflight.error.message ?: "preflight_failed")
+            traceDemoStep(task, "execute_task", "preflight_failed", mapOf(
+                "error" to (preflight.error.message ?: "unknown")
+            ))
             return preflight as DemoResult.Failure
         }
 
@@ -80,6 +88,7 @@ class DemoRecordingService(
     ): DemoResult<DemoTask> {
         val resolvedPlatform = platform ?: resolvePlatform()
         if (resolvedPlatform == null) {
+            traceRequestStep(issueId, issueIdentifier, projectSlug, "request_recording", "no_platform")
             return DemoResult.Failure(DemoError.RecorderNotAvailable("no_platform_available"))
         }
 
@@ -89,14 +98,29 @@ class DemoRecordingService(
                 issueId, issueIdentifier,
                 "Deployment failed and no fallback target URL is configured (DEMO_TARGET_URL is unset)"
             )
+            traceRequestStep(issueId, issueIdentifier, projectSlug, "request_recording", "no_target_url", mapOf(
+                "platform" to resolvedPlatform.name
+            ))
             return DemoResult.Failure(DemoError.InvalidConfig("no_target_url"))
         }
 
         val quotaCheck = performQuotaCheck()
-        if (quotaCheck is DemoResult.Failure) return quotaCheck as DemoResult<DemoTask>
+        if (quotaCheck is DemoResult.Failure) {
+            traceRequestStep(issueId, issueIdentifier, projectSlug, "request_recording", "quota_failed", mapOf(
+                "platform" to resolvedPlatform.name,
+                "error" to (quotaCheck.error.message ?: "unknown")
+            ))
+            return quotaCheck as DemoResult<DemoTask>
+        }
 
         val createResult = createTask(issueId, issueIdentifier, projectSlug, resolvedPlatform, trigger)
-        if (createResult is DemoResult.Failure) return createResult
+        if (createResult is DemoResult.Failure) {
+            traceRequestStep(issueId, issueIdentifier, projectSlug, "request_recording", "create_failed", mapOf(
+                "platform" to resolvedPlatform.name,
+                "error" to (createResult.error.message ?: "unknown")
+            ))
+            return createResult
+        }
         return executeTask((createResult as DemoResult.Success).value.id, targetUrl)
     }
 
@@ -104,6 +128,7 @@ class DemoRecordingService(
         val cutoff = Instant.now().minusSeconds(config.retentionDays * 86400L).toString()
         val count = taskRepository.deleteOlderThan(cutoff, config.maxRecordingsPerSpace)
         auditLogger.logCleanup(count)
+        traceSystemStep("cleanup", "completed", mapOf("deleted" to count.toString()))
         return count
     }
 
@@ -115,10 +140,12 @@ class DemoRecordingService(
         val keysToDelete = oldTasks.mapNotNull { it.storageKey }
         val r2Result = storage.deleteBatch(keysToDelete)
         if (r2Result is DemoResult.Failure) {
+            traceSystemStep("retention", "storage_delete_failed", mapOf("error" to (r2Result.error.message ?: "unknown")))
             return r2Result as DemoResult<Int>
         }
         val deleted = taskRepository.deleteOlderThan(cutoff, oldTasks.size)
         auditLogger.logCleanup(deleted)
+        traceSystemStep("retention", "completed", mapOf("deleted" to deleted.toString()))
         return DemoResult.Success(deleted)
     }
 
@@ -207,6 +234,7 @@ class DemoRecordingService(
         var lastError: DemoError? = null
 
         for (attempt in 0..config.maxRetries) {
+            traceDemoStep(currentTask, "recording_attempt", "start", mapOf("attempt" to attempt.toString()))
             taskRepository.updateStatus(currentTask.id, DemoStatus.RECORDING)
             auditLogger.logRecordingStarted(currentTask)
             metrics.recordAttempt(currentTask.platform.name, DemoStatus.RECORDING, 0)
@@ -219,21 +247,37 @@ class DemoRecordingService(
                     if (integrityCheck is DemoResult.Failure && attempt < config.maxRetries) {
                         metrics.recordAttempt(currentTask.platform.name, DemoStatus.FAILED, 0)
                         lastError = integrityCheck.error
+                        traceDemoStep(currentTask, "recording_attempt", "integrity_failed", mapOf(
+                            "attempt" to attempt.toString(),
+                            "error" to (integrityCheck.error.message ?: "unknown")
+                        ))
                         delay(config.retryDelayMs * (1L shl attempt))
                         currentTask = currentTask.copy(retryCount = attempt + 1)
                         taskRepository.save(currentTask)
                         continue
                     }
                     if (integrityCheck is DemoResult.Failure) {
+                        traceDemoStep(currentTask, "recording_attempt", "integrity_failed_final", mapOf(
+                            "attempt" to attempt.toString(),
+                            "error" to (integrityCheck.error.message ?: "unknown")
+                        ))
                         val recovered = attemptPartialRecovery(currentTask, integrityCheck.error)
                         if (recovered is DemoResult.Success) return recovered
                     }
                     metrics.recordAttempt(currentTask.platform.name, DemoStatus.COMPLETED, completed.durationMs ?: 0L)
+                    traceDemoStep(currentTask, "recording_attempt", "success", mapOf(
+                        "attempt" to attempt.toString(),
+                        "duration_ms" to (completed.durationMs ?: 0L).toString()
+                    ))
                     return DemoResult.Success(completed)
                 }
                 is DemoResult.Failure -> {
                     lastError = result.error
                     metrics.recordAttempt(currentTask.platform.name, DemoStatus.FAILED, 0)
+                    traceDemoStep(currentTask, "recording_attempt", "failed", mapOf(
+                        "attempt" to attempt.toString(),
+                        "error" to (result.error.message ?: "unknown")
+                    ))
                     if (attempt < config.maxRetries) {
                         val backoffMs = config.retryDelayMs * (1L shl attempt)
                         delay(backoffMs)
@@ -248,6 +292,7 @@ class DemoRecordingService(
         taskRepository.updateStatus(currentTask.id, DemoStatus.FAILED, errorMsg)
         auditLogger.logTaskFailed(currentTask, errorMsg)
         metrics.recordAttempt(currentTask.platform.name, DemoStatus.FAILED, 0)
+        traceDemoStep(currentTask, "recording_attempt", "exhausted", mapOf("error" to errorMsg))
 
         val fallbackResult = attemptFallbackRecording(currentTask, lastError)
         if (fallbackResult is DemoResult.Success) return fallbackResult
@@ -267,6 +312,9 @@ class DemoRecordingService(
 
         val fallbackRecorder = recorderFactory.findRecorder(fallbackPlatform)
         if (fallbackRecorder is DemoResult.Failure) {
+            traceDemoStep(failedTask, "fallback", "unavailable", mapOf(
+                "fallback_platform" to fallbackPlatform.name
+            ))
             return DemoResult.Failure(originalError ?: DemoError.RecorderNotAvailable("no_fallback"))
         }
 
@@ -279,6 +327,9 @@ class DemoRecordingService(
         )
 
         if (fallbackTask is DemoResult.Failure) {
+            traceDemoStep(failedTask, "fallback", "create_failed", mapOf(
+                "fallback_platform" to fallbackPlatform.name
+            ))
             return DemoResult.Failure(originalError ?: DemoError.RecorderNotAvailable("fallback_creation_failed"))
         }
 
@@ -286,6 +337,10 @@ class DemoRecordingService(
         taskRepository.updateFallbackFrom(fallbackId, failedTask.platform.name)
         taskRepository.updateStatus(failedTask.id, DemoStatus.FAILED, "fallback_to_${fallbackPlatform.name}")
         auditLogger.logFallback(failedTask, failedTask.platform.name, fallbackPlatform.name)
+        traceDemoStep(failedTask, "fallback", "started", mapOf(
+            "from_platform" to failedTask.platform.name,
+            "to_platform" to fallbackPlatform.name
+        ))
 
         return executeWithRetry((fallbackTask as DemoResult.Success).value)
     }
@@ -293,6 +348,7 @@ class DemoRecordingService(
     private suspend fun attemptPartialRecovery(task: DemoTask, integrityError: DemoError): DemoResult<DemoTask> {
         val partialFile = File(config.tempDir, "${task.id}.partial.webm")
         if (!partialFile.exists()) {
+            traceDemoStep(task, "partial_recovery", "missing_partial")
             return DemoResult.Failure(DemoError.PartialRecovery("no_partial_file"))
         }
 
@@ -302,6 +358,9 @@ class DemoRecordingService(
         val mimeType = "video/webm"
         val uploadResult = storage.upload(task.id, partialFile, mimeType)
         if (uploadResult is DemoResult.Failure) {
+            traceDemoStep(task, "partial_recovery", "upload_failed", mapOf(
+                "error" to (uploadResult.error.message ?: "unknown")
+            ))
             return DemoResult.Failure(DemoError.PartialRecovery("upload_failed: ${(uploadResult as DemoResult.Failure).error.message}"))
         }
 
@@ -317,12 +376,18 @@ class DemoRecordingService(
         val updatedTask = taskRepository.findById(task.id)
             ?: return DemoResult.Failure(DemoError.TaskNotFound(task.id))
         reporter.report(updatedTask, storageResult.url)
+        traceDemoStep(task, "partial_recovery", "completed", mapOf("url" to storageResult.url))
         return DemoResult.Success(updatedTask)
     }
 
     private suspend fun performRecording(task: DemoTask, targetUrl: String? = null): DemoResult<DemoTask> {
         val recorderResult = recorderFactory.findRecorder(task.platform)
-        if (recorderResult is DemoResult.Failure) return recorderResult as DemoResult<DemoTask>
+        if (recorderResult is DemoResult.Failure) {
+            traceDemoStep(task, "perform_recording", "recorder_unavailable", mapOf(
+                "platform" to task.platform.name
+            ))
+            return recorderResult as DemoResult<DemoTask>
+        }
 
         val recorder = (recorderResult as DemoResult.Success).value
         val effectiveTargetUrl = targetUrl?.takeIf { it.isNotBlank() } ?: config.targetUrl
@@ -340,6 +405,10 @@ class DemoRecordingService(
             if (partialFile != null) {
                 partialFile.renameTo(File(config.tempDir, "${task.id}.partial.webm"))
             }
+            traceDemoStep(task, "perform_recording", "failed", mapOf(
+                "platform" to task.platform.name,
+                "error" to (recordResult.error.message ?: "unknown")
+            ))
             return recordResult as DemoResult<DemoTask>
         }
 
@@ -357,7 +426,12 @@ class DemoRecordingService(
 
         taskRepository.updateStatus(task.id, DemoStatus.UPLOADING)
         val uploadResult = storage.uploadWithTags(task.id, recordingResult.file, mimeType, tags)
-        if (uploadResult is DemoResult.Failure) return uploadResult as DemoResult<DemoTask>
+        if (uploadResult is DemoResult.Failure) {
+            traceDemoStep(task, "perform_recording", "upload_failed", mapOf(
+                "error" to (uploadResult.error.message ?: "unknown")
+            ))
+            return uploadResult as DemoResult<DemoTask>
+        }
 
         val storageResult = (uploadResult as DemoResult.Success).value
         metrics.recordStorageResult(true)
@@ -399,6 +473,10 @@ class DemoRecordingService(
 
         reporter.report(updatedTask, storageResult.url)
         auditLogger.logReportPosted(updatedTask, storageResult.url)
+        traceDemoStep(task, "perform_recording", "completed", mapOf(
+            "url" to storageResult.url,
+            "platform" to task.platform.name
+        ))
 
         return DemoResult.Success(updatedTask)
     }
@@ -417,5 +495,55 @@ class DemoRecordingService(
         return available.firstOrNull { it == DemoPlatform.PLAYWRIGHT }
             ?: available.firstOrNull { it == DemoPlatform.ASCIINEMA }
             ?: available.firstOrNull()
+    }
+
+    private fun traceDemoStep(
+        task: DemoTask,
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        traceSystemStep(step, status, buildMap {
+            put("task_id", task.id)
+            put("issue_id", task.issueId)
+            put("issue_identifier", task.issueIdentifier)
+            put("platform", task.platform.name)
+            details.forEach { (k, v) -> put(k, v) }
+        })
+    }
+
+    private fun traceRequestStep(
+        issueId: String,
+        issueIdentifier: String,
+        projectSlug: String?,
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        traceSystemStep(step, status, buildMap {
+            put("issue_id", issueId)
+            put("issue_identifier", issueIdentifier)
+            if (!projectSlug.isNullOrBlank()) put("project_slug", projectSlug)
+            details.forEach { (k, v) -> put(k, v) }
+        })
+    }
+
+    private fun traceSystemStep(
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        try {
+            val traceDir = File(config.tempDir).toPath()
+            val payload = buildJsonObject {
+                put("timestamp", Instant.now().toString())
+                put("step", step)
+                put("status", status)
+                details.forEach { (k, v) -> put(k, v) }
+            }
+            RollingTraceFiles.append(traceDir, "demo-trace", payload.toString())
+        } catch (e: Exception) {
+            // Best-effort only; do not let trace failures affect demo execution.
+        }
     }
 }

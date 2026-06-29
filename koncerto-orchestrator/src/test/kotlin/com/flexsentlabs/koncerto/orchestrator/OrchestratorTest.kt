@@ -1232,6 +1232,23 @@ class OrchestratorTest {
     }
 
     @Test
+    fun `requestShutdown returns false when nothing running`() = runBlocking {
+        val state = RuntimeState()
+        val orch = Orchestrator(
+            config = sampleConfig(),
+            linearClientFactory = { FakeLinearClient(emptyList()) },
+            workspaceManagerFactory = { WorkspaceManager(Files.createTempDirectory("orch-shutdown-empty-"), HookExecutor { _, _ -> }) },
+            agentRunner = FakeAgentRunner(),
+            workflowCache = WorkflowCache(),
+            logger = StructuredLogger(emptyList()),
+            scope = CoroutineScope(Dispatchers.Unconfined),
+            runtimeStates = mapOf(defaultProjectSlug to state)
+        )
+        assertThat(orch.requestShutdown()).isFalse()
+        assertThat(orch.shutdownRequested).isTrue()
+    }
+
+    @Test
     fun `runningAgentsCount sums across projects`() = runBlocking {
         val state1 = RuntimeState()
         state1.running["1"] = runningEntry("1", "A-1")

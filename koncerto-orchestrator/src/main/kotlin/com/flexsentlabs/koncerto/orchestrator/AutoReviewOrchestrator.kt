@@ -9,6 +9,7 @@ import com.flexsentlabs.koncerto.deploy.DeployConfig
 import com.flexsentlabs.koncerto.deploy.DeployResult
 import com.flexsentlabs.koncerto.deploy.DemoFailureReporter
 import com.flexsentlabs.koncerto.deploy.ProjectDeployer
+import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
@@ -86,6 +87,11 @@ class AutoReviewOrchestrator(
             }
         }
 
+        traceReviewStep(workspace, issue, "review_pass", "start", mapOf(
+            "attempt" to currentAttempt.toString(),
+            "max_attempts" to maxAttempts.toString()
+        ))
+
         val rawReviewPrompt = stage.prompt ?: buildDefaultReviewPrompt(issue)
         val reviewPrompt = workflowCache?.resolvePrompt(rawReviewPrompt) ?: rawReviewPrompt
         val reviewKind = stage.agentKind ?: "claude"
@@ -103,17 +109,97 @@ class AutoReviewOrchestrator(
 
         return if (passed) {
             logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
+            traceReviewStep(workspace, issue, "review_pass", "passed", mapOf("attempt" to currentAttempt.toString()))
             runtimeState.reviewAttempts.remove(issue.id)
 
-            demoScenarioGenerator?.generate(issue, workspace)
-            val deployResult = deployTargetProject(issue, workspace)
+            val scenarioPath = runCatching {
+                demoScenarioGenerator?.generate(issue, workspace)
+            }.onFailure { e ->
+                logger.warn("demo_scenario_generator_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (e.message ?: "unknown")
+                ))
+                traceReviewStep(workspace, issue, "demo_scenario", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")
+                ))
+            }.getOrNull()
+            if (scenarioPath != null) {
+                traceReviewStep(workspace, issue, "demo_scenario", "saved", mapOf("path" to scenarioPath))
+            } else {
+                traceReviewStep(workspace, issue, "demo_scenario", "skipped")
+            }
+
+            val deployResult = runCatching {
+                deployTargetProject(issue, workspace)
+            }.onFailure { e ->
+                logger.warn("deploy_target_project_unhandled_error", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (e.message ?: "unknown")
+                ))
+                traceReviewStep(workspace, issue, "deploy_target_project", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")
+                ))
+            }.getOrNull()
             val deployUrl = deployResult?.url
-            val demoUrl = onReviewPassed?.invoke(issue, deployUrl)
-            postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
             if (deployResult != null) {
-                cleanupDemoDeploy(issue, workspace, deployResult)
+                traceReviewStep(workspace, issue, "deploy_target_project", if (deployResult.success) "ok" else "failed", mapOf(
+                    "url" to (deployUrl ?: ""),
+                    "error" to (deployResult.error ?: "")
+                ))
+            }
+
+            val demoUrl = runCatching {
+                onReviewPassed?.invoke(issue, deployUrl)
+            }.onFailure { e ->
+                logger.warn("demo_recording_callback_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (e.message ?: "unknown")
+                ))
+                traceReviewStep(workspace, issue, "demo_recording", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")
+                ))
+            }.getOrNull()
+            if (demoUrl != null) {
+                traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
+            } else {
+                traceReviewStep(workspace, issue, "demo_recording", "skipped")
+            }
+
+            runCatching {
+                postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
+            }.onFailure { e ->
+                logger.warn("review_comment_pipeline_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (e.message ?: "unknown")
+                ))
+                traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")
+                ))
+            }
+            traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf(
+                "demo_url" to (demoUrl ?: "")
+            ))
+
+            if (deployResult != null) {
+                runCatching {
+                    cleanupDemoDeploy(issue, workspace, deployResult)
+                }.onFailure { e ->
+                    logger.warn("demo_cleanup_failed", mapOf(
+                        "issue_id" to issue.id,
+                        "error" to (e.message ?: "unknown")
+                    ))
+                    traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
+                        "error" to (e.message ?: "unknown")
+                    ))
+                }
+                traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
             }
             workspace?.let { cleanupReviewFiles(it.path) }
+            traceReviewStep(workspace, issue, "review_pass", "complete", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "demo_url" to (demoUrl ?: ""),
+                "deploy_url" to (deployUrl ?: "")
+            ))
             ReviewDecision.Pass(stage.onCompleteState)
         } else if (currentAttempt < maxAttempts) {
             logger.info(
@@ -124,6 +210,10 @@ class AutoReviewOrchestrator(
                 )
             )
             workspace?.let { cleanupReviewFiles(it.path) }
+            traceReviewStep(workspace, issue, "review_pass", "retry", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "max_attempts" to maxAttempts.toString()
+            ))
             ReviewDecision.RetryWithCoding(stage.onFailureState)
         } else {
             logger.warn(
@@ -135,6 +225,10 @@ class AutoReviewOrchestrator(
             runtimeState.reviewAttempts.remove(issue.id)
             handleReviewExhaustion(issue, currentAttempt)
             workspace?.let { cleanupReviewFiles(it.path) }
+            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "max_attempts" to maxAttempts.toString()
+            ))
             ReviewDecision.Blocked
         }
     }
@@ -196,10 +290,12 @@ class AutoReviewOrchestrator(
 
         val repo = resolveRepoFullName(ws.path) ?: deployRepoFullName ?: run {
             logger.warn("pr_comment_no_repo", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "pr_comment", "no_repo")
             return
         }
         val prNumber = resolvePrNumber(ws.path) ?: run {
             logger.warn("pr_comment_no_pr", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "pr_comment", "no_pr", mapOf("repo" to repo))
             return
         }
         try {
@@ -217,10 +313,20 @@ class AutoReviewOrchestrator(
                         "issue_identifier" to issue.identifier,
                         "comment_url" to commentUrl
                     ))
+                    traceReviewStep(workspace, issue, "pr_comment", "posted", mapOf(
+                        "repo" to repo,
+                        "pr_number" to prNumber.toString(),
+                        "comment_url" to commentUrl
+                    ))
                 } else {
                     val err = result.output.take(200)
                     logger.warn("pr_review_comment_failed", mapOf(
                         "issue_id" to issue.id,
+                        "error" to err
+                    ))
+                    traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
+                        "repo" to repo,
+                        "pr_number" to prNumber.toString(),
                         "error" to err
                     ))
                 }
@@ -230,6 +336,11 @@ class AutoReviewOrchestrator(
         } catch (e: Exception) {
             logger.warn("pr_review_comment_error", mapOf(
                 "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            traceReviewStep(workspace, issue, "pr_comment", "error", mapOf(
+                "repo" to repo,
+                "pr_number" to prNumber.toString(),
                 "error" to (e.message ?: "unknown")
             ))
         }
@@ -373,14 +484,60 @@ class AutoReviewOrchestrator(
             "Write '❌ FAIL' if there are critical issues, otherwise indicate the review passed."
 
     private fun resolveRepoFullName(workspacePath: Path): String? {
-        val gitConfigPath = workspacePath.resolve(".git/config")
-        if (!Files.exists(gitConfigPath)) return null
+        val gitConfigPath = resolveGitConfigPath(workspacePath) ?: return null
         return try {
             val content = Files.readString(gitConfigPath)
+            val originIdx = content.indexOf("[remote \"origin\"]")
+            if (originIdx < 0) return null
             val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
-                .find(content, content.indexOf("[remote \"origin\"]"))
+                .find(content, originIdx)
             match?.groupValues?.get(1)
         } catch (_: Exception) { null }
+    }
+
+    private fun resolveGitConfigPath(workspacePath: Path): Path? {
+        val directConfig = workspacePath.resolve(".git/config")
+        if (Files.exists(directConfig)) return directConfig
+        val gitFile = workspacePath.resolve(".git")
+        if (!Files.exists(gitFile) || !Files.isRegularFile(gitFile)) return null
+        return try {
+            val gitDirLine = Files.readString(gitFile).trim()
+            val prefix = "gitdir: "
+            if (!gitDirLine.startsWith(prefix)) return null
+            val gitDir = Path.of(gitDirLine.removePrefix(prefix).trim())
+            gitDir.resolve("config")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun traceReviewStep(
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        issue: Issue,
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        val ws = workspace ?: return
+        val traceDir = ws.path.resolve(".koncerto")
+        try {
+            val payload = buildJsonObject {
+                put("timestamp", Instant.now().toString())
+                put("issue_id", issue.id)
+                put("issue_identifier", issue.identifier)
+                put("step", step)
+                put("status", status)
+                details.forEach { (key, value) -> put(key, value) }
+            }
+            RollingTraceFiles.append(traceDir, "review-trace", payload.toString())
+        } catch (e: Exception) {
+            logger.warn("review_trace_write_failed", mapOf(
+                "issue_id" to issue.id,
+                "step" to step,
+                "status" to status,
+                "error" to (e.message ?: "unknown")
+            ))
+        }
     }
 
     sealed class ReviewDecision {

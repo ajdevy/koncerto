@@ -51,6 +51,12 @@ class JsonRpcMessageTest {
     }
 
     @Test
+    fun `JsonRpcError defaults data to null`() {
+        val error = JsonRpcError(code = -1, message = "oops")
+        assertThat(error.data).isNull()
+    }
+
+    @Test
     fun `JsonRpcNotification defaults to jsonrpc 2_0`() {
         val note = JsonRpcNotification(method = "session/started")
         assertThat(note.jsonrpc).isEqualTo("2.0")

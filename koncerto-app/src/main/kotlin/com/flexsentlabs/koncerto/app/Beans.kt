@@ -27,9 +27,9 @@ import com.flexsentlabs.koncerto.linear.DefaultLinearClient
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.linear.LinearGraphQLClient
 import com.flexsentlabs.koncerto.linear.RateLimitedLinearClient
-import com.flexsentlabs.koncerto.logging.FileSink
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StderrSink
+import com.flexsentlabs.koncerto.logging.RollingFileSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.Notifier
@@ -104,7 +104,7 @@ class Beans {
         if (!logsRoot.isNullOrBlank()) {
             val dir = Paths.get(logsRoot)
             Files.createDirectories(dir)
-            sinks += FileSink(dir.resolve("koncerto.log"))
+            sinks += RollingFileSink(dir, baseName = "koncerto", retentionDays = 7)
         }
         return StructuredLogger(sinks)
     }
@@ -586,13 +586,21 @@ class Beans {
             val configFile = gitDir.resolve("config")
             if (!Files.exists(configFile)) return null
             val content = Files.readString(configFile)
-            val originIdx = content.indexOf("[remote \"origin\"]")
-            val match = if (originIdx >= 0) {
-                Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
-                    .find(content, originIdx)
-            } else null
-            match?.groupValues?.get(1)
+            extractRepoFullNameFromGitConfig(content)
         } catch (_: Exception) { null }
+    }
+
+    private fun extractRepoFullNameFromGitConfig(content: String): String? {
+        val lines = content.lineSequence().map { it.trim() }.toList()
+        val originIndex = lines.indexOf("[remote \"origin\"]")
+        if (originIndex < 0) return null
+        val remoteUrl = lines.drop(originIndex + 1)
+            .firstOrNull { it.startsWith("url =") }
+            ?.removePrefix("url =")
+            ?.trim()
+            .orEmpty()
+        val match = Regex("""github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?$""").find(remoteUrl)
+        return match?.groupValues?.get(1)
     }
 
     @Bean

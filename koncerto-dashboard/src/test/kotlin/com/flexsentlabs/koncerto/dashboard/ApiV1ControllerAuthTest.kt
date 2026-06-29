@@ -491,6 +491,35 @@ class ApiV1ControllerAuthTest {
     }
 
     @Test
+    fun `startClaudeLogin returns error when login process fails to start`() {
+        ApiV1Controller.testLoginProcessFactory = { _ ->
+            throw RuntimeException("login failed")
+        }
+        val controller = createController()
+        val response = controller.startClaudeLogin().block()!!
+
+        assertThat(response.statusCodeValue).isEqualTo(500)
+        assertThat(response.body!!.state).isEqualTo("error")
+    }
+
+    @Test
+    fun `getAgentAuthStatus de-duplicates configured kinds`() {
+        val stages = mapOf(
+            "todo" to StageAgentConfig(
+                prompt = "p1", model = null, effort = null, maxConcurrent = null,
+                agentKind = "claude", command = null, onCompleteState = null
+            ),
+            "in progress" to StageAgentConfig(
+                prompt = "p2", model = null, effort = null, maxConcurrent = null,
+                agentKind = "claude", command = null, onCompleteState = null
+            )
+        )
+        val controller = createController(minimalConfig(stages))
+        val response = controller.getAgentAuthStatus()
+        assertThat(response.body!!.map { it.agent }).isEqualTo(listOf("claude"))
+    }
+
+    @Test
     fun `withTimeout stops early when https url appears in stream`() {
         val controller = createController()
         val method = ApiV1Controller::class.java.getDeclaredMethod(

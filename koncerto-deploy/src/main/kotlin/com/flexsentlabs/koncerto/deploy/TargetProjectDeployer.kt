@@ -1,9 +1,13 @@
 package com.flexsentlabs.koncerto.deploy
 
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
 import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 data class DeployResult(
     val url: String?,
@@ -38,25 +42,30 @@ class TargetProjectDeployer(
     override suspend fun deploy(config: DeployConfig): DeployResult {
         val projectPath = config.projectPath
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
+        traceDeployStep(projectPath, "deploy", "start", mapOf("tag" to tag))
 
         // Phase 1: Detect existing Docker config
         val existingConfig = configDetector.detect(projectPath)
         if (existingConfig != null) {
             logger.info("deploy_docker_config_found", mapOf("type" to existingConfig.type.name))
+            traceDeployStep(projectPath, "deploy", "docker_config_found", mapOf("type" to existingConfig.type.name))
             return buildAndRun(existingConfig, projectPath, tag)
         }
 
         // Phase 2: Check for framework and generate Dockerfile
         val framework = frameworkDetector.detectFramework(projectPath)
         if (framework == null) {
+            traceDeployStep(projectPath, "deploy", "framework_missing")
             return DeployResult.failure("Could not detect project framework type")
         }
+        traceDeployStep(projectPath, "deploy", "framework_detected", mapOf("framework" to framework.name))
 
         // Generate Dockerfile and write it to project root temporarily
         val dockerfileContent = dockerfileGenerator.generate(framework)
         val tempDockerfile = projectPath.resolve("Dockerfile.koncerto")
         try {
             tempDockerfile.toFile().writeText(dockerfileContent)
+            traceDeployStep(projectPath, "deploy", "temp_dockerfile_written")
             val detected = DetectedDockerConfig(DockerConfigType.DOCKERFILE, dockerfile = tempDockerfile)
             return buildAndRun(detected, projectPath, tag)
         } finally {
@@ -71,14 +80,17 @@ class TargetProjectDeployer(
             when (config.type) {
                 DockerConfigType.DOCKER_COMPOSE -> {
                     val composeFile = requireNotNull(config.composeFile) { "DOCKER_COMPOSE config missing composeFile" }
+                    traceDeployStep(projectPath, "build_and_run", "compose")
                     deployWithCompose(composeFile, projectPath, tag)
                 }
                 DockerConfigType.DOCKERFILE -> {
                     val dockerfile = requireNotNull(config.dockerfile) { "DOCKERFILE config missing dockerfile" }
+                    traceDeployStep(projectPath, "build_and_run", "dockerfile")
                     deployWithDockerfile(dockerfile, projectPath, tag)
                 }
             }
         } catch (e: Exception) {
+            traceDeployStep(projectPath, "build_and_run", "failed", mapOf("error" to (e.message ?: "unknown")))
             DeployResult.failure("Deployment error: ${e.message}")
         }
     }
@@ -86,6 +98,10 @@ class TargetProjectDeployer(
     private fun deployWithDockerfile(dockerfile: Path, projectPath: Path, tag: String, network: String? = null): DeployResult {
         val buildResult = containerManager.buildImage(projectPath, dockerfile, tag)
         if (buildResult.isFailure) {
+            traceDeployStep(projectPath, "deploy_dockerfile", "build_failed", mapOf(
+                "tag" to tag,
+                "error" to (buildResult.exceptionOrNull()?.message ?: "unknown")
+            ))
             return DeployResult.failure(
                 "Docker build failed",
                 buildResult.exceptionOrNull()?.message
@@ -99,6 +115,11 @@ class TargetProjectDeployer(
         val runResult = containerManager.runContainer(tag, hostPort, containerPort, network)
         if (runResult.isFailure) {
             containerManager.releasePort(hostPort)
+            traceDeployStep(projectPath, "deploy_dockerfile", "run_failed", mapOf(
+                "tag" to tag,
+                "port" to hostPort.toString(),
+                "error" to (runResult.exceptionOrNull()?.message ?: "unknown")
+            ))
             return DeployResult.failure(
                 "Container start failed",
                 runResult.exceptionOrNull()?.message
@@ -112,10 +133,18 @@ class TargetProjectDeployer(
             val logs = containerManager.captureLogs(container.containerId)
             containerManager.stopAndRemove(container.containerId)
             containerManager.releasePort(hostPort)
+            traceDeployStep(projectPath, "deploy_dockerfile", "health_failed", mapOf(
+                "tag" to tag,
+                "port" to hostPort.toString()
+            ))
             return DeployResult.failure("Health check failed", logs)
         }
 
         logger.info("deploy_success", mapOf("url" to container.baseUrl))
+        traceDeployStep(projectPath, "deploy_dockerfile", "success", mapOf(
+            "tag" to tag,
+            "url" to container.baseUrl
+        ))
         return DeployResult.success(container.baseUrl, tag = tag)
     }
 
@@ -162,6 +191,10 @@ class TargetProjectDeployer(
 
             if (hostPort > 0 && hostPort in webPorts) {
                 logger.info("deploy_compose_success", mapOf("port" to hostPort.toString()))
+                traceDeployStep(projectPath, "deploy_compose", "success", mapOf(
+                    "tag" to tag,
+                    "port" to hostPort.toString()
+                ))
                 return DeployResult.success("http://host.docker.internal:$hostPort", isCompose = true, tag = tag)
             }
 
@@ -170,9 +203,14 @@ class TargetProjectDeployer(
                 "port" to hostPort.toString(),
                 "action" to "falling_through_to_app_build"
             ))
+            traceDeployStep(projectPath, "deploy_compose", "infra_only", mapOf(
+                "tag" to tag,
+                "port" to hostPort.toString()
+            ))
             val composeNetwork = resolveComposeNetwork(projectPath, composeFile)
             return deployAppOnNetwork(projectPath, tag, composeNetwork)
         } catch (e: Exception) {
+            traceDeployStep(projectPath, "deploy_compose", "failed", mapOf("error" to (e.message ?: "unknown")))
             return DeployResult.failure("docker compose error: ${e.message}")
         }
     }
@@ -221,6 +259,7 @@ class TargetProjectDeployer(
     override suspend fun cleanup(config: DeployConfig) {
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
         logger.info("deploy_cleanup_start", mapOf("tag" to (tag as Any?)))
+        traceDeployStep(config.projectPath, "cleanup", "start", mapOf("tag" to tag))
 
         // Stop and remove all containers with this image tag
         try {
@@ -236,8 +275,10 @@ class TargetProjectDeployer(
                 } catch (_: Exception) {}
             }
             logger.info("deploy_cleanup_containers", mapOf("count" to (ids.size.toString() as Any?)))
+            traceDeployStep(config.projectPath, "cleanup", "containers_removed", mapOf("count" to ids.size.toString()))
         } catch (e: Exception) {
             logger.warn("deploy_cleanup_containers_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+            traceDeployStep(config.projectPath, "cleanup", "containers_remove_failed", mapOf("error" to (e.message ?: "unknown")))
         }
 
         // Remove the image
@@ -255,9 +296,35 @@ class TargetProjectDeployer(
                 ).directory(config.projectPath.toFile()).redirectErrorStream(true).start()
                 pb.waitFor(30, TimeUnit.SECONDS)
                 logger.info("deploy_cleanup_compose", mapOf("status" to ("ok" as Any?)))
+                traceDeployStep(config.projectPath, "cleanup", "compose_removed")
             } catch (e: Exception) {
                 logger.warn("deploy_cleanup_compose_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+                traceDeployStep(config.projectPath, "cleanup", "compose_remove_failed", mapOf("error" to (e.message ?: "unknown")))
             }
+        }
+    }
+
+    private fun traceDeployStep(
+        projectPath: Path,
+        step: String,
+        status: String,
+        details: Map<String, String> = emptyMap()
+    ) {
+        try {
+            val traceDir = projectPath.resolve(".koncerto")
+            val payload = buildJsonObject {
+                put("timestamp", Instant.now().toString())
+                put("step", step)
+                put("status", status)
+                details.forEach { (k, v) -> put(k, v) }
+            }
+            RollingTraceFiles.append(traceDir, "deploy-trace", payload.toString())
+        } catch (e: Exception) {
+            logger.warn("deploy_trace_write_failed", mapOf(
+                "step" to step,
+                "status" to status,
+                "error" to (e.message ?: "unknown")
+            ))
         }
     }
 

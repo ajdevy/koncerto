@@ -64,4 +64,36 @@ class ClaudeAuthSupportTest {
             }
         }
     }
+
+    @Test
+    fun `applyToken injects env var when token exists`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-apply-")
+        val tokenPath = dir.resolve("token.txt")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", tokenPath.toString())
+            ClaudeAuthSupport.saveToken("sk-ant-oat01-env-token")
+            val pb = ProcessBuilder("bash", "-lc", "echo ok")
+            ClaudeAuthSupport.applyToken(pb)
+            assertThat(pb.environment()["CLAUDE_CODE_OAUTH_TOKEN"]).isEqualTo("sk-ant-oat01-env-token")
+        } finally {
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+        }
+    }
+
+    @Test
+    fun `saveToken ignores blank input`() {
+        val original = System.getProperty("koncerto.claude.auth.token.path")
+        val dir = Files.createTempDirectory("claude-auth-blank-")
+        val tokenPath = dir.resolve("token.txt")
+        try {
+            System.setProperty("koncerto.claude.auth.token.path", tokenPath.toString())
+            ClaudeAuthSupport.saveToken("   ")
+            assertThat(Files.exists(tokenPath)).isEqualTo(false)
+        } finally {
+            if (original == null) System.clearProperty("koncerto.claude.auth.token.path")
+            else System.setProperty("koncerto.claude.auth.token.path", original)
+        }
+    }
 }
