@@ -75,6 +75,14 @@ class R2DemoStorage(
                         storageKey, presignedUrlTtlSeconds, endpoint, accessKey, secretKey, bucketName, region, now
                     )
                 }
+                if (isLocalhostUrl(publicUrl)) {
+                    return DemoResult.Failure(DemoError.StorageFailed(
+                        RuntimeException(
+                            "Demo URL resolves to localhost ($publicUrl). " +
+                                "Set publicUrlBase (R2_PUBLIC_URL_BASE) to a publicly accessible URL base."
+                        )
+                    ))
+                }
                 DemoResult.Success(DemoStorage.StorageResult(
                     storageKey = storageKey,
                     url = publicUrl,
@@ -88,6 +96,11 @@ class R2DemoStorage(
         } catch (e: Exception) {
             DemoResult.Failure(DemoError.StorageFailed(e))
         }
+    }
+
+    private fun isLocalhostUrl(url: String): Boolean {
+        val host = runCatching { URI.create(url).host }.getOrNull() ?: return false
+        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host.endsWith(".localhost")
     }
 
     override suspend fun delete(storageKey: String): DemoResult<Unit> {

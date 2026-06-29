@@ -1,0 +1,42 @@
+# Stage 1: build the fat JAR from source
+FROM eclipse-temurin:21-jdk-alpine AS builder
+WORKDIR /build
+COPY . .
+RUN ./gradlew :koncerto-app:bootJar -x test --no-daemon
+
+# Stage 2: run image (same tool stack as koncerto-app/Dockerfile)
+FROM eclipse-temurin:21-jre-alpine
+
+RUN apk add --no-cache \
+    bash \
+    wget \
+    docker-cli \
+    docker-compose \
+    git \
+    nodejs \
+    npm \
+    github-cli \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    ffmpeg \
+    xvfb
+
+RUN npm install -g \
+    @openai/codex \
+    @anthropic-ai/claude-code \
+    playwright && \
+    npx playwright install ffmpeg
+
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+WORKDIR /app
+
+COPY --from=builder /build/koncerto-app/build/libs /tmp/libs
+RUN cp /tmp/libs/$(ls /tmp/libs | grep -v plain | grep '\.jar$' | head -1) app.jar && rm -rf /tmp/libs
+
+ENTRYPOINT ["java", "-jar", "app.jar"]

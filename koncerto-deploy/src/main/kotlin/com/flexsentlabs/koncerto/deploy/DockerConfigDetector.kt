@@ -17,6 +17,7 @@ class DockerConfigDetector {
 
     fun detect(projectPath: Path): DetectedDockerConfig? {
         val composeFiles = listOf(
+            projectPath.resolve("docker-compose.demo.yml"),
             projectPath.resolve("docker-compose.yml"),
             projectPath.resolve("docker-compose.yaml"),
             projectPath.resolve("docker-compose.prod.yml"),

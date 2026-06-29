@@ -604,6 +604,64 @@ exit 0
     }
 
     @Test
+    fun `deployWithCompose succeeds when koncerto demo port 17349 exposed`(@TempDir tmpDir: Path) {
+        Files.writeString(
+            tmpDir.resolve("docker-compose.demo.yml"),
+            "services:\n  koncerto-demo:\n    build:\n      context: .\n      dockerfile: Dockerfile.demo\n    ports:\n      - \"17349:17348\"\n"
+        )
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 0 ;;
+      *" up "*) echo "started"; exit 0 ;;
+      *" ps"*) echo "17349->17348/tcp"; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDocker(script) {
+            val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.demo.yml"), tmpDir, "koncerto-demo-fle-52")
+            assertThat(result.success).isTrue()
+            assertThat(result.url).isEqualTo("http://host.docker.internal:17349")
+        }
+    }
+
+    @Test
+    fun `deploy picks docker-compose demo yml over docker-compose yml`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(
+            tmpDir.resolve("docker-compose.demo.yml"),
+            "services:\n  koncerto-demo:\n    build:\n      context: .\n      dockerfile: Dockerfile.demo\n    ports:\n      - \"17349:17348\"\n"
+        )
+        Files.writeString(
+            tmpDir.resolve("docker-compose.yml"),
+            "services:\n  app:\n    image: nginx\n    network_mode: host\n"
+        )
+        val script = """#!/usr/bin/env bash
+case "${'$'}1" in
+  compose)
+    shift
+    case "${'$'}*" in
+      *down*) exit 0 ;;
+      *" up "*) echo "started"; exit 0 ;;
+      *" ps"*) echo "17349->17348/tcp"; exit 0 ;;
+    esac
+    ;;
+esac
+exit 0
+"""
+        val deployer = createDeployer(mockk(relaxed = true))
+        FakeDockerPath.withFakeDockerSuspend(script) {
+            val result = deployer.deploy(DeployConfig("owner/koncerto", "fle-52", projectPath = tmpDir))
+            assertThat(result.success).isTrue()
+            assertThat(result.url).isEqualTo("http://host.docker.internal:17349")
+        }
+    }
+
+    @Test
     fun `FakeDockerPath redirects docker via test override`() {
         FakeDockerPath.withFakeDocker("""#!/usr/bin/env bash
 echo FAKE_DOCKER_MARKER

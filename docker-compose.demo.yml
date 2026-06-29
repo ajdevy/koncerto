@@ -1,0 +1,18 @@
+services:
+  koncerto-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile.demo
+    ports:
+      - "17349:17348"
+    environment:
+      KONCERTO_DASHBOARD_PORT: "17348"
+      KONCERTO_WEB_TYPE: reactive
+      KONCERTO_LOGS_ROOT: /tmp/logs
+      KONCERTO_WORKSPACE_ROOT: /tmp/workspace
+      KONCERTO_WORKFLOW_PATH: /config/WORKFLOW.md
+      GH_TOKEN: "${GH_TOKEN:-}"
+      LINEAR_API_KEY: "${LINEAR_API_KEY:-}"
+    volumes:
+      - .:/config
+      - /var/run/docker.sock:/var/run/docker.sock
