@@ -506,12 +506,8 @@ class DispatchService(
             val decision = autoReviewOrchestrator.onCodingComplete(issue)
             when (decision) {
                 is AutoReviewOrchestrator.ReviewDecision.Pass -> {
-                    // Use the "in review" stage config so we transition to its onCompleteState
-                    // (e.g. "Ready for Human Review"), not back to the coding stage's onCompleteState.
-                    val reviewStageConfig = projectConfig.agent.stages["in review"]
-                        ?: projectConfig.agent.stages["review"]
-                    val effectiveStageConfig = reviewStageConfig ?: stageConfig
-                    completeIssue(issue, effectiveStageConfig, entry)
+                    val reviewStageConfig = projectConfig.agent.stages["in review"] ?: projectConfig.agent.stages["review"]
+                    completeIssue(issue, reviewStageConfig ?: stageConfig, entry)
                 }
                 is AutoReviewOrchestrator.ReviewDecision.RetryWithCoding -> {
                     if (decision.rerouteToState != null) {

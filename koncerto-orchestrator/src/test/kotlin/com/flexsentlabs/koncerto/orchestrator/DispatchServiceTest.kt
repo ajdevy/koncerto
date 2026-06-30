@@ -2267,6 +2267,88 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `auto-review pass falls back to review stage key when in-review key absent`(@TempDir root: Path) = runBlocking {
+        // Covers the ?: stages["review"] fallback branch in handleNormalCompletion.
+        val codingStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "In Review",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null,
+            onCompleteState = "Ready for Human Review", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        // Only "review" key — stages["in review"] returns null, fallback to stages["review"]
+        val stages = mapOf("todo" to codingStage, "review" to reviewStage)
+        val runner = ReviewWritingAgentRunner(root, "pass")
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = stages),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "state-id"
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = stages),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+        assertThat(linear.resolvedStateHistory).contains("Ready for Human Review")
+    }
+
+    @Test
+    fun `auto-review pass falls back to stageConfig when no review stage key`(@TempDir root: Path) = runBlocking {
+        // Covers the reviewStageConfig ?: stageConfig fallback in handleNormalCompletion.
+        val codingStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        // No "in review" or "review" key in stages — reviewStageConfig will be null, falls back to stageConfig
+        val stages = mapOf("todo" to codingStage)
+        val runner = ReviewWritingAgentRunner(root, "pass")
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = stages),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "state-id"
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = stages),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+        assertThat(linear.resolvedStateHistory).contains("Done")
+    }
+
+    @Test
     fun `scheduleRetry exhaustion logs AGENT_FAILED audit event`() = runBlocking {
         val auditTypes = mutableListOf<AuditEventType>()
         val audit = object : AuditLogger {
