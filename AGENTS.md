@@ -1,5 +1,13 @@
 # Koncerto Session Memory
 
+## Aggregate Line Coverage 100% (CI)
+- **Threshold**: `scripts/coverage-badge.py` enforces **100.0%** aggregate line coverage (`round(line_pct, 1) < 100.0` fails CI).
+- **Verify locally**: `./gradlew test jacocoTestReport -Pjacoco && python3 scripts/coverage-badge.py`
+- **Counted scope**: Non-excluded production classes after lambda/test-seam adjustment (`$default`, `invokeSuspend`, `getTest`/`setTest`).
+- **Integration exclusions** (`_INTEGRATION_CLASS_EXCLUSIONS`): Docker deploy/runtime, Spring `Beans`, API login flows, `Orchestrator` tick loop, etc. — OS/process wiring not suited to unit coverage.
+- **Other exclusions**: CLI entrypoints, Playwright/OS recorders, compiler-generated synthetics (`$lambda$`, `DefaultAgentRunner$`, …), serialization DTO companions.
+- **History**: #15 raised coverage to 99%; remaining gaps closed in #16 (combined with FLE-52). This PR documents the 100% policy explicitly.
+
 ## Prompt Resolution Fix (FLE-51 e2e)
 - **Root cause**: Stage `prompt` field stores a file path (`prompts/implement.md`) but is never resolved — codex receives the literal string `"prompts/implement.md"` as its prompt.
 - **Fix**: Added `WorkflowCache.resolvePrompt()` that reads prompt file content if the prompt value resolves to an existing file.
