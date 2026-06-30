@@ -492,18 +492,24 @@ class DispatchService(
     private suspend fun handleNormalCompletion(
         issue: Issue,
         stageConfig: StageAgentConfig?,
-        entry: RunningEntry?
+        entry: RunningEntry?,
+        stageName: String? = null
     ) {
         val clarificationContent = readClarification(issue.identifier)
         if (clarificationContent != null) {
             handleClarification(issue.id, clarificationContent)
             return
         }
-        if (autoReviewOrchestrator != null) {
+        // Don't trigger auto-review when the completed stage IS the review stage — it already ran the review.
+        val completedReviewStage = stageName?.equals("in review", ignoreCase = true) == true
+        if (autoReviewOrchestrator != null && !completedReviewStage) {
             val decision = autoReviewOrchestrator.onCodingComplete(issue)
             when (decision) {
                 is AutoReviewOrchestrator.ReviewDecision.Pass -> {
-                    val reviewStageConfig = projectConfig.agent.stages["review"]
+                    // Use the "in review" stage config so we transition to its onCompleteState
+                    // (e.g. "Ready for Human Review"), not back to the coding stage's onCompleteState.
+                    val reviewStageConfig = projectConfig.agent.stages["in review"]
+                        ?: projectConfig.agent.stages["review"]
                     val effectiveStageConfig = reviewStageConfig ?: stageConfig
                     completeIssue(issue, effectiveStageConfig, entry)
                 }
@@ -756,7 +762,7 @@ class DispatchService(
                 try {
                     handleWorkplanIfPresent(scope, issue, data.stageConfig, finalEntry)
                     handleCrossProjectFollowUp(scope, issue, data.stageConfig)
-                    handleNormalCompletion(issue, data.stageConfig, finalEntry)
+                    handleNormalCompletion(issue, data.stageConfig, finalEntry, data.stageName)
                 } finally {
                     state.releaseClaim(issue.id)
                     quotaEnforcer?.release(projectConfig.tracker.projectSlug)

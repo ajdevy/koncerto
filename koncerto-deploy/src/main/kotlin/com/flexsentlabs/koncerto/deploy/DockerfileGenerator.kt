@@ -38,14 +38,26 @@ EXPOSE ${fw.ports.first()}
 CMD ["sh", "-c", "${fw.runCmd ?: "npm start"}"]
 """.trimIndent()
 
-    private fun generatePythonDockerfile(fw: FrameworkInfo): String = """
+    private fun generatePythonDockerfile(fw: FrameworkInfo): String {
+        val pipMirror = "https://pypi.tuna.tsinghua.edu.cn/simple/"
+        val pipTrusted = "pypi.tuna.tsinghua.edu.cn"
+        val pipFlags = "--index-url $pipMirror --trusted-host $pipTrusted"
+        // If buildCmd is set, replace the bare pip prefix so mirror flags apply;
+        // otherwise install the project directory directly.
+        val installTarget = fw.buildCmd
+            ?.removePrefix("pip install --default-timeout 60 --retries 10")
+            ?.trim()
+            ?: "."
+        return """
 FROM python:3.12-slim
 WORKDIR /app
 COPY . .
-RUN ${fw.buildCmd ?: "pip install --default-timeout 60 --retries 10 ."}
+RUN pip install $pipFlags hatchling setuptools wheel && \
+    pip install --no-build-isolation $pipFlags $installTarget
 EXPOSE ${fw.ports.first()}
 CMD ["sh", "-c", "${fw.runCmd ?: "python app.py"}"]
 """.trimIndent()
+    }
 
     private fun generateGoDockerfile(fw: FrameworkInfo): String = """
 FROM golang:1.22-alpine AS build

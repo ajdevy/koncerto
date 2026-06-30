@@ -463,9 +463,10 @@ class AutoReviewOrchestrator(
 
     private fun resolvePrNumber(workspacePath: Path): Int? {
         val repo = resolveRepoFullName(workspacePath) ?: return null
+        val branch = resolveCurrentBranch(workspacePath) ?: return null
         return try {
             val result = ghProcessRunner(
-                listOf("gh", "pr", "view", "--repo", repo, "--json", "number"),
+                listOf("gh", "pr", "view", branch, "--repo", repo, "--json", "number"),
                 workspacePath
             )
             if (result.exitCode == 0) {
@@ -473,6 +474,31 @@ class AutoReviewOrchestrator(
                 match?.groupValues?.get(1)?.toIntOrNull()
             } else null
         } catch (_: Exception) { null }
+    }
+
+    private fun resolveCurrentBranch(workspacePath: Path): String? {
+        return try {
+            val head = readGitHead(workspacePath) ?: return null
+            if (head.startsWith("ref: refs/heads/")) head.removePrefix("ref: refs/heads/").trim()
+            else null // detached HEAD
+        } catch (_: Exception) { null }
+    }
+
+    private fun readGitHead(workspacePath: Path): String? {
+        val gitDir = workspacePath.resolve(".git")
+        return when {
+            java.nio.file.Files.isDirectory(gitDir) -> {
+                val headFile = gitDir.resolve("HEAD")
+                if (java.nio.file.Files.exists(headFile)) java.nio.file.Files.readString(headFile).trim() else null
+            }
+            java.nio.file.Files.isRegularFile(gitDir) -> {
+                val gitdirLine = java.nio.file.Files.readString(gitDir).trim()
+                val gitdirPath = gitdirLine.removePrefix("gitdir:").trim()
+                val headFile = java.nio.file.Path.of(gitdirPath).resolve("HEAD")
+                if (java.nio.file.Files.exists(headFile)) java.nio.file.Files.readString(headFile).trim() else null
+            }
+            else -> null
+        }
     }
 
     private fun buildDefaultReviewPrompt(issue: Issue): String =
