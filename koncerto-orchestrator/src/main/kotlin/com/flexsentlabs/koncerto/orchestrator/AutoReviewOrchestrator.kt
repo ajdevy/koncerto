@@ -54,7 +54,7 @@ class AutoReviewOrchestrator(
     private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner
 ) {
     private val reviewStage: StageAgentConfig?
-        get() = projectConfig.agent.stages["in review"]
+        get() = projectConfig.agent.stages["in review"] ?: projectConfig.agent.stages["review"]
 
     private var reviewSequence = 0
 
