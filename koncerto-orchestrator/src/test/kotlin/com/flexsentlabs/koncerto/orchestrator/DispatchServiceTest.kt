@@ -2213,9 +2213,10 @@ class DispatchServiceTest {
     fun `in-review stage completion skips autoReview and completes directly`(@TempDir root: Path) = runBlocking {
         // Regression: when the "in review" stage itself completes, handleNormalCompletion used to call
         // onCodingComplete() again, running a redundant nested review.
+        // Use agentKind="codex" so CI auth check passes (claude binary absent in CI).
         val reviewStage = StageAgentConfig(
             prompt = "p", model = null, effort = null, maxConcurrent = null,
-            agentKind = "claude", command = "claude",
+            agentKind = "codex", command = null,
             onCompleteState = "Ready for Human Review", onFailureState = null,
             maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
         )
