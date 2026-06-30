@@ -2179,13 +2179,8 @@ class DispatchServiceTest {
             onCompleteState = "Ready for Human Review", onFailureState = "In Progress",
             maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
         )
-        val transitionedStates = mutableListOf<String>()
-        val linear = object : TrackingLinearClient() {
-            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
-                transitionedStates.add(stateName)
-                return "state-id"
-            }
-        }
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "state-id"
         linear.addIssue(issue("1", "T-1", "Todo"))
         val stages = mapOf("todo" to codingStage, "in review" to reviewStage)
         val runner = ReviewWritingAgentRunner(root, "pass")
@@ -2210,8 +2205,8 @@ class DispatchServiceTest {
         )
         runDispatchAwait(svc)
         assertThat(svc.state.completed.containsKey("1")).isTrue()
-        assertThat(transitionedStates).contains("Ready for Human Review")
-        assertThat(transitionedStates.any { it.equals("In Review", ignoreCase = true) }).isFalse()
+        assertThat(linear.resolvedStateHistory).contains("Ready for Human Review")
+        assertThat(linear.resolvedStateHistory.any { it.equals("In Review", ignoreCase = true) }).isFalse()
     }
 
     @Test
@@ -2238,13 +2233,8 @@ class DispatchServiceTest {
                 return Result.Success(Unit)
             }
         }
-        val transitionedStates = mutableListOf<String>()
-        val linear = object : TrackingLinearClient() {
-            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
-                transitionedStates.add(stateName)
-                return "state-id"
-            }
-        }
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "state-id"
         linear.addIssue(issue("1", "T-1", "In Review"))
         val stages = mapOf("in review" to reviewStage)
         val pcfg = config(stages = stages).copy(
@@ -2272,7 +2262,7 @@ class DispatchServiceTest {
         runDispatchAwait(svc)
         assertThat(runCount).isEqualTo(1)
         assertThat(svc.state.completed.containsKey("1")).isTrue()
-        assertThat(transitionedStates).contains("Ready for Human Review")
+        assertThat(linear.resolvedStateHistory).contains("Ready for Human Review")
     }
 
     @Test
@@ -2801,6 +2791,7 @@ private class TrackingLinearClient : LinearClient {
     var createLinkResult: Boolean = true
     var resolveStateIdResult: String? = "done-id"
     var throwOnStateUpdate: Boolean = false
+    val resolvedStateHistory = mutableListOf<String>()
     private val candidates = mutableListOf<Issue>()
 
     fun addIssue(issue: Issue) { candidates.add(issue) }
@@ -2810,7 +2801,10 @@ private class TrackingLinearClient : LinearClient {
     override suspend fun fetchIssuesByStates(projectSlug: String, stateNames: List<String>): List<Issue> = emptyList()
     override suspend fun fetchIssueStatesByIds(issueIds: List<String>): Map<String, String> = emptyMap()
     override suspend fun fetchIssueById(issueId: String): Issue? = candidates.firstOrNull { it.id == issueId }
-    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? = resolveStateIdResult
+    override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
+        resolvedStateHistory.add(stateName)
+        return resolveStateIdResult
+    }
     override suspend fun updateIssueState(issueId: String, stateId: String) {
         if (throwOnStateUpdate) throw RuntimeException("linear down")
         transitionedIssueId = issueId
