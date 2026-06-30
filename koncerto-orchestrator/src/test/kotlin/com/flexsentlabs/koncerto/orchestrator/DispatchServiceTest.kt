@@ -2164,6 +2164,118 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `auto-review pass uses in-review stage onCompleteState not coding stage`(@TempDir root: Path) = runBlocking {
+        // Regression: stages["review"] key was wrong (should be "in review"). Without fix the issue
+        // would transition to the coding stage's onCompleteState ("In Review") instead of the
+        // "in review" stage's onCompleteState ("Ready for Human Review"), creating an infinite loop.
+        val codingStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "In Review",
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Ready for Human Review", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val transitionedStates = mutableListOf<String>()
+        val linear = object : TrackingLinearClient() {
+            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
+                transitionedStates.add(stateName)
+                return "state-id"
+            }
+        }
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val stages = mapOf("todo" to codingStage, "in review" to reviewStage)
+        val runner = ReviewWritingAgentRunner(root, "pass")
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = config(stages = stages),
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = config(stages = stages),
+            candidates = listOf(issue("1", "T-1", "Todo"))
+        )
+        runDispatchAwait(svc)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+        assertThat(transitionedStates).contains("Ready for Human Review")
+        assertThat(transitionedStates.any { it.equals("In Review", ignoreCase = true) }).isFalse()
+    }
+
+    @Test
+    fun `in-review stage completion skips autoReview and completes directly`(@TempDir root: Path) = runBlocking {
+        // Regression: when the "in review" stage itself completes, handleNormalCompletion used to call
+        // onCodingComplete() again, running a redundant nested review.
+        val reviewStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Ready for Human Review", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        var runCount = 0
+        val runner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?
+            ): com.flexsentlabs.koncerto.core.result.EmptyResult<IllegalStateException> {
+                runCount++
+                return Result.Success(Unit)
+            }
+        }
+        val transitionedStates = mutableListOf<String>()
+        val linear = object : TrackingLinearClient() {
+            override suspend fun resolveStateId(projectSlug: String, stateName: String): String? {
+                transitionedStates.add(stateName)
+                return "state-id"
+            }
+        }
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val stages = mapOf("in review" to reviewStage)
+        val pcfg = config(stages = stages).copy(
+            tracker = config().tracker.copy(activeStates = listOf("In Review"))
+        )
+        val state = RuntimeState()
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = runner,
+            workspaceManager = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            linearClient = TrackingLinearClient(),
+            projectConfig = pcfg,
+            projectSlug = "p",
+            runtimeState = state,
+            notifier = null,
+            logger = StructuredLogger(emptyList())
+        )
+        val svc = createService(
+            runner = runner,
+            linear = linear,
+            autoReviewOrchestrator = autoReview,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }),
+            projectConfig = pcfg,
+            candidates = listOf(issue("1", "T-1", "In Review"))
+        )
+        runDispatchAwait(svc)
+        assertThat(runCount).isEqualTo(1)
+        assertThat(svc.state.completed.containsKey("1")).isTrue()
+        assertThat(transitionedStates).contains("Ready for Human Review")
+    }
+
+    @Test
     fun `scheduleRetry exhaustion logs AGENT_FAILED audit event`() = runBlocking {
         val auditTypes = mutableListOf<AuditEventType>()
         val audit = object : AuditLogger {
