@@ -26,6 +26,7 @@ projects:
       project_admin: "user-1"
     reviewer:
       kind: human
+    git_remote_url: $GIT_REMOTE_URL
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
     agent:
