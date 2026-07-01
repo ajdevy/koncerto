@@ -162,3 +162,4 @@
 - Health check failure → explicit exit code + error message
 - All file writes use atomic write pattern (temp file + rename)
 - Notification delivery failure does not block ticket blocking
+- **Pipeline artifact git hygiene:** `KoncertoArtifactIgnore` ensures `.koncerto/*.jsonl`, `.review-*`, and `.model-exhausted*` never enter target-project commits (see `_bmad/bmm/architecture/issue-lifecycle-state-machine.md`)

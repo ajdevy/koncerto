@@ -20,6 +20,7 @@ class WorkspaceManager(
         assertInsideRoot(path)
         val createdNow = !Files.exists(path)
         if (createdNow) Files.createDirectories(path)
+        KoncertoArtifactIgnore.ensureGitignore(path)
         return Workspace(path, key, createdNow)
     }
 

@@ -39,6 +39,18 @@
    - Address review feedback
    - Merge when approved
 
+## Git Hygiene (Koncerto target projects)
+
+Never commit orchestrator pipeline artifacts. These files are written locally during dispatch/review and must stay out of PRs:
+
+| Pattern | Contents |
+|---------|----------|
+| `.koncerto/` | Trace `.jsonl` logs (`dispatch-trace-*`, `review-trace-*`, `deploy-trace-*`), clarification drafts |
+| `.review-*` | Review status, output, attempt counter, PR comment body |
+| `.model-exhausted*` | Free-model retry exhaustion state |
+
+Koncerto auto-appends these patterns to the target project's `.gitignore` and untracks them before `git commit`. If you see them in a PR diff, remove with `git rm --cached` and add the gitignore block.
+
 ## Output Format
 
 ```markdown

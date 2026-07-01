@@ -140,8 +140,19 @@ dispatch → codex → PR → review_passed → deploy(32774)
 
 ## Known Limitations
 - Demo recording URL is a presigned URL (effectively permanent, 10yr TTL). For production, set `R2_PUBLIC_URL_BASE` to use public URLs.
-- `.review-*` files leak into PR diff
 - `gh_exit_1` "PR already exists" is cosmetic (safety-net stage clashes with codex PR)
+
+## Pipeline Artifact Gitignore Fix (Session 2026-07-01)
+### Problem
+- `GitWorkflow.commitAndPush()` ran `git add -A`, staging Koncerto pipeline files (`.koncerto/*-trace-*.jsonl`, `.review-*`) into target-project PRs — e.g. PromoMesh PR#35 showed only orchestration artifacts, no app code.
+- `.review-*` files were deleted after review but `.koncerto/*.jsonl` trace logs remained tracked once committed.
+
+### Fix
+- **`KoncertoArtifactIgnore.kt`** — defines gitignore block + `ensureGitignore()` / `untrackArtifacts()` helpers.
+- **`GitWorkflow.commitAndPush()`** — ensures gitignore, `git rm --cached` on artifacts, then `git add -A`.
+- **`WorkspaceManager.ensureWorkspace()`** / **`GitWorkflow.createBranch()`** — append gitignore block on workspace setup.
+- **BMAD docs** — `_bmad/bmm/architecture/issue-lifecycle-state-machine.md`, `story-implementation.md`, `developer.md` document the contract.
+- **`prompts/implement.md`** — instructs agents never to commit pipeline artifacts.
 
 ## gh pr comment Ghost Posting Fix (Session 2026-06-24)
 ### Root cause

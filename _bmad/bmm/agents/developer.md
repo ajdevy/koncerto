@@ -23,6 +23,8 @@ Please:
 5. Create appropriate tests
 6. Document any technical decisions
 
+**Never commit Koncerto pipeline artifacts** (`.koncerto/*.jsonl`, `.review-*`, `.model-exhausted*`). These are orchestrator-local state, not application code.
+
 Output format: Code files with tests, following project conventions.
 ```
 

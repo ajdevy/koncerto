@@ -97,6 +97,25 @@ IN_REVIEW ──auto──────┤                                       
                       └─ ❌ FAIL ──→ TODO (re-dispatch, up to max_review_attempts)
 ```
 
+### Pipeline Artifact Git Hygiene
+
+Koncerto writes ephemeral state into the **target project workspace** during dispatch and review. These files must never appear in PR diffs:
+
+| Path | Purpose |
+|------|---------|
+| `.koncerto/*-trace-*.jsonl` | Structured dispatch/review/deploy/demo trace logs |
+| `.koncerto/clarification.md` | Agent clarification request (read before commit) |
+| `.review-status`, `.review-output`, `.review-attempt` | Auto-review verdict and attempt tracking |
+| `.review-output-detailed`, `.review-body.txt` | PR comment source (posted then deleted) |
+| `.model-exhausted*` | Free-model retry exhaustion marker |
+
+**Enforcement** (`KoncertoArtifactIgnore` in `koncerto-workspace`):
+1. `WorkspaceManager.ensureWorkspace()` and `GitWorkflow.createBranch()` append a marked block to `.gitignore` if missing.
+2. `GitWorkflow.commitAndPush()` calls `git rm --cached` on tracked artifacts, then `git add -A` — only application code is committed.
+3. `AutoReviewOrchestrator.cleanupReviewFiles()` deletes `.review-*` files after review completes (trace jsonl remains local-only under `.koncerto/`).
+
+Target projects that already committed these files need a one-time `git rm --cached -r .koncerto .review-*` plus the gitignore block.
+
 ### Zombie Detection
 
 Every tick cycle, the reconcile loop checks each `IN_PROGRESS` entry:
