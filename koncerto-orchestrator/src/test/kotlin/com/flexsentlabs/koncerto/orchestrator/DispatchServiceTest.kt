@@ -2260,6 +2260,8 @@ class DispatchServiceTest {
             projectConfig = pcfg,
             candidates = listOf(issue("1", "T-1", "In Review"))
         )
+        val workspace = WorkspaceManager(root, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        workspace.path.resolve(".review-status").toFile().writeText("pass")
         runDispatchAwait(svc)
         assertThat(runCount).isEqualTo(1)
         assertThat(svc.state.completed.containsKey("1")).isTrue()
