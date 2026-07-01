@@ -24,6 +24,7 @@ class PlaywrightRecorderTest {
         PlaywrightRecorder.testRecordProcessBuilder = null
         PlaywrightRecorder.testMaxWaitSeconds = null
         PlaywrightRecorder.testStartupWaitSeconds = null
+        PlaywrightRecorder.testUseNativeVideoMode = null
     }
 
     private val config = RecordingConfig(
@@ -82,6 +83,7 @@ class PlaywrightRecorderTest {
         val script = field.get(null) as String
         assertThat(script.contains("chromium.launch")).isTrue()
         assertThat(script.contains("networkidle")).isTrue()
+        assertThat(script.contains("chrome-error://")).isTrue()
     }
 
     @Test
@@ -175,10 +177,12 @@ class PlaywrightRecorderTest {
         val output = File.createTempFile("pw-validate-", ".webm")
         PlaywrightRecorder.testDependenciesAvailable = true
         PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
-            ProcessBuilder("bash", "-c", "echo x > '${out.absolutePath}'; exit 2")
+            ProcessBuilder("bash", "-c", "echo 'VALIDATION_ERROR: site unreachable'; exit 2")
         }
         val result = PlaywrightRecorder().record(config, output)
         assertThat(result).isInstanceOf(DemoResult.Failure::class)
+        val error = (result as DemoResult.Failure).error as DemoError.RecordingFailed
+        assertThat(error.message ?: "").contains("Content validation failed")
     }
 
     @Test
@@ -264,5 +268,43 @@ class PlaywrightRecorderTest {
         val script = method.invoke(PlaywrightRecorder(), config, output.absolutePath, "") as String
         assertThat(script.contains(output.absolutePath)).isTrue()
         assertThat(script.contains("Xvfb :99")).isTrue()
+    }
+
+    @Test
+    fun `buildNativeShellScript omits Xvfb and ffmpeg`() {
+        val method = PlaywrightRecorder::class.java.getDeclaredMethod(
+            "buildNativeShellScript",
+            com.flexsentlabs.koncerto.demo.model.RecordingConfig::class.java,
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        val output = java.io.File.createTempFile("pw-native-", ".webm")
+        val script = method.invoke(PlaywrightRecorder(), config, output.absolutePath, "") as String
+        assertThat(script.contains("node")).isTrue()
+        assertThat(script.contains("Xvfb")).isFalse()
+        assertThat(script.contains("ffmpeg")).isFalse()
+    }
+
+    @Test
+    fun `record succeeds in native video mode with test process`() = runTest {
+        val output = File.createTempFile("pw-native-success-", ".webm")
+        PlaywrightRecorder.testDependenciesAvailable = true
+        PlaywrightRecorder.testUseNativeVideoMode = true
+        PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
+            ProcessBuilder(
+                "bash",
+                "-c",
+                """
+                set -e
+                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
+                echo native > "${out.absolutePath}"
+                exit 0
+                """.trimIndent()
+            )
+        }
+        val result = PlaywrightRecorder().record(config, output)
+        assertThat(result).isInstanceOf(DemoResult.Success::class)
+        assertThat(output.exists() && output.length() > 0).isTrue()
     }
 }

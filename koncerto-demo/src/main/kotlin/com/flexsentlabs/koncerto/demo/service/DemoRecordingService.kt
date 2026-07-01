@@ -492,7 +492,13 @@ class DemoRecordingService(
 
     private suspend fun resolvePlatform(): DemoPlatform? {
         val available = recorderFactory.availablePlatforms()
-        return available.firstOrNull { it == DemoPlatform.PLAYWRIGHT }
+        val configured = config.defaultPlatform
+            .trim()
+            .takeIf { it.isNotBlank() }
+            ?.uppercase()
+            ?.let { raw -> runCatching { DemoPlatform.valueOf(raw) }.getOrNull() }
+        return available.firstOrNull { it == configured }
+            ?: available.firstOrNull { it == DemoPlatform.PLAYWRIGHT }
             ?: available.firstOrNull { it == DemoPlatform.ASCIINEMA }
             ?: available.firstOrNull()
     }

@@ -1,5 +1,8 @@
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
+val useLocalPluginRepo = providers.gradleProperty("koncerto.useLocalPluginRepo").orNull == "true"
+val useAliyunMirrors = providers.gradleProperty("koncerto.useAliyunMirrors").orNull == "true"
+
 plugins {
     kotlin("jvm") version "2.0.21" apply false
     kotlin("plugin.serialization") version "2.0.21" apply false
@@ -12,6 +15,12 @@ allprojects {
     version = "0.1.0-SNAPSHOT"
 
     repositories {
+        if (useLocalPluginRepo) {
+            maven(url = rootProject.file("gradle/local-plugin-repo").toURI())
+        }
+        if (useAliyunMirrors) {
+            maven("https://maven.aliyun.com/repository/public")
+        }
         mavenCentral()
     }
 }

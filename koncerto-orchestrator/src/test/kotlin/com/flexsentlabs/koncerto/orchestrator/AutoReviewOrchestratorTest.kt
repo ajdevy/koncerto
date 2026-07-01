@@ -129,6 +129,17 @@ class AutoReviewOrchestratorTest {
             else Result.Failure(IllegalStateException("runner failed"))
     }
 
+    private fun failingRunner(): AgentRunner = object : AgentRunner {
+        private val flow = MutableSharedFlow<AgentEvent>()
+        override fun events() = flow.asSharedFlow()
+        override suspend fun run(
+            issue: Issue, attempt: Int?, prompt: String,
+            agentKindOverride: String?, commandOverride: String?,
+            modelOverride: String?, effortOverride: String?,
+            turnTimeoutMs: Long?, stallTimeoutMs: Long?
+        ): EmptyResult<IllegalStateException> = Result.Failure(IllegalStateException("should not run"))
+    }
+
     @Test
     fun `returns NoReview when no review stage configured`(@TempDir tmpDir: Path) = runTest {
         val orchestrator = AutoReviewOrchestrator(
@@ -170,6 +181,62 @@ class AutoReviewOrchestratorTest {
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat((decision as AutoReviewOrchestrator.ReviewDecision.Pass).transitionToState).isEqualTo("Done")
+    }
+
+    @Test
+    fun `onReviewStageComplete runs post review pipeline without rerunning agent`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "✅ PASS\nreview ok")
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> {
+                    val bodyFileIndex = command.indexOf("--body-file")
+                    if (bodyFileIndex >= 0) {
+                        capturedBody = Files.readString(Path.of(command[bodyFileIndex + 1]))
+                    }
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+
+        var callbackCount = 0
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ ->
+                callbackCount++
+                null
+            }
+        )
+
+        val decision = orchestrator.onReviewStageComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat((decision as AutoReviewOrchestrator.ReviewDecision.Pass).transitionToState).isEqualTo("Done")
+        assertThat(callbackCount).isEqualTo(1)
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!).contains("review ok")
+        assertThat(Files.exists(issueDir.resolve(".review-output-detailed"))).isFalse()
     }
 
     @Test
@@ -750,6 +817,34 @@ class AutoReviewOrchestratorTest {
         assertThat(capturedBody!!.contains("Claude Review #1")).isTrue()
         assertThat(capturedBody!!.contains("Looks good to merge.")).isTrue()
         assertThat(capturedBody!!.contains("Watch Demo Recording")).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment falls back to pr list when pr view fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ PASS\nLooks good.")
+
+        var commentPosted = false
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(1, "no pull requests found")
+                command.contains("list") -> GhProcessResult(0, """[{"number":7}]""")
+                command.contains("comment") -> {
+                    commentPosted = true
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        passingReviewOrchestrator(
+            workspaceDir,
+            ghProcessRunner = ghRunner
+        ).onCodingComplete(issue())
+
+        assertThat(commentPosted).isTrue()
     }
 
     @Test
@@ -1393,7 +1488,7 @@ class AutoReviewOrchestratorTest {
             onReviewPassed = { _, _ -> throw RuntimeException("demo callback boom") }
         ).onCodingComplete(issue())
 
-        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
     }
 
     @Test
@@ -1425,7 +1520,7 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `postDetailedReviewAsPrComment skips when pr cannot be resolved`(@TempDir tmpDir: Path) = runTest {
+    fun `postDetailedReviewAsPrComment still comments when pr number cannot be resolved`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         initGitOrigin(issueDir, "acme/widget")
@@ -1439,7 +1534,7 @@ class AutoReviewOrchestratorTest {
         }
         val decision = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner).onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
-        assertThat(commentCalled).isFalse()
+        assertThat(commentCalled).isTrue()
     }
 
     @Test
@@ -1590,6 +1685,20 @@ class AutoReviewOrchestratorTest {
             onReviewPassed = { _, _ -> null }
         ).onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `pass pipeline blocks when demo callback fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val decision = passingReviewOrchestrator(
+            workspaceDir,
+            onReviewPassed = { _, _ -> throw IllegalStateException("site cannot be reached") }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
     }
 
     @Test

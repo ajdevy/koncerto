@@ -1443,6 +1443,57 @@ class DemoRecordingServiceTest {
         assert((result as DemoResult.Success).value.platform == DemoPlatform.ADB)
     }
 
+    @Test
+    fun `resolvePlatform prefers configured default platform when available`() = runTest {
+        val xcrunRecorder = object : DemoRecorder {
+            override val platform: DemoPlatform = DemoPlatform.XCRUN
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig,
+                outputFile: File
+            ): DemoResult<DemoRecorder.RecordingResult> {
+                outputFile.writeText("xcrun")
+                return DemoResult.Success(
+                    DemoRecorder.RecordingResult(outputFile, 1000L, outputFile.length(), config.outputFormat)
+                )
+            }
+        }
+        val playwrightRecorder = object : DemoRecorder {
+            override val platform: DemoPlatform = DemoPlatform.PLAYWRIGHT
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig,
+                outputFile: File
+            ): DemoResult<DemoRecorder.RecordingResult> {
+                outputFile.writeText("playwright")
+                return DemoResult.Success(
+                    DemoRecorder.RecordingResult(outputFile, 1000L, outputFile.length(), config.outputFormat)
+                )
+            }
+        }
+        val playwrightPreferredService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(xcrunRecorder, playwrightRecorder)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = playwrightPreferredService.requestRecording(
+            "issue-configured", "KONC-CONFIG", "test", null, DemoTrigger.MANUAL
+        )
+
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.PLAYWRIGHT)
+    }
+
     private suspend fun invokePerformIntegrityCheck(task: DemoTask, file: File): DemoResult<Unit> {
         val method = DemoRecordingService::class.java.getDeclaredMethod(
             "performIntegrityCheck",

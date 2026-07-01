@@ -22,7 +22,7 @@ class DemoEventListener(
         )
         return when (result) {
             is DemoResult.Success -> result.value.recordingUrl
-            else -> null
+            is DemoResult.Failure -> throw IllegalStateException(result.error.message ?: "demo_recording_failed")
         }
     }
 

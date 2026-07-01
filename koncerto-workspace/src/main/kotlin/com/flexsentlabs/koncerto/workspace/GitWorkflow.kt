@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.workspace
 
 import com.flexsentlabs.koncerto.core.config.GitConfig
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import java.nio.file.Files
 import java.nio.file.Path
 
 sealed class MergeResult {
@@ -69,15 +70,26 @@ open class GitWorkflow(
         }
         setupOriginRemote(workspacePath)
 
+        // Scrub stale agent artifacts before any checkout/fetch path. These traces can be
+        // created before git branch setup and will otherwise block checkout in a fresh repo.
+        runGitSafe(workspacePath, "reset", "--hard", "HEAD")
+        runGitSafe(workspacePath, "clean", "-fd")
+        try {
+            Files.deleteIfExists(workspacePath.resolve(".gitignore"))
+        } catch (_: Exception) {
+            // Best-effort only.
+        }
+
         if (isNewRepo && config.remoteUrl.isNotBlank()) {
-            // Fetch the real base branch from remote so the feature branch shares history
-            val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase)
+            val branch = branchName(issueIdentifier)
+            val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
             if (fetchResult != null) {
-                // Set up local main to track origin/main so gh PR create works
                 runGitSafe(workspacePath, "branch", "-f", config.prBase, "origin/${config.prBase}")
-                // Create feature branch from remote base branch
-                val branch = branchName(issueIdentifier)
-                runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
+                if (remoteBranchExists(branch, workspacePath)) {
+                    runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
+                } else {
+                    runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
+                }
                 return
             }
             // Fall through to local init if fetch fails
@@ -90,14 +102,24 @@ open class GitWorkflow(
         }
 
         val branch = branchName(issueIdentifier)
+        if (!isNewRepo && config.remoteUrl.isNotBlank()) {
+            runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
+        }
+
         val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
+        val remoteBranchExists = remoteBranchExists(branch, workspacePath)
+        if (branchExists && remoteBranchExists) {
+            runGitSafe(workspacePath, "checkout", branch)
+            runGitSafe(workspacePath, "reset", "--hard", "origin/$branch")
+            return
+        }
         if (branchExists) {
             runGitSafe(workspacePath, "checkout", branch)
             return
         }
-        if (!isNewRepo && config.remoteUrl.isNotBlank()) {
-            // Refresh remote base ref for existing repos too
-            runGitSafe(workspacePath, "fetch", "origin", config.prBase)
+        if (remoteBranchExists) {
+            runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
+            return
         }
         val remoteRef = "origin/${config.prBase}"
         val remoteExists = runGitSafe(workspacePath, "rev-parse", "--verify", remoteRef)

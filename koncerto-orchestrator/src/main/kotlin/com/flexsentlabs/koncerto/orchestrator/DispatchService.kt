@@ -500,10 +500,13 @@ class DispatchService(
             handleClarification(issue.id, clarificationContent)
             return
         }
-        // Don't trigger auto-review when the completed stage IS the review stage — it already ran the review.
         val completedReviewStage = stageName?.equals("in review", ignoreCase = true) == true
-        if (autoReviewOrchestrator != null && !completedReviewStage) {
-            val decision = autoReviewOrchestrator.onCodingComplete(issue)
+        if (autoReviewOrchestrator != null) {
+            val decision = if (completedReviewStage) {
+                autoReviewOrchestrator.onReviewStageComplete(issue)
+            } else {
+                autoReviewOrchestrator.onCodingComplete(issue)
+            }
             when (decision) {
                 is AutoReviewOrchestrator.ReviewDecision.Pass -> {
                     // Use the "in review" stage config so we transition to its onCompleteState
