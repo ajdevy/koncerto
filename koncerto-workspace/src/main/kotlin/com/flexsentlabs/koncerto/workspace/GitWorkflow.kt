@@ -61,7 +61,6 @@ open class GitWorkflow(
 
     fun createBranch(workspacePath: Path, issueIdentifier: String) {
         if (!config.enabled) return
-        KoncertoArtifactIgnore.ensureGitignore(workspacePath)
         val isNewRepo = !isGitRepo(workspacePath)
         if (isNewRepo) {
             logger.info("git_init", mapOf("path" to workspacePath.toString()))
@@ -75,11 +74,9 @@ open class GitWorkflow(
         // created before git branch setup and will otherwise block checkout in a fresh repo.
         runGitSafe(workspacePath, "reset", "--hard", "HEAD")
         runGitSafe(workspacePath, "clean", "-fd")
-        try {
-            Files.deleteIfExists(workspacePath.resolve(".gitignore"))
-        } catch (_: Exception) {
-            // Best-effort only.
-        }
+
+        // Add gitignore after cleanup so stale artifacts are removed first
+        KoncertoArtifactIgnore.ensureGitignore(workspacePath)
 
         if (isNewRepo && config.remoteUrl.isNotBlank()) {
             val branch = branchName(issueIdentifier)

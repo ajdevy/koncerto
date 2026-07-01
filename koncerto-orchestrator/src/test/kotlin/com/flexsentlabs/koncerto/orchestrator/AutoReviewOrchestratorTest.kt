@@ -240,6 +240,87 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `returns RetryWithCoding(null) when subscription limit reached and posts one Linear comment`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-output"), "You've hit your org's monthly usage limit")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        var commentCount = 0
+        var lastComment = ""
+        val tracker = object : TrackerClient by fakeTracker() {
+            override suspend fun createComment(issueId: String, body: String) {
+                commentCount++
+                lastComment = body
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+
+        val firstDecision = orchestrator.onReviewStageComplete(issue())
+        assertThat(firstDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat((firstDecision as AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).rerouteToState).isNull()
+        assertThat(commentCount).isEqualTo(1)
+        assertThat(lastComment).contains("subscription limit")
+
+        val secondDecision = orchestrator.onReviewStageComplete(issue())
+        assertThat(secondDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat((secondDecision as AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).rerouteToState).isNull()
+        assertThat(commentCount).isEqualTo(1)
+    }
+
+    @Test
+    fun `normal review pass still works when subscription limit output absent`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "✅ PASS\nreview ok")
+
+        var commentCount = 0
+        val tracker = object : TrackerClient by fakeTracker() {
+            override suspend fun createComment(issueId: String, body: String) {
+                commentCount++
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+
+        val decision = orchestrator.onReviewStageComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(commentCount).isEqualTo(0)
+    }
+
+    @Test
     fun `returns RetryWithCoding when review fails and attempts remain`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         Files.createDirectories(workspaceDir.resolve("T-1"))

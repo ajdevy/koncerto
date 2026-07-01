@@ -138,13 +138,19 @@ class AutoReviewOrchestrator(
 
     suspend fun onReviewStageComplete(issue: Issue): ReviewDecision {
         val stage = reviewStage ?: return ReviewDecision.NoReview
+
+        val workspace = runCatching { workspaceManager.ensureWorkspace(issue.identifier) }.getOrNull()
+        backupReviewOutput(workspace)
+
+        if (workspace != null && isSubscriptionLimitError(workspace.path)) {
+            return handleSubscriptionLimit(issue, workspace)
+        }
+
         val maxAttempts = stage.maxReviewAttempts ?: 3
         val currentAttempt = (runtimeState.reviewAttempts[issue.id] ?: 0) + 1
         runtimeState.reviewAttempts[issue.id] = currentAttempt
         reviewSequence++
 
-        val workspace = runCatching { workspaceManager.ensureWorkspace(issue.identifier) }.getOrNull()
-        backupReviewOutput(workspace)
         val passed = workspace?.let { readReviewStatus(it.path) } ?: false
 
         return if (passed) {
@@ -500,6 +506,32 @@ class AutoReviewOrchestrator(
         } catch (e: Exception) {
             logger.warn("review_notification_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
         }
+    }
+
+    private fun isSubscriptionLimitError(workspacePath: Path): Boolean {
+        val outputFile = workspacePath.resolve(".review-output")
+        if (!Files.exists(outputFile)) return false
+        val content = runCatching { Files.readString(outputFile) }.getOrNull() ?: return false
+        return content.contains("monthly usage limit") ||
+            content.contains("rate limit") ||
+            content.contains("subscription limit")
+    }
+
+    private suspend fun handleSubscriptionLimit(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace): ReviewDecision {
+        val postedFile = workspace.path.resolve(".subscription-limit-posted")
+        if (!Files.exists(postedFile)) {
+            try {
+                linearClient.createComment(
+                    issue.id,
+                    "Claude subscription limit reached. The review will retry automatically once the limit resets. No action needed."
+                )
+                Files.writeString(postedFile, Instant.now().toString())
+            } catch (e: Exception) {
+                logger.warn("subscription_limit_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            }
+        }
+        traceReviewStep(workspace, issue, "review_subscription_limit", "retry", mapOf("posted" to Files.exists(postedFile).toString()))
+        return ReviewDecision.RetryWithCoding(null)
     }
 
     private suspend fun readReviewStatus(workspacePath: Path): Boolean {
