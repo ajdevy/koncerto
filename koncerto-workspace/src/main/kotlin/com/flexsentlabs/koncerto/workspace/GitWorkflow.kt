@@ -61,6 +61,7 @@ open class GitWorkflow(
 
     fun createBranch(workspacePath: Path, issueIdentifier: String) {
         if (!config.enabled) return
+        KoncertoArtifactIgnore.ensureGitignore(workspacePath)
         val isNewRepo = !isGitRepo(workspacePath)
         if (isNewRepo) {
             logger.info("git_init", mapOf("path" to workspacePath.toString()))
@@ -156,6 +157,8 @@ open class GitWorkflow(
         if (!isGitRepo(workspacePath)) return
         val branch = branchName(issueIdentifier)
         if (config.autoCommit) {
+            KoncertoArtifactIgnore.ensureGitignore(workspacePath)
+            KoncertoArtifactIgnore.untrackArtifacts(workspacePath, ::runGitSafe)
             val prefix = commitPrefix(labels)
             runGitSafe(workspacePath, "add", "-A")
             runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "$prefix: $issueIdentifier: $title")

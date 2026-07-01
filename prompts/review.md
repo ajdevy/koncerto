@@ -2,6 +2,8 @@ You are reviewing code for {{ issue.identifier }} — "{{ issue.title }}".
 
 Run `git diff HEAD~1 --stat` to see what files changed, then `git diff HEAD~1` to see the full diff. Review only the changed lines.
 
+**Ignore Koncerto pipeline artifacts in the diff** — if the only changes are `.koncerto/*.jsonl`, `.review-*`, or `.model-exhausted*`, that is not application work; mark ❌ FAIL and note that orchestration state was committed instead of feature code.
+
 ## Mandate
 
 Find issues in the code. Use **FAIL** only for genuine blockers that would cause data loss, crashes, security vulnerabilities, or incorrect behavior in production. Use **warnings** for code quality concerns, and **suggestions** for improvements.

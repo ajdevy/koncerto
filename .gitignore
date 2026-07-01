@@ -47,3 +47,8 @@ config/ngrok.yml
 
 # Cloudflare Wrangler local cache
 .wrangler/
+
+# Koncerto pipeline artifacts (local dev / e2e workspaces)
+.koncerto/
+.review-*
+.model-exhausted*
