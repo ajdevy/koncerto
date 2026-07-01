@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.assertThrows
 
 class DemoEventListenerTest {
 
@@ -112,6 +113,34 @@ class DemoEventListenerTest {
         )
         assert(result is DemoResult.Success<*>)
         assert((result as DemoResult.Success<*>).value == Unit)
+    }
+
+    @Test
+    fun `onReviewPassed throws when recording fails`() = runTest {
+        val failingService = DemoRecordingService(
+            config = DemoConfig(
+                enabled = true,
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = spyTaskRepo,
+            recorderFactory = RecorderFactory(emptyList()),
+            storage = FakeDemoStorage2(),
+            reporter = FakeDemoReporter2(),
+            reportGenerator = DemoReportGenerator(),
+            metrics = DemoMetricsRecorder(),
+            auditLogger = DemoAuditLogger("/tmp/koncerto-test-audit.log")
+        )
+        val failingListener = DemoEventListener(recordingService = failingService, enabled = true)
+
+        val error = assertThrows<IllegalStateException> {
+            kotlinx.coroutines.runBlocking {
+                failingListener.onReviewPassed("issue-5", "KONC-FAIL", "test")
+            }
+        }
+
+        assert(error.message?.isNotBlank() == true)
     }
 }
 

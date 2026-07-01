@@ -17,13 +17,14 @@ class PlaywrightRecorder : DemoRecorder {
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         testDependenciesAvailable?.let { return@withContext it }
         try {
-            val xvfb = ProcessBuilder("which", "Xvfb").start()
-            if (!(xvfb.waitFor(5, TimeUnit.SECONDS) && xvfb.exitValue() == 0)) return@withContext false
             val node = ProcessBuilder("which", "node").start()
             if (!(node.waitFor(5, TimeUnit.SECONDS) && node.exitValue() == 0)) return@withContext false
             val playwright = ProcessBuilder("node", "-e", "require('playwright')").start()
             if (!(playwright.waitFor(15, TimeUnit.SECONDS) && playwright.exitValue() == 0)) return@withContext false
             if (resolveChromiumExecutablePath().isNullOrBlank()) return@withContext false
+            if (useNativeVideoMode()) return@withContext true
+            val xvfb = ProcessBuilder("which", "Xvfb").start()
+            if (!(xvfb.waitFor(5, TimeUnit.SECONDS) && xvfb.exitValue() == 0)) return@withContext false
             val ffmpeg = ProcessBuilder("which", "ffmpeg").start()
             ffmpeg.waitFor(5, TimeUnit.SECONDS) && ffmpeg.exitValue() == 0
         } catch (_: Exception) {
@@ -60,7 +61,13 @@ class PlaywrightRecorder : DemoRecorder {
                     delete()
                     deleteOnExit()
                 }
-                shellScript.writeText(buildShellScript(config, outputFile.absolutePath, scenarioArg))
+                shellScript.writeText(
+                    if (useNativeVideoMode()) {
+                        buildNativeShellScript(config, outputFile.absolutePath, scenarioArg)
+                    } else {
+                        buildShellScript(config, outputFile.absolutePath, scenarioArg)
+                    }
+                )
                 shellScript.setExecutable(true)
                 shellScript.deleteOnExit()
 
@@ -74,6 +81,9 @@ class PlaywrightRecorder : DemoRecorder {
                 env["SCENARIO_PATH"] = scenarioArg
                 env["PW_SCRIPT_PATH"] = pwScript.absolutePath
                 env["PW_FFMPEG_STARTED_FILE"] = startedMarkerFile.absolutePath
+                env["PW_OUTPUT_PATH"] = outputFile.absolutePath
+                env["PW_MAX_DURATION_SECONDS"] = config.maxDurationSeconds.toString()
+                env["PW_USE_NATIVE_VIDEO"] = useNativeVideoMode().toString()
                 if (!chromiumPath.isNullOrBlank()) {
                     env["PW_CHROMIUM_PATH"] = chromiumPath
                 }
@@ -82,8 +92,38 @@ class PlaywrightRecorder : DemoRecorder {
                 val startupWaitSec = testStartupWaitSeconds ?: 90L
                 val captureWaitSec = testMaxWaitSeconds ?: (config.maxDurationSeconds + 120L)
                 if (!waitForFile(startedMarkerFile, startupWaitSec, process)) {
-                    process.destroyForcibly()
+                    val exitedEarly = !process.isAlive
+                    val earlyExitCode = if (exitedEarly) runCatching { process.exitValue() }.getOrNull() else null
+                    val earlyOutput = if (exitedEarly) {
+                        process.inputStream.bufferedReader().use { it.readText() }
+                    } else {
+                        process.destroyForcibly()
+                        ""
+                    }
                     runCleanup()
+                    if (exitedEarly && earlyExitCode == 2) {
+                        traceRecordingStep(traceDir, "recording_attempt", "content_validation_failed", mapOf(
+                            "target_url" to config.targetUrl,
+                            "scenario_path" to scenarioArg,
+                            "output_path" to outputFile.absolutePath,
+                            "output_excerpt" to earlyOutput.take(300)
+                        ))
+                        return@withContext DemoResult.Failure(
+                            DemoError.RecordingFailed(RuntimeException("Content validation failed: $earlyOutput"))
+                        )
+                    }
+                    if (exitedEarly && earlyExitCode != null) {
+                        traceRecordingStep(traceDir, "recording_attempt", "failed", mapOf(
+                            "target_url" to config.targetUrl,
+                            "scenario_path" to scenarioArg,
+                            "output_path" to outputFile.absolutePath,
+                            "exit_code" to earlyExitCode.toString(),
+                            "output_excerpt" to earlyOutput.take(300)
+                        ))
+                        return@withContext DemoResult.Failure(
+                            DemoError.RecordingFailed(RuntimeException("Recording exited with code $earlyExitCode: $earlyOutput"))
+                        )
+                    }
                     traceRecordingStep(traceDir, "recording_attempt", "startup_timeout", mapOf(
                         "target_url" to config.targetUrl,
                         "scenario_path" to scenarioArg,
@@ -243,6 +283,19 @@ ffmpeg -y -f x11grab -draw_mouse 0 -r ${config.frameRate} -s ${config.width}x${c
 exit ${'$'}?
 """
 
+    private fun buildNativeShellScript(config: RecordingConfig, outputPath: String, scenarioPath: String = ""): String = """#!/bin/bash
+set -e
+
+SCENARIO_ARGS=""
+if [ -n "${'$'}{SCENARIO_PATH}" ] && [ -f "${'$'}{SCENARIO_PATH}" ]; then
+  SCENARIO_ARGS="${'$'}{SCENARIO_PATH}"
+fi
+
+node "${'$'}{PW_SCRIPT_PATH}" "${'$'}{TARGET_URL}" "${'$'}{PW_FFMPEG_STARTED_FILE}" ${'$'}{SCENARIO_ARGS}
+
+test -s "${outputPath}"
+"""
+
     private fun runCleanup() {
         try {
             val rt = Runtime.getRuntime()
@@ -267,6 +320,8 @@ exit ${'$'}?
         val envOverride = System.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")?.trim()
         if (!envOverride.isNullOrBlank()) return envOverride
         val candidates = listOf(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
             "chromium-browser",
             "chromium",
             "/usr/bin/chromium-browser",
@@ -286,6 +341,13 @@ exit ${'$'}?
         return null
     }
 
+    private fun useNativeVideoMode(): Boolean {
+        testUseNativeVideoMode?.let { return it }
+        return currentOsName().contains("mac", ignoreCase = true)
+    }
+
+    private fun currentOsName(): String = System.getProperty("os.name").orEmpty()
+
     companion object {
         /** Test seam: when set, bypasses dependency probing in [isAvailable]. */
         @JvmStatic
@@ -303,6 +365,10 @@ exit ${'$'}?
         @JvmStatic
         var testStartupWaitSeconds: Long? = null
 
+        /** Test seam: forces native video mode selection. */
+        @JvmStatic
+        var testUseNativeVideoMode: Boolean? = null
+
         private val PLAYWRIGHT_SCRIPT = """#!/usr/bin/env node
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -311,6 +377,9 @@ const path = require('path');
 const url = process.argv[2];
 const readyFile = process.argv[3];
 const scenarioFile = process.argv[4];
+const outputPath = process.env.PW_OUTPUT_PATH;
+const useNativeVideo = process.env.PW_USE_NATIVE_VIDEO === 'true';
+const maxDurationSeconds = parseInt(process.env.PW_MAX_DURATION_SECONDS || '120', 10);
 
 if (!url || !readyFile) {
   console.error('Usage: pw-recorder.js <url> <ready-file> [scenario-file]');
@@ -319,6 +388,46 @@ if (!url || !readyFile) {
 
 async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+function failValidation(message) {
+  console.error('VALIDATION_ERROR: ' + message);
+  process.exit(2);
+}
+
+function extractBodyText(page) {
+  return page.evaluate(() => (document.body && document.body.innerText) ? document.body.innerText : '');
+}
+
+async function validatePageState(page, response, phase) {
+  const currentUrl = page.url() || '';
+  const title = (await page.title().catch(() => '')) || '';
+  const bodyText = ((await extractBodyText(page).catch(() => '')) || '').trim();
+  const combined = (title + '\n' + bodyText).toLowerCase();
+  const markers = [
+    "this site can't be reached",
+    "this site can’t be reached",
+    'err_',
+    'refused to connect',
+    'dns_probe_finished',
+    'server ip address could not be found',
+    '404 not found',
+    '500 internal server error',
+    '502 bad gateway',
+    '503 service unavailable',
+    '504 gateway timeout'
+  ];
+
+  if (!currentUrl || currentUrl.startsWith('chrome-error://')) {
+    failValidation(phase + ': browser reached error page at ' + currentUrl);
+  }
+  if (response && typeof response.status === 'function' && response.status() >= 400) {
+    failValidation(phase + ': unexpected HTTP status ' + response.status() + ' at ' + currentUrl);
+  }
+  const marker = markers.find(marker => combined.includes(marker));
+  if (marker) {
+    failValidation(phase + ': detected error marker "' + marker + '" at ' + currentUrl);
+  }
 }
 
 async function findElement(page, selector, timeout) {
@@ -423,9 +532,10 @@ async function executeScenarioStep(page, step) {
           const targetUrl = rawUrl.startsWith('http')
             ? rewriteLocalhostUrl(rawUrl, page.url())
             : new URL(rawUrl, page.url()).href;
-          await page.goto(targetUrl, { waitUntil: step.waitUntil || 'domcontentloaded', timeout });
+          const response = await page.goto(targetUrl, { waitUntil: step.waitUntil || 'domcontentloaded', timeout });
+          await validatePageState(page, response, 'scenario_navigate');
         } catch (e) {
-          console.error('  [warn] navigation failed: ' + e.message);
+          failValidation('scenario_navigate: ' + e.message);
         }
         break;
       }
@@ -553,20 +663,47 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
     ]
   });
 
-  const context = await browser.newContext({
+  const contextOptions = {
     viewport: { width: 1280, height: 720 },
     ignoreHTTPSErrors: true
-  });
+  };
+  if (useNativeVideo) {
+    if (!outputPath) {
+      throw new Error('PW_OUTPUT_PATH is required in native video mode');
+    }
+    contextOptions.recordVideo = {
+      dir: path.dirname(outputPath),
+      size: { width: 1280, height: 720 }
+    };
+  }
+
+  const context = await browser.newContext(contextOptions);
 
   const page = await context.newPage();
+  const requestFailures = [];
+  const pageErrors = [];
+  page.on('requestfailed', request => {
+    requestFailures.push((request.url() || '') + ' :: ' + request.failure().errorText);
+  });
+  page.on('pageerror', error => {
+    pageErrors.push(error.message || String(error));
+  });
 
+  let initialResponse = null;
   try {
-    await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
+    initialResponse = await page.goto(url, { waitUntil: 'networkidle', timeout: 15000 });
   } catch (e) {
-    console.error('Navigation warning: ' + e.message);
+    failValidation('initial_navigation: ' + e.message);
   }
 
   await page.waitForTimeout(1000);
+  await validatePageState(page, initialResponse, 'initial_navigation');
+  if (requestFailures.length > 0) {
+    failValidation('initial_navigation: request failures: ' + requestFailures.slice(0, 3).join(' | '));
+  }
+  if (pageErrors.length > 0) {
+    failValidation('initial_navigation: page errors: ' + pageErrors.slice(0, 3).join(' | '));
+  }
 
   fs.writeFileSync(readyFile, 'READY');
 
@@ -590,6 +727,27 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
     } catch (e) {
       console.error('[scenario] parse/execution error: ' + (e.message || 'unknown') + ' (file: ' + scenarioFile + ')');
     }
+    await validatePageState(page, null, 'post_scenario');
+    if (requestFailures.length > 0) {
+      failValidation('post_scenario: request failures: ' + requestFailures.slice(0, 3).join(' | '));
+    }
+    if (pageErrors.length > 0) {
+      failValidation('post_scenario: page errors: ' + pageErrors.slice(0, 3).join(' | '));
+    }
+  }
+
+  if (useNativeVideo) {
+    await sleep(Math.max(maxDurationSeconds, 1) * 1000);
+    const video = page.video();
+    await page.close();
+    await context.close();
+    if (!video) {
+      throw new Error('Playwright did not create a video artifact');
+    }
+    const recordedPath = await video.path();
+    fs.copyFileSync(recordedPath, outputPath);
+    await browser.close();
+    return;
   }
 
   await new Promise(() => {});

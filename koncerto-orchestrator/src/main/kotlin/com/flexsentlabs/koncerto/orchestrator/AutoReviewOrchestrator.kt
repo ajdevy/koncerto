@@ -77,15 +77,7 @@ class AutoReviewOrchestrator(
 
         // Backup the In Review stage's review output before auto-review overwrites it
         val workspace = runCatching { workspaceManager.ensureWorkspace(issue.identifier) }.getOrNull()
-        val detailedReviewPath = workspace?.path?.resolve(".review-output-detailed")
-        val reviewOutputPath = workspace?.path?.resolve(".review-output")
-        if (reviewOutputPath != null && Files.exists(reviewOutputPath) && detailedReviewPath != null) {
-            try {
-                Files.copy(reviewOutputPath, detailedReviewPath, StandardCopyOption.REPLACE_EXISTING)
-            } catch (e: Exception) {
-                logger.warn("review_backup_copy_failed", mapOf("error" to (e.message ?: "unknown")))
-            }
-        }
+        backupReviewOutput(workspace)
 
         traceReviewStep(workspace, issue, "review_pass", "start", mapOf(
             "attempt" to currentAttempt.toString(),
@@ -111,96 +103,55 @@ class AutoReviewOrchestrator(
             logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
             traceReviewStep(workspace, issue, "review_pass", "passed", mapOf("attempt" to currentAttempt.toString()))
             runtimeState.reviewAttempts.remove(issue.id)
-
-            val scenarioPath = runCatching {
-                demoScenarioGenerator?.generate(issue, workspace)
-            }.onFailure { e ->
-                logger.warn("demo_scenario_generator_failed", mapOf(
+            executePostReviewPipeline(issue, workspace, stage, currentAttempt)
+        } else if (currentAttempt < maxAttempts) {
+            logger.info(
+                "review_failed_reroute", mapOf(
                     "issue_id" to issue.id,
-                    "error" to (e.message ?: "unknown")
-                ))
-                traceReviewStep(workspace, issue, "demo_scenario", "failed", mapOf(
-                    "error" to (e.message ?: "unknown")
-                ))
-            }.getOrNull()
-            if (scenarioPath != null) {
-                traceReviewStep(workspace, issue, "demo_scenario", "saved", mapOf("path" to scenarioPath))
-            } else {
-                traceReviewStep(workspace, issue, "demo_scenario", "skipped")
-            }
-
-            val deployResult = runCatching {
-                deployTargetProject(issue, workspace)
-            }.onFailure { e ->
-                logger.warn("deploy_target_project_unhandled_error", mapOf(
-                    "issue_id" to issue.id,
-                    "error" to (e.message ?: "unknown")
-                ))
-                traceReviewStep(workspace, issue, "deploy_target_project", "failed", mapOf(
-                    "error" to (e.message ?: "unknown")
-                ))
-            }.getOrNull()
-            val deployUrl = deployResult?.url
-            if (deployResult != null) {
-                traceReviewStep(workspace, issue, "deploy_target_project", if (deployResult.success) "ok" else "failed", mapOf(
-                    "url" to (deployUrl ?: ""),
-                    "error" to (deployResult.error ?: "")
-                ))
-            }
-
-            val demoUrl = runCatching {
-                onReviewPassed?.invoke(issue, deployUrl)
-            }.onFailure { e ->
-                logger.warn("demo_recording_callback_failed", mapOf(
-                    "issue_id" to issue.id,
-                    "error" to (e.message ?: "unknown")
-                ))
-                traceReviewStep(workspace, issue, "demo_recording", "failed", mapOf(
-                    "error" to (e.message ?: "unknown")
-                ))
-            }.getOrNull()
-            if (demoUrl != null) {
-                traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
-            } else {
-                traceReviewStep(workspace, issue, "demo_recording", "skipped")
-            }
-
-            runCatching {
-                postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
-            }.onFailure { e ->
-                logger.warn("review_comment_pipeline_failed", mapOf(
-                    "issue_id" to issue.id,
-                    "error" to (e.message ?: "unknown")
-                ))
-                traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
-                    "error" to (e.message ?: "unknown")
-                ))
-            }
-            traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf(
-                "demo_url" to (demoUrl ?: "")
-            ))
-
-            if (deployResult != null) {
-                runCatching {
-                    cleanupDemoDeploy(issue, workspace, deployResult)
-                }.onFailure { e ->
-                    logger.warn("demo_cleanup_failed", mapOf(
-                        "issue_id" to issue.id,
-                        "error" to (e.message ?: "unknown")
-                    ))
-                    traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
-                        "error" to (e.message ?: "unknown")
-                    ))
-                }
-                traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
-            }
+                    "attempt" to currentAttempt.toString(),
+                    "max_attempts" to maxAttempts.toString()
+                )
+            )
             workspace?.let { cleanupReviewFiles(it.path) }
-            traceReviewStep(workspace, issue, "review_pass", "complete", mapOf(
+            traceReviewStep(workspace, issue, "review_pass", "retry", mapOf(
                 "attempt" to currentAttempt.toString(),
-                "demo_url" to (demoUrl ?: ""),
-                "deploy_url" to (deployUrl ?: "")
+                "max_attempts" to maxAttempts.toString()
             ))
-            ReviewDecision.Pass(stage.onCompleteState)
+            ReviewDecision.RetryWithCoding(stage.onFailureState)
+        } else {
+            logger.warn(
+                "review_max_attempts_exhausted", mapOf(
+                    "issue_id" to issue.id,
+                    "max_attempts" to maxAttempts.toString()
+                )
+            )
+            runtimeState.reviewAttempts.remove(issue.id)
+            handleReviewExhaustion(issue, currentAttempt)
+            workspace?.let { cleanupReviewFiles(it.path) }
+            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "max_attempts" to maxAttempts.toString()
+            ))
+            ReviewDecision.Blocked
+        }
+    }
+
+    suspend fun onReviewStageComplete(issue: Issue): ReviewDecision {
+        val stage = reviewStage ?: return ReviewDecision.NoReview
+        val maxAttempts = stage.maxReviewAttempts ?: 3
+        val currentAttempt = (runtimeState.reviewAttempts[issue.id] ?: 0) + 1
+        runtimeState.reviewAttempts[issue.id] = currentAttempt
+        reviewSequence++
+
+        val workspace = runCatching { workspaceManager.ensureWorkspace(issue.identifier) }.getOrNull()
+        backupReviewOutput(workspace)
+        val passed = workspace?.let { readReviewStatus(it.path) } ?: false
+
+        return if (passed) {
+            logger.info("review_passed", mapOf("issue_id" to issue.id, "attempt" to currentAttempt.toString()))
+            traceReviewStep(workspace, issue, "review_pass", "passed", mapOf("attempt" to currentAttempt.toString()))
+            runtimeState.reviewAttempts.remove(issue.id)
+            executePostReviewPipeline(issue, workspace, stage, currentAttempt)
         } else if (currentAttempt < maxAttempts) {
             logger.info(
                 "review_failed_reroute", mapOf(
@@ -248,6 +199,174 @@ class AutoReviewOrchestrator(
         }
     }
 
+    private fun backupReviewOutput(workspace: com.flexsentlabs.koncerto.workspace.Workspace?) {
+        val detailedReviewPath = workspace?.path?.resolve(".review-output-detailed")
+        val reviewOutputPath = workspace?.path?.resolve(".review-output")
+        if (reviewOutputPath != null && Files.exists(reviewOutputPath) && detailedReviewPath != null) {
+            try {
+                Files.copy(reviewOutputPath, detailedReviewPath, StandardCopyOption.REPLACE_EXISTING)
+            } catch (e: Exception) {
+                logger.warn("review_backup_copy_failed", mapOf("error" to (e.message ?: "unknown")))
+            }
+        }
+    }
+
+    private suspend fun executePostReviewPipeline(
+        issue: Issue,
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        stage: StageAgentConfig,
+        currentAttempt: Int
+    ): ReviewDecision {
+        val scenarioPath = runCatching {
+            workspace?.let { demoScenarioGenerator?.generate(issue, it) }
+        }.onFailure { e ->
+            logger.warn("demo_scenario_generator_failed", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            traceReviewStep(workspace, issue, "demo_scenario", "failed", mapOf(
+                "error" to (e.message ?: "unknown")
+            ))
+        }.getOrNull()
+        if (scenarioPath != null) {
+            traceReviewStep(workspace, issue, "demo_scenario", "saved", mapOf("path" to scenarioPath))
+        } else {
+            traceReviewStep(workspace, issue, "demo_scenario", "skipped")
+        }
+
+        val deployResult = runCatching {
+            deployTargetProject(issue, workspace)
+        }.onFailure { e ->
+            logger.warn("deploy_target_project_unhandled_error", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            traceReviewStep(workspace, issue, "deploy_target_project", "failed", mapOf(
+                "error" to (e.message ?: "unknown")
+            ))
+        }.getOrNull()
+        val deployUrl = deployResult?.url
+        if (deployResult != null) {
+            traceReviewStep(workspace, issue, "deploy_target_project", if (deployResult.success) "ok" else "failed", mapOf(
+                "url" to (deployUrl ?: ""),
+                "error" to (deployResult.error ?: "")
+            ))
+        }
+
+        var demoRecordingError: String? = null
+        val demoUrl = runCatching {
+            onReviewPassed?.invoke(issue, deployUrl)
+        }.onFailure { e ->
+            demoRecordingError = e.message ?: "unknown"
+            logger.warn("demo_recording_callback_failed", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            traceReviewStep(workspace, issue, "demo_recording", "failed", mapOf(
+                "error" to (e.message ?: "unknown")
+            ))
+        }.getOrNull()
+        if (demoUrl != null) {
+            traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
+        } else if (demoRecordingError != null) {
+            if (deployResult != null) {
+                runCatching {
+                    cleanupDemoDeploy(issue, workspace, deployResult)
+                }.onFailure { e ->
+                    logger.warn("demo_cleanup_failed", mapOf(
+                        "issue_id" to issue.id,
+                        "error" to (e.message ?: "unknown")
+                    ))
+                    traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
+                        "error" to (e.message ?: "unknown")
+                    ))
+                }
+                traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
+            }
+            workspace?.let { cleanupReviewFiles(it.path) }
+            handleDemoRecordingFailure(issue, demoRecordingError!!)
+            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "demo_error" to demoRecordingError!!
+            ))
+            return ReviewDecision.Blocked
+        } else {
+            traceReviewStep(workspace, issue, "demo_recording", "skipped")
+        }
+
+        runCatching {
+            postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
+        }.onFailure { e ->
+            logger.warn("review_comment_pipeline_failed", mapOf(
+                "issue_id" to issue.id,
+                "error" to (e.message ?: "unknown")
+            ))
+            traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
+                "error" to (e.message ?: "unknown")
+            ))
+        }
+        traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf(
+            "demo_url" to (demoUrl ?: "")
+        ))
+
+        if (deployResult != null) {
+            runCatching {
+                cleanupDemoDeploy(issue, workspace, deployResult)
+            }.onFailure { e ->
+                logger.warn("demo_cleanup_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (e.message ?: "unknown")
+                ))
+                traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")
+                ))
+            }
+            traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
+        }
+
+        workspace?.let { cleanupReviewFiles(it.path) }
+        traceReviewStep(workspace, issue, "review_pass", "complete", mapOf(
+            "attempt" to currentAttempt.toString(),
+            "demo_url" to (demoUrl ?: ""),
+            "deploy_url" to (deployUrl ?: "")
+        ))
+        return ReviewDecision.Pass(stage.onCompleteState)
+    }
+
+    private suspend fun handleDemoRecordingFailure(issue: Issue, errorMessage: String) {
+        try {
+            linearClient.createComment(issue.id, "Blocked: demo recording failed after review passed: $errorMessage")
+        } catch (e: Exception) {
+            logger.warn("demo_blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+
+        try {
+            val blockedStateId = linearClient.resolveStateId(projectSlug, projectConfig.tracker.blockedState)
+            if (blockedStateId != null) {
+                linearClient.updateIssueState(issue.id, blockedStateId)
+                logger.info("demo_recording_ticket_blocked", mapOf("issue_id" to issue.id))
+            } else {
+                logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+            }
+        } catch (e: Exception) {
+            logger.warn("demo_recording_block_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+
+        try {
+            notifier?.send(
+                NotificationEvent.AgentFailed(
+                    projectSlug = projectSlug,
+                    issueId = issue.id,
+                    issueIdentifier = issue.identifier,
+                    title = issue.title,
+                    error = "Demo recording failed after review passed: $errorMessage"
+                )
+            )
+        } catch (e: Exception) {
+            logger.warn("demo_recording_notification_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+    }
+
     private fun postDetailedReviewAsPrComment(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?, sequence: Int, demoUrl: String? = null) {
         val ws = workspace ?: return
 
@@ -290,17 +409,18 @@ class AutoReviewOrchestrator(
             traceReviewStep(workspace, issue, "pr_comment", "no_repo")
             return
         }
-        val prNumber = resolvePrNumber(ws.path) ?: run {
-            logger.warn("pr_comment_no_pr", mapOf("issue_id" to issue.id))
-            traceReviewStep(workspace, issue, "pr_comment", "no_pr", mapOf("repo" to repo))
+        val branch = resolveCurrentBranch(ws.path) ?: run {
+            logger.warn("pr_comment_no_branch", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "pr_comment", "no_branch", mapOf("repo" to repo))
             return
         }
+        val prNumber = resolvePrNumber(ws.path)
         try {
             val bodyFile = ws.path.resolve(".review-body.txt")
             bodyFile.toFile().writeText(body)
             try {
                 val result = ghProcessRunner(
-                    listOf("gh", "pr", "comment", prNumber.toString(), "--repo", repo, "--body-file", bodyFile.toString()),
+                    listOf("gh", "pr", "comment", branch, "--repo", repo, "--body-file", bodyFile.toString()),
                     ws.path
                 )
                 if (result.exitCode == 0) {
@@ -312,7 +432,8 @@ class AutoReviewOrchestrator(
                     ))
                     traceReviewStep(workspace, issue, "pr_comment", "posted", mapOf(
                         "repo" to repo,
-                        "pr_number" to prNumber.toString(),
+                        "pr_number" to (prNumber?.toString() ?: ""),
+                        "branch" to branch,
                         "comment_url" to commentUrl
                     ))
                 } else {
@@ -323,7 +444,8 @@ class AutoReviewOrchestrator(
                     ))
                     traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
                         "repo" to repo,
-                        "pr_number" to prNumber.toString(),
+                        "pr_number" to (prNumber?.toString() ?: ""),
+                        "branch" to branch,
                         "error" to err
                     ))
                 }
@@ -337,7 +459,8 @@ class AutoReviewOrchestrator(
             ))
             traceReviewStep(workspace, issue, "pr_comment", "error", mapOf(
                 "repo" to repo,
-                "pr_number" to prNumber.toString(),
+                "pr_number" to (prNumber?.toString() ?: ""),
+                "branch" to branch,
                 "error" to (e.message ?: "unknown")
             ))
         }
@@ -465,15 +588,26 @@ class AutoReviewOrchestrator(
         val repo = resolveRepoFullName(workspacePath) ?: return null
         val branch = resolveCurrentBranch(workspacePath) ?: return null
         return try {
-            val result = ghProcessRunner(
+            val viewResult = ghProcessRunner(
                 listOf("gh", "pr", "view", branch, "--repo", repo, "--json", "number"),
                 workspacePath
             )
-            if (result.exitCode == 0) {
-                val match = Regex(""""number":(\d+)""").find(result.output)
-                match?.groupValues?.get(1)?.toIntOrNull()
-            } else null
+            parsePrNumber(viewResult.output).takeIf { viewResult.exitCode == 0 }
+                ?: run {
+                    val listResult = ghProcessRunner(
+                        listOf("gh", "pr", "list", "--repo", repo, "--head", branch, "--json", "number"),
+                        workspacePath
+                    )
+                    parsePrNumber(listResult.output).takeIf { listResult.exitCode == 0 }
+                }
         } catch (_: Exception) { null }
+    }
+
+    private fun parsePrNumber(output: String): Int? {
+        val objectMatch = Regex(""""number":\s*(\d+)""").find(output)
+        if (objectMatch != null) return objectMatch.groupValues[1].toIntOrNull()
+        val listMatch = Regex("""\[\s*\{\s*"number":\s*(\d+)""").find(output)
+        return listMatch?.groupValues?.get(1)?.toIntOrNull()
     }
 
     private fun resolveCurrentBranch(workspacePath: Path): String? {

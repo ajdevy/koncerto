@@ -510,6 +510,61 @@ class GitWorkflowTest {
     }
 
     @Test
+    fun `createBranch removes stale untracked artifacts before checkout`() {
+        repoDir.resolve(".koncerto").toFile().mkdirs()
+        repoDir.resolve(".koncerto/dispatch-trace-2026-06-30.jsonl").writeText("stale")
+
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(repoDir, "CLEAN-1")
+
+        val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/CLEAN-1")
+        assertThat(repoDir.resolve(".koncerto/dispatch-trace-2026-06-30.jsonl").toFile().exists()).isFalse()
+    }
+
+    @Test
+    fun `createBranch resets existing local branch to matching remote branch`() {
+        val bareDir = createBareRemoteWithMain()
+        val seedDir = Files.createTempDirectory("seed-feature-")
+        ProcessBuilder("git", "init", "--initial-branch=main")
+            .directory(seedDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGitIn(seedDir, "config", "user.email", "test@test.com")
+        runGitIn(seedDir, "config", "user.name", "Test")
+        seedDir.resolve("README.md").writeText("# seed")
+        runGitIn(seedDir, "add", "-A")
+        runGitIn(seedDir, "commit", "-m", "initial")
+        runGitIn(seedDir, "remote", "add", "origin", bareDir.toString())
+        runGitIn(seedDir, "push", "-u", "origin", "main")
+        runGitIn(seedDir, "checkout", "-b", "feature/EXISTING-REMOTE")
+        seedDir.resolve("remote.txt").writeText("remote")
+        runGitIn(seedDir, "add", "-A")
+        runGitIn(seedDir, "commit", "-m", "remote branch")
+        val remoteHead = runGitIn(seedDir, "rev-parse", "HEAD")
+        runGitIn(seedDir, "push", "-u", "origin", "feature/EXISTING-REMOTE")
+
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("fetch", "origin", "main", "feature/EXISTING-REMOTE")
+        runGit("checkout", "-b", "feature/EXISTING-REMOTE")
+        repoDir.resolve("local.txt").writeText("local-only")
+        runGit("add", "-A")
+        runGit("commit", "-m", "local branch")
+        runGit("checkout", "main")
+
+        val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(repoDir, "EXISTING-REMOTE")
+
+        val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
+        val head = runGit("rev-parse", "HEAD")
+        assertThat(branch).isEqualTo("feature/EXISTING-REMOTE")
+        assertThat(head).isEqualTo(remoteHead)
+    }
+
+    @Test
     fun `createBranch skips adding origin when remote already exists`() {
         val bareDir = createBareRemoteWithMain()
         runGit("remote", "add", "origin", bareDir.toString())
