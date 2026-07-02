@@ -45,9 +45,10 @@ projects:
         Todo:
           prompt: prompts/implement.md
           agent_kind: codex
-          command: codex exec --json --skip-git-repo-check -s danger-full-access
+          command: codex exec --json --skip-git-repo-check -s danger-full-access -c mcp_servers.miro.enabled=false -c mcp_servers.google-drive.enabled=false -c mcp_servers.figma.enabled=false -c mcp_servers.telegram.enabled=false -c mcp_servers.node_repl.enabled=false
           effort: medium
           on_complete_state: "In Review"
+          on_failure_state: "Failed"
         "In Progress":
           prompt: Agent is working on this issue. Check the workspace for progress and write PASS if work is actively progressing.
           agent_kind: claude
