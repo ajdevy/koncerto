@@ -1270,7 +1270,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `resolveStageOverride dispatches todo issue to in review when remote branch exists`(@TempDir root: Path) {
+    fun `resolveStageOverride dispatches todo issue to in review when remote branch has commits`(@TempDir root: Path) {
         val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
         workspaces.ensureWorkspace("A-1")
         val stages = mapOf(
@@ -3008,6 +3008,7 @@ private class FakeGitWorkflowForDispatch(
     private val remoteExists: Boolean
 ) : GitWorkflow(GitConfig(enabled = true), StructuredLogger(emptyList())) {
     override fun remoteBranchExists(branchName: String, workspacePath: Path): Boolean = remoteExists
+    override fun remoteBranchHasCommits(branchName: String, workspacePath: Path): Boolean = remoteExists
 }
 
 private class FakeSubtaskRunnerForDispatch(

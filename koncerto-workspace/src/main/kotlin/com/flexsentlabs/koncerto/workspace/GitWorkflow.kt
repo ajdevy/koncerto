@@ -28,6 +28,26 @@ open class GitWorkflow(
         return !ref.isNullOrBlank()
     }
 
+    /**
+     * True only if the remote branch has commits beyond [GitConfig.prBase] — a branch that was
+     * pushed but never advanced (e.g. an aborted run) has the same tip SHA as base and should not
+     * be mistaken for work in progress.
+     */
+    open fun remoteBranchHasCommits(branchName: String, workspacePath: Path): Boolean {
+        if (!config.enabled) return false
+        val output = runCmdSafe("git", workspacePath, "ls-remote", "--heads", "origin", branchName, config.prBase)
+            ?: return false
+        val shaByRef = output.lineSequence()
+            .mapNotNull { line ->
+                val parts = line.trim().split(Regex("\\s+"), limit = 2)
+                if (parts.size == 2) parts[1].removePrefix("refs/heads/") to parts[0] else null
+            }
+            .toMap()
+        val branchSha = shaByRef[branchName] ?: return false
+        val baseSha = shaByRef[config.prBase] ?: return true
+        return branchSha != baseSha
+    }
+
     open fun subtaskBranchName(issueIdentifier: String, subtaskId: String): String =
         "subtask/$issueIdentifier/$subtaskId"
 
