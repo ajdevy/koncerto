@@ -80,6 +80,7 @@ import com.flexsentlabs.koncerto.deploy.DockerConfigDetector
 import com.flexsentlabs.koncerto.deploy.DockerfileGenerator
 import com.flexsentlabs.koncerto.deploy.FrameworkDetector
 import com.flexsentlabs.koncerto.deploy.GitHubPRQueryImpl
+import com.flexsentlabs.koncerto.deploy.DockerLaunchCleaner
 import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.orchestrator.DemoScenarioGenerator
@@ -620,6 +621,10 @@ class Beans {
     }
 
     @Bean
+    fun dockerLaunchCleaner(logger: StructuredLogger): DockerLaunchCleaner =
+        DockerLaunchCleaner(logger)
+
+    @Bean
     fun orphanedContainerCleanupScheduler(
         targetProjectDeployer: TargetProjectDeployer,
         scope: CoroutineScope,
@@ -634,4 +639,17 @@ class Beans {
         scheduler.start()
         return scheduler
     }
+
+    @Bean
+    fun koncertoDockerLifecycle(
+        dockerLaunchCleaner: DockerLaunchCleaner,
+        targetProjectDeployer: TargetProjectDeployer,
+        orphanedContainerCleanupScheduler: OrphanedContainerCleanupScheduler,
+        logger: StructuredLogger
+    ): KoncertoDockerLifecycle = KoncertoDockerLifecycle(
+        launchCleaner = dockerLaunchCleaner,
+        deployer = targetProjectDeployer,
+        orphanScheduler = orphanedContainerCleanupScheduler,
+        logger = logger
+    )
 }

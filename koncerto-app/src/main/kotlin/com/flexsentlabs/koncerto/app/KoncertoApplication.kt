@@ -1,6 +1,5 @@
 package com.flexsentlabs.koncerto.app
 
-import com.flexsentlabs.koncerto.agent.DockerContainerManager
 import com.flexsentlabs.koncerto.core.config.ServiceConfig
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
@@ -23,22 +22,39 @@ class KoncertoApplication
 
 fun main(args: Array<String>) {
     val localProps = Paths.get("local.properties")
+    val dotEnv = Paths.get(".env")
+    val allProps = Properties()
     if (Files.exists(localProps)) {
-        val props = Properties()
-        FileInputStream(localProps.toFile()).use { props.load(it) }
-        for ((key, value) in props) {
-            val k = key.toString()
-            if (System.getProperty(k) == null && !k.startsWith("kotlin.") && !k.startsWith("sdk.") && !k.startsWith("org.gradle.")) {
-                System.setProperty(k, value.toString())
+        FileInputStream(localProps.toFile()).use { allProps.load(it) }
+        println("[koncerto] Loaded ${allProps.size} properties from local.properties")
+    }
+    if (Files.exists(dotEnv)) {
+        val envLines = Files.readAllLines(dotEnv)
+        var envCount = 0
+        for (line in envLines) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("export ") && trimmed.contains("=")) {
+                val eq = trimmed.indexOf("=")
+                val key = trimmed.substring(7, eq).trim()
+                val value = trimmed.substring(eq + 1).trim().trim('"').trim('\'')
+                allProps.setProperty(key, value)
+                envCount++
             }
         }
-        println("[koncerto] Loaded ${props.size} properties from local.properties")
+        println("[koncerto] Loaded $envCount environment variables from .env")
+    }
+    for ((key, value) in allProps) {
+        val k = key.toString()
+        if (System.getProperty(k) == null && !k.startsWith("kotlin.") && !k.startsWith("sdk.") && !k.startsWith("org.gradle.")) {
+            System.setProperty(k, value.toString())
+        }
     }
     val ctx = runApplication<KoncertoApplication>(*args)
     val config = ctx.getBean(ServiceConfig::class.java)
     val logger = ctx.getBean(StructuredLogger::class.java)
+    val dockerLifecycle = ctx.getBean(KoncertoDockerLifecycle::class.java)
     buildDockerAgentImage(config, logger, ctx)
-    DockerContainerManager.pruneOldContainers(logger)
+    runBlocking { dockerLifecycle.cleanOnLaunch() }
     val orchestrator = ctx.getBean(Orchestrator::class.java)
     orchestrator.start()
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -59,6 +75,7 @@ fun main(args: Array<String>) {
                 }
             }
         }
+        dockerLifecycle.cleanOnShutdown()
     })
 }
 
