@@ -29,7 +29,6 @@ import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.notifications.CompositeNotifier
 import com.flexsentlabs.koncerto.notifications.Notifier
 import com.flexsentlabs.koncerto.notifications.NotificationEvent
-import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
@@ -124,8 +123,7 @@ class AutoReviewOrchestratorTest {
             issue: Issue, attempt: Int?, prompt: String,
             agentKindOverride: String?, commandOverride: String?,
             modelOverride: String?, effortOverride: String?,
-            turnTimeoutMs: Long?, stallTimeoutMs: Long?,
-        gitWorkflowOverride: GitWorkflow?
+            turnTimeoutMs: Long?, stallTimeoutMs: Long?
         ): EmptyResult<IllegalStateException> =
             if (succeed) Result.Success(Unit)
             else Result.Failure(IllegalStateException("runner failed"))
@@ -138,8 +136,7 @@ class AutoReviewOrchestratorTest {
             issue: Issue, attempt: Int?, prompt: String,
             agentKindOverride: String?, commandOverride: String?,
             modelOverride: String?, effortOverride: String?,
-            turnTimeoutMs: Long?, stallTimeoutMs: Long?,
-        gitWorkflowOverride: GitWorkflow?
+            turnTimeoutMs: Long?, stallTimeoutMs: Long?
         ): EmptyResult<IllegalStateException> = Result.Failure(IllegalStateException("should not run"))
     }
 
