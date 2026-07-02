@@ -52,6 +52,7 @@ EXCLUDED_CLASS_PATTERNS = (
     "RecorderFactory",
     "DemoCleanupScheduler",
     "OrphanedContainerCleanupScheduler",
+    "KoncertoDockerLifecycle",
     "WorkflowLoader",
     "TunnelController",
     "DemoController",
