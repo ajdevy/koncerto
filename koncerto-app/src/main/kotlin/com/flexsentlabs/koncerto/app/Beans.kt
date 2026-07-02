@@ -571,9 +571,10 @@ class Beans {
         DemoFailureReporter(logger)
 
     private fun parseRepoFullName(config: ServiceConfig): String? {
-        val remoteUrl = config.gitConfig.remoteUrl
+        val firstProject = config.projects.values.firstOrNull()
+        val remoteUrl = firstProject?.gitRemoteUrl?.takeIf { it.isNotBlank() }
+            ?: config.gitConfig.remoteUrl
         if (remoteUrl.isBlank()) {
-            val firstProject = config.projects.values.firstOrNull()
             return firstProject?.let { parseRemoteFromWorkspace(it.workspace.root) }
         }
         val match = Regex("""github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$""").find(remoteUrl)

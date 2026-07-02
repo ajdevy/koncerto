@@ -1969,7 +1969,8 @@ class DispatchServiceTest {
                 issue: Issue, attempt: Int?, prompt: String,
                 agentKindOverride: String?, commandOverride: String?,
                 modelOverride: String?, effortOverride: String?,
-                turnTimeoutMs: Long?, stallTimeoutMs: Long?
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+            gitWorkflowOverride: GitWorkflow?
             ): EmptyResult<IllegalStateException> {
                 capturedTier = state.running[issue.id]?.tenantContext?.tier
                 return Result.Success(Unit)
@@ -2228,7 +2229,8 @@ class DispatchServiceTest {
                 issue: Issue, attempt: Int?, prompt: String,
                 agentKindOverride: String?, commandOverride: String?,
                 modelOverride: String?, effortOverride: String?,
-                turnTimeoutMs: Long?, stallTimeoutMs: Long?
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+            gitWorkflowOverride: GitWorkflow?
             ): com.flexsentlabs.koncerto.core.result.EmptyResult<IllegalStateException> {
                 runCount++
                 return Result.Success(Unit)
@@ -2798,7 +2800,8 @@ private class ReviewWritingAgentRunner(
         issue: Issue, attempt: Int?, prompt: String,
         agentKindOverride: String?, commandOverride: String?,
         modelOverride: String?, effortOverride: String?,
-        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         invocations++
         if (invocations > 1 && reviewStatus != null) {
@@ -2817,7 +2820,8 @@ private class TokenEventRunner : AgentRunner {
         issue: Issue, attempt: Int?, prompt: String,
         agentKindOverride: String?, commandOverride: String?,
         modelOverride: String?, effortOverride: String?,
-        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         flow.emit(AgentEvent.TurnCompleted(threadId = "t", turnId = "u", usage = TokenUsage(10, 20, 30), pid = null))
         return Result.Success(Unit)
@@ -2831,7 +2835,8 @@ private class LimitFailureRunner(private val error: Throwable) : AgentRunner {
         issue: Issue, attempt: Int?, prompt: String,
         agentKindOverride: String?, commandOverride: String?,
         modelOverride: String?, effortOverride: String?,
-        turnTimeoutMs: Long?, stallTimeoutMs: Long?
+        turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         @Suppress("UNCHECKED_CAST")
         return Result.Failure(error) as Result.Failure<IllegalStateException>
@@ -2962,7 +2967,8 @@ private class CollectingAgentRunner : AgentRunner {
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         runArgs += RunArgs(issue, prompt, agentKindOverride, commandOverride, modelOverride, effortOverride)
@@ -2991,7 +2997,8 @@ private class FailingRunner(private val errorMsg: String) : AgentRunner {
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         return Result.Failure(IllegalStateException(errorMsg))
     }

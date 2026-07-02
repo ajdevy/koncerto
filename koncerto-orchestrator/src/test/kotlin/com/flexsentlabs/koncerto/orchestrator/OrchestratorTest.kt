@@ -30,6 +30,7 @@ import com.flexsentlabs.koncerto.core.result.EmptyResult
 import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
@@ -1550,7 +1551,8 @@ class FakeAgentRunner : AgentRunner {
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Success(Unit)
@@ -1570,7 +1572,8 @@ class FailingAgentRunner(private val errorMsg: String) : AgentRunner {
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<IllegalStateException> {
         dispatched += issue
         return Result.Failure(IllegalStateException(errorMsg))

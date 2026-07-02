@@ -142,7 +142,15 @@ open class GitWorkflow(
         }
         val existing = runGitSafe(workspacePath, "remote", "get-url", "origin")
         if (existing != null) {
-            logger.info("origin_remote_exists", mapOf("url" to existing))
+            if (GitRemoteResolver.sanitizeRemoteUrl(existing) == GitRemoteResolver.sanitizeRemoteUrl(authUrl)) {
+                logger.info("origin_remote_exists", mapOf("url" to GitRemoteResolver.sanitizeRemoteUrl(existing)))
+                return
+            }
+            runGitSafe(workspacePath, "remote", "set-url", "origin", authUrl)
+            logger.info("origin_remote_updated", mapOf(
+                "url" to remoteUrl,
+                "auth" to (!token.isNullOrBlank()).toString()
+            ))
             return
         }
         runGitSafe(workspacePath, "remote", "add", "origin", authUrl)
@@ -173,25 +181,22 @@ open class GitWorkflow(
         if (!config.enabled || !config.createPr) return null
         val branch = branchName(issueIdentifier)
         val body = description?.take(5000) ?: ""
-        return runGhSafe(workspacePath, "pr", "create",
+        val repo = GitRemoteResolver.repoFullName(workspacePath)
+            ?: GitRemoteResolver.repoFullNameFromRemoteUrl(config.remoteUrl)
+        val args = mutableListOf(
+            "pr", "create",
             "--base", config.prBase,
             "--head", branch,
             "--title", "$issueIdentifier: $title",
             "--body", body
         )
+        if (repo != null) {
+            args += listOf("--repo", repo)
+        }
+        return runGhSafe(workspacePath, *args.toTypedArray())
     }
 
-    private fun isGitRepo(path: Path): Boolean {
-        return try {
-            val proc = ProcessBuilder("git", "rev-parse", "--git-dir")
-                .directory(path.toFile())
-                .redirectErrorStream(true)
-                .start()
-            proc.waitFor() == 0
-        } catch (_: Exception) {
-            false
-        }
-    }
+    private fun isGitRepo(path: Path): Boolean = Files.exists(path.resolve(".git"))
 
     private fun runGitSafe(workspacePath: Path, vararg args: String): String? =
         runCmdSafe("git", workspacePath, *args)

@@ -10,6 +10,7 @@ git:
   auto_push: true
   create_pr: true
   pr_base: main
+  remote_url: $GIT_REMOTE_URL
 projects:
   promomesh:
     tracker:

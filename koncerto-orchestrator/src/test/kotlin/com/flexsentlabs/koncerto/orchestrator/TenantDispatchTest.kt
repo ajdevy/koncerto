@@ -19,6 +19,7 @@ import com.flexsentlabs.koncerto.core.tenant.TenantResolver
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.coroutines.CompletableDeferred
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
@@ -168,7 +169,8 @@ private class TenantTestAgentRunner : AgentRunner {
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+    gitWorkflowOverride: GitWorkflow?
     ): com.flexsentlabs.koncerto.core.result.EmptyResult<IllegalStateException> {
         dispatched += issue
         started.complete(Unit)
