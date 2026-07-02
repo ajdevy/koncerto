@@ -9,6 +9,42 @@ import org.junit.jupiter.api.Test
 class ProjectConfigTest {
 
     @Test
+    fun `GitConfig forProject uses project git remote when configured`() {
+        val tracker = TrackerConfig(
+            kind = "linear",
+            endpoint = "https://api.linear.app",
+            apiKey = "key",
+            projectSlug = "proj"
+        )
+        val project = ProjectConfig(
+            tracker = tracker,
+            workspace = WorkspaceConfig(root = "/tmp/ws"),
+            agent = AgentProjectConfig(),
+            gitRemoteUrl = "https://github.com/acme/promomesh.git"
+        )
+        val global = GitConfig(remoteUrl = "https://github.com/ajdevy/koncerto.git")
+        assertThat(global.forProject(project).remoteUrl).isEqualTo("https://github.com/acme/promomesh.git")
+    }
+
+    @Test
+    fun `GitConfig forProject keeps global remote when project remote blank`() {
+        val tracker = TrackerConfig(
+            kind = "linear",
+            endpoint = "https://api.linear.app",
+            apiKey = "key",
+            projectSlug = "proj"
+        )
+        val project = ProjectConfig(
+            tracker = tracker,
+            workspace = WorkspaceConfig(root = "/tmp/ws"),
+            agent = AgentProjectConfig(),
+            gitRemoteUrl = ""
+        )
+        val global = GitConfig(remoteUrl = "https://github.com/ajdevy/koncerto.git")
+        assertThat(global.forProject(project).remoteUrl).isEqualTo("https://github.com/ajdevy/koncerto.git")
+    }
+
+    @Test
     fun `ProjectConfig data class structural equality`() {
         val tracker = TrackerConfig(
             kind = "linear",

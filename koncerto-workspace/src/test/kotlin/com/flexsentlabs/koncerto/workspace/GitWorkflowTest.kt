@@ -629,7 +629,7 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `setupOriginRemote skips add when origin already exists`() {
+    fun `setupOriginRemote updates origin when configured url differs`() {
         val dir = Files.createTempDirectory("origin-exists-ws-")
         runGitIn(dir, "init", "--initial-branch=main")
         runGitIn(dir, "remote", "add", "origin", "https://github.com/existing/repo.git")
@@ -643,7 +643,8 @@ class GitWorkflowTest {
         method.isAccessible = true
         method.invoke(workflow, dir)
         val remote = runGitIn(dir, "remote", "get-url", "origin")
-        assertThat(remote).isEqualTo("https://github.com/existing/repo.git")
+        assertThat(remote).isEqualTo("https://github.com/acme/widget.git")
+        assertThat(logs.any { it.contains("origin_remote_updated") }).isTrue()
     }
 
     @Test
@@ -768,6 +769,40 @@ class GitWorkflowTest {
         GitWorkflow.testGhTokenOverride = "roundtrip-token"
         assertThat(GitWorkflow.testGhTokenOverride).isEqualTo("roundtrip-token")
         GitWorkflow.testGhTokenOverride = null
+    }
+
+    @Test
+    fun `isGitRepo returns false when only parent directory is a git repo`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init", "--initial-branch=main")
+        val workspace = tmpDir.resolve("FLE-52")
+        Files.createDirectories(workspace)
+        val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
+        val method = GitWorkflow::class.java.getDeclaredMethod("isGitRepo", Path::class.java)
+        method.isAccessible = true
+        val result = method.invoke(workflow, workspace) as Boolean
+        assertThat(result).isFalse()
+    }
+
+    @Test
+    fun `createBranch initializes isolated repo inside parent git checkout`(@TempDir tmpDir: Path) {
+        runGitIn(tmpDir, "init", "--initial-branch=main")
+        runGitIn(tmpDir, "config", "user.email", "test@test.com")
+        runGitIn(tmpDir, "config", "user.name", "Test")
+        tmpDir.resolve("README.md").writeText("# parent")
+        runGitIn(tmpDir, "add", "-A")
+        runGitIn(tmpDir, "commit", "-m", "parent initial")
+
+        val workspace = tmpDir.resolve("FLE-52")
+        Files.createDirectories(workspace)
+        val config = GitConfig(enabled = true, remoteUrl = "https://github.com/acme/target.git")
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(workspace, "FLE-52")
+
+        assertThat(workspace.resolve(".git").toFile().exists()).isTrue()
+        assertThat(runGitIn(tmpDir, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main")
+        assertThat(runGitIn(workspace, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("feature/FLE-52")
+        assertThat(runGitIn(workspace, "remote", "get-url", "origin"))
+            .isEqualTo("https://github.com/acme/target.git")
     }
 
     @Test

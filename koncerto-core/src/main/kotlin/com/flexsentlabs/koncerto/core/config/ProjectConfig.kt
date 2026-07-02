@@ -5,6 +5,7 @@ data class ProjectConfig(
     val tracker: TrackerConfig,
     val workspace: WorkspaceConfig,
     val agent: AgentProjectConfig,
+    val gitRemoteUrl: String = "",
     val rateLimiter: RateLimiterConfig? = null,
     val circuitBreaker: CircuitBreakerConfig? = null,
     val rateLimits: RateLimitsConfig? = null,

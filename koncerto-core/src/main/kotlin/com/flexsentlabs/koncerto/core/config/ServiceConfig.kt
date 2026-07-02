@@ -82,8 +82,12 @@ data class ServiceConfig(
             val rateLimiter = parseRateLimiterConfig(map["rate_limiter"] as? Map<*, *>)
             val circuitBreaker = parseCircuitBreakerConfig(map["circuit_breaker"] as? Map<*, *>)
             val notifications = parseNotificationsConfig(map["notifications"] as? Map<*, *>)
+            val gitRemoteUrl = resolveEnvRef(map["git_remote_url"] as? String)
+                ?: resolveEnvRef(map["remote_url"] as? String)
+                ?: ""
             return ProjectConfig(
                 tracker = tracker, workspace = workspace, agent = agent,
+                gitRemoteUrl = gitRemoteUrl,
                 rateLimiter = rateLimiter, circuitBreaker = circuitBreaker,
                 notifications = notifications
             )
@@ -485,7 +489,12 @@ data class GitConfig(
     val createPr: Boolean = false,
     val prBase: String = "main",
     val remoteUrl: String = ""
-)
+) {
+    fun forProject(project: ProjectConfig): GitConfig {
+        val projectRemote = project.gitRemoteUrl.trim()
+        return if (projectRemote.isNotBlank()) copy(remoteUrl = projectRemote) else this
+    }
+}
 
 data class DemoRecordingConfig(
     val enabled: Boolean = false,

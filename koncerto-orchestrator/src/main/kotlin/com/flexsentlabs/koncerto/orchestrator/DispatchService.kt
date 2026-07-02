@@ -714,7 +714,8 @@ class DispatchService(
             modelOverride = data.resolved.model,
             effortOverride = data.resolved.effort,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
-            stallTimeoutMs = projectConfig.agent.stallTimeoutMs
+            stallTimeoutMs = projectConfig.agent.stallTimeoutMs,
+            gitWorkflowOverride = gitWorkflow
         )
 
         val eventCollectorJob = scope.launch {

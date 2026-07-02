@@ -26,6 +26,7 @@ import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import com.flexsentlabs.koncerto.orchestrator.RuntimeState
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
@@ -114,7 +115,8 @@ private fun createOrchestrator(
                 agentKindOverride: String?, commandOverride: String?,
                 modelOverride: String?,
                 effortOverride: String?,
-                turnTimeoutMs: Long?, stallTimeoutMs: Long?
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?,
+            gitWorkflowOverride: GitWorkflow?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         },
         workflowCache = WorkflowCache(),
