@@ -946,7 +946,7 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `deployTargetProject skips cleanup when deploy fails`(@TempDir tmpDir: Path) = runTest {
+    fun `deployTargetProject cleans up when deploy fails`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         initGitOrigin(issueDir, "acme/widget")
@@ -957,7 +957,7 @@ class AutoReviewOrchestratorTest {
         val decision = passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat(deployer.deployCalls.size).isEqualTo(1)
-        assertThat(deployer.cleanupCalls.size).isEqualTo(0)
+        assertThat(deployer.cleanupCalls.size).isEqualTo(1)
     }
 
     @Test

@@ -36,6 +36,7 @@ import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
 import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
 import com.flexsentlabs.koncerto.demo.recorder.PlaywrightRecorder
 import com.flexsentlabs.koncerto.demo.recorder.XcrunRecorder
+import com.flexsentlabs.koncerto.deploy.DockerLaunchCleaner
 import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.linear.RateLimitedLinearClient
@@ -992,6 +993,26 @@ class BeansTest {
     fun `targetProjectDeployer and demoFailureReporter create instances`() {
         assertThat(beans.targetProjectDeployer(logger)).isNotNull()
         assertThat(beans.demoFailureReporter(logger)).isNotNull()
+    }
+
+    @Test
+    fun `dockerLaunchCleaner and koncertoDockerLifecycle create instances`() {
+        val deployer = beans.targetProjectDeployer(logger)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val scheduler = beans.orphanedContainerCleanupScheduler(deployer, scope, logger)
+        try {
+            assertThat(beans.dockerLaunchCleaner(logger)).isInstanceOf(DockerLaunchCleaner::class)
+            assertThat(
+                beans.koncertoDockerLifecycle(
+                    beans.dockerLaunchCleaner(logger),
+                    deployer,
+                    scheduler,
+                    logger
+                )
+            ).isInstanceOf(KoncertoDockerLifecycle::class)
+        } finally {
+            scheduler.stop()
+        }
     }
 
     @Test
