@@ -21,6 +21,7 @@ import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import com.flexsentlabs.koncerto.orchestrator.RunningEntry
 import com.flexsentlabs.koncerto.orchestrator.RuntimeState
 import com.flexsentlabs.koncerto.orchestrator.TokenTotals
+import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
@@ -49,7 +50,8 @@ class CliRunnerTest {
                 modelOverride: String?,
                 effortOverride: String?,
                 turnTimeoutMs: Long?,
-                stallTimeoutMs: Long?
+                stallTimeoutMs: Long?,
+            gitWorkflowOverride: GitWorkflow?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         }
         return Orchestrator(
@@ -75,7 +77,8 @@ class CliRunnerTest {
                 modelOverride: String?,
                 effortOverride: String?,
                 turnTimeoutMs: Long?,
-                stallTimeoutMs: Long?
+                stallTimeoutMs: Long?,
+            gitWorkflowOverride: GitWorkflow?
             ): EmptyResult<IllegalStateException> = Result.Success(Unit)
         }
         val root = Files.createTempDirectory("cli-test-")

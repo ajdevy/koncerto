@@ -57,7 +57,8 @@ interface AgentRunner {
         modelOverride: String? = null,
         effortOverride: String? = null,
         turnTimeoutMs: Long? = null,
-        stallTimeoutMs: Long? = null
+        stallTimeoutMs: Long? = null,
+        gitWorkflowOverride: GitWorkflow? = null
     ): EmptyResult<Exception>
 }
 
@@ -94,7 +95,8 @@ class DefaultAgentRunner(
         modelOverride: String?,
         effortOverride: String?,
         turnTimeoutMs: Long?,
-        stallTimeoutMs: Long?
+        stallTimeoutMs: Long?,
+        gitWorkflowOverride: GitWorkflow?
     ): EmptyResult<Exception> = runCatchingResult {
         val effectiveAttempt = attempt ?: 1
         val agentKey = "${agentKindOverride ?: "opencode"}:${commandOverride ?: agentKindOverride ?: "opencode"}:${modelOverride ?: "default"}"
@@ -119,7 +121,8 @@ class DefaultAgentRunner(
                         turnTimeoutMs = turnTimeoutMs,
                         stallTimeoutMs = stallTimeoutMs,
                         retryAttempt = 1,
-                        agentKey = agentKey
+                        agentKey = agentKey,
+                        gitWorkflowOverride = gitWorkflowOverride
                     )
                 }
             }
@@ -144,7 +147,8 @@ class DefaultAgentRunner(
                     turnTimeoutMs = turnTimeoutMs,
                     stallTimeoutMs = stallTimeoutMs,
                     retryAttempt = retryAttempt,
-                    agentKey = agentKey
+                    agentKey = agentKey,
+                    gitWorkflowOverride = gitWorkflowOverride
                 )
                 circuitBreaker?.recordSuccess(agentKey)
                 EventBus.publish(AgentLifecycleEvent.Completed(agentKey, true))
@@ -224,13 +228,15 @@ class DefaultAgentRunner(
         turnTimeoutMs: Long?,
         stallTimeoutMs: Long?,
         retryAttempt: Int,
-        agentKey: String
+        agentKey: String,
+        gitWorkflowOverride: GitWorkflow? = null
     ) {
         val workspace = workspaces.ensureWorkspace(issue.identifier)
         workspaces.assertInsideRoot(workspace.path)
+        val gw = gitWorkflowOverride ?: gitWorkflow
         config.hooks.afterCreate?.let { workspaces.runAfterCreate(workspace, it) }
         config.hooks.beforeRun?.let { workspaces.runBeforeRun(workspace, it) }
-        gitWorkflow?.createBranch(workspace.path, issue.identifier)
+        gw?.createBranch(workspace.path, issue.identifier)
 
         val useDocker = dockerConfig?.enabled == true
         val containerManager = if (useDocker) {
@@ -356,9 +362,9 @@ class DefaultAgentRunner(
         } catch (e: Exception) {
             runtime.stop()
             healthChecker?.markUnhealthy(agentKey, e.message ?: e.javaClass.simpleName)
-            gitWorkflow?.let { gw ->
+            gw?.let { workflow ->
                 try {
-                    gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
+                    workflow.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
                     logger.info("partial_work_committed", mapOf(
                         "issue" to issue.identifier,
                         "reason" to (e.message ?: e.javaClass.simpleName)
@@ -383,9 +389,9 @@ class DefaultAgentRunner(
         }
 
         if (!clarificationRequested) {
-            gitWorkflow?.let { gw ->
-                gw.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
-                val prUrl = gw.createPullRequest(workspace.path, issue.identifier, issue.title, issue.description)
+            gw?.let { workflow ->
+                workflow.commitAndPush(workspace.path, issue.identifier, issue.title, issue.labels)
+                val prUrl = workflow.createPullRequest(workspace.path, issue.identifier, issue.title, issue.description)
                 if (prUrl != null) {
                     logger.info("pr_created", mapOf("url" to prUrl, "issue" to issue.identifier))
                 }

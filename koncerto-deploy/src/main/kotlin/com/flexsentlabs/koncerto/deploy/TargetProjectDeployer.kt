@@ -392,6 +392,20 @@ class TargetProjectDeployer(
         } catch (e: Exception) {
             logger.warn("deploy_orphan_compose_scan_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
         }
+
+        pruneDanglingImages()
+    }
+
+    private fun pruneDanglingImages() {
+        try {
+            ProcessBuilder(*dockerCmd("image", "prune", "-f"))
+                .redirectErrorStream(true)
+                .start()
+                .waitFor(60, TimeUnit.SECONDS)
+            logger.info("deploy_orphan_dangling_pruned", emptyMap())
+        } catch (e: Exception) {
+            logger.warn("deploy_orphan_dangling_prune_failed", mapOf("error" to (e.message ?: "unknown") as Any?))
+        }
     }
 
     internal companion object {

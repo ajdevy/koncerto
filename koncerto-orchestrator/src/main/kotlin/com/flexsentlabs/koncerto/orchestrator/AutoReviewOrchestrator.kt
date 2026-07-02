@@ -591,10 +591,22 @@ class AutoReviewOrchestrator(
                 val prNumber = resolvePrNumber(ws.path)
                 logger.warn("deploy_target_project_failed", mapOf("reason" to (result.error ?: "unknown"), "logs" to (result.logs?.take(200) ?: "")))
                 demoFailureReporter?.postFailure(prNumber ?: 0, repoFullName, result.error ?: "unknown", result.logs)
+                runCatching { deployer.cleanup(deployConfig) }.onFailure { e ->
+                    logger.warn("deploy_target_project_cleanup_failed", mapOf(
+                        "issue_id" to issue.id,
+                        "error" to (e.message ?: "unknown")
+                    ))
+                }
                 null
             }
         } catch (e: Exception) {
             logger.warn("deploy_target_project_error", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            runCatching { deployer.cleanup(deployConfig) }.onFailure { cleanupError ->
+                logger.warn("deploy_target_project_cleanup_failed", mapOf(
+                    "issue_id" to issue.id,
+                    "error" to (cleanupError.message ?: "unknown")
+                ))
+            }
             null
         }
     }

@@ -1,5 +1,6 @@
 package com.flexsentlabs.koncerto.deploy
 
+import com.flexsentlabs.koncerto.core.docker.KoncertoDockerLabels
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import java.net.ServerSocket
 import java.nio.file.Path
@@ -110,6 +111,7 @@ class ContainerLifecycleManager(
             val cmd = listOf(
                 "docker", "run", "-d",
                 "--name", containerName,
+                "--label", "${KoncertoDockerLabels.MANAGED_BY}=${KoncertoDockerLabels.MANAGED_VALUE}",
                 "--network", netArg,
                 "-p", "$hostPort:$containerPort",
                 image

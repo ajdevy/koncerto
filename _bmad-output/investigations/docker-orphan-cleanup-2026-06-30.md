@@ -81,3 +81,26 @@ curl -s localhost:17348/actuator/health
 ```
 
 **Confidence:** High on orphan families and gaps; Medium on random-name attribution until labels ship.
+
+## Follow-up: 2026-07-02
+
+### New confirmed gaps (post-implementation review)
+
+| Gap | Evidence | Fix applied |
+|-----|----------|-------------|
+| `DockerLaunchCleaner` never wired | Grep: only test references before this session | `KoncertoDockerLifecycle.cleanOnLaunch()` in `KoncertoApplication.main` |
+| No shutdown cleanup | `KoncertoApplication.kt` shutdown hook only drained agents | `dockerLifecycle.cleanOnShutdown()` stops scheduler + `cleanupOrphans()` + agent prune |
+| Deploy failure skipped cleanup | `AutoReviewOrchestratorTest`: `cleanupCalls.size == 0` on failure | `deployTargetProject()` calls `deployer.cleanup()` on failure/exception |
+| Shell launch had no pre-clean | `scripts/koncerto-run.sh` | Step 0: rm demo containers/images, compose down, image prune |
+| Demo containers unlabeled | `ContainerLifecycleManager.tryRunContainer()` | Added `koncerto.managed-by=koncerto` label |
+| Dangling images not pruned in periodic cleanup | `cleanupOrphans()` ended at compose scan | Added `docker image prune -f` |
+
+### Remaining limitations
+
+- `DockerEntityPolicy.isProtectedContainer()` still protects **all** running containers from launch cleaner (by design — see test `protects all running containers by default`). Running `koncerto-demo-*` containers are removed by `cleanupOrphans()` (force rm) at launch/shutdown/5-min interval.
+- Docker daemon on host was **unresponsive** (`docker ps` timed out at 10s) — likely contributing to orphan accumulation and low disk. User should restart Docker Desktop.
+- Review-blocked / review-retry paths do not run deploy cleanup (no deploy occurred); launch/shutdown hooks cover stale resources.
+
+### Status
+
+**Concluded** — implementation shipped; verify after Docker Desktop restart.

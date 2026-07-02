@@ -58,8 +58,6 @@ class Orchestrator(
 
     val projects: Map<String, ProjectRuntime>
 
-    private val gitWorkflow: GitWorkflow = GitWorkflow(config.gitConfig, logger)
-
     init {
         projects = config.projects.mapValues { (slug, pc) ->
             val state = runtimeStates[slug] ?: RuntimeState().also {
@@ -68,6 +66,7 @@ class Orchestrator(
             }
             val linear = linearClientFactory(pc)
             val ws = workspaceManagerFactory(pc)
+            val projectGitWorkflow = GitWorkflow(config.gitConfig.forProject(pc), logger)
             val autoReview = autoReviewOrchestratorFactory?.invoke(pc, state)
             val dispatch = DispatchService(
                 projectConfig = pc,
@@ -85,7 +84,7 @@ class Orchestrator(
                 workplanParser = workplanParser,
                 auditLogger = auditLogger,
                 autoReviewOrchestrator = autoReview,
-                gitWorkflow = gitWorkflow
+                gitWorkflow = projectGitWorkflow
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }

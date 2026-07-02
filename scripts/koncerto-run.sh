@@ -51,6 +51,15 @@ fi
 
 echo "[koncerto-run] Using workflow: $WORKFLOW_FILE"
 
+# Step 0: Remove orphaned demo deploy resources from prior runs
+echo "[koncerto-run] Cleaning orphaned demo Docker resources..."
+if command -v docker >/dev/null 2>&1; then
+  docker ps -a --filter name=koncerto-demo -q 2>/dev/null | xargs docker rm -f 2>/dev/null || true
+  docker images --filter reference=koncerto-demo-* -q 2>/dev/null | xargs docker rmi -f 2>/dev/null || true
+  docker compose -p koncerto-demo down --remove-orphans --volumes 2>/dev/null || true
+  docker image prune -f 2>/dev/null || true
+fi
+
 # Step 1: Build JAR (unless --dev)
 if [[ "$DEV_MODE" == "false" ]]; then
   echo "[koncerto-run] Building Koncerto JAR..."

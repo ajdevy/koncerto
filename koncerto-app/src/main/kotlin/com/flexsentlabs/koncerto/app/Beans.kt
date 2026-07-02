@@ -80,6 +80,7 @@ import com.flexsentlabs.koncerto.deploy.DockerConfigDetector
 import com.flexsentlabs.koncerto.deploy.DockerfileGenerator
 import com.flexsentlabs.koncerto.deploy.FrameworkDetector
 import com.flexsentlabs.koncerto.deploy.GitHubPRQueryImpl
+import com.flexsentlabs.koncerto.deploy.DockerLaunchCleaner
 import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.orchestrator.DemoScenarioGenerator
@@ -570,9 +571,10 @@ class Beans {
         DemoFailureReporter(logger)
 
     private fun parseRepoFullName(config: ServiceConfig): String? {
-        val remoteUrl = config.gitConfig.remoteUrl
+        val firstProject = config.projects.values.firstOrNull()
+        val remoteUrl = firstProject?.gitRemoteUrl?.takeIf { it.isNotBlank() }
+            ?: config.gitConfig.remoteUrl
         if (remoteUrl.isBlank()) {
-            val firstProject = config.projects.values.firstOrNull()
             return firstProject?.let { parseRemoteFromWorkspace(it.workspace.root) }
         }
         val match = Regex("""github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$""").find(remoteUrl)
@@ -620,6 +622,10 @@ class Beans {
     }
 
     @Bean
+    fun dockerLaunchCleaner(logger: StructuredLogger): DockerLaunchCleaner =
+        DockerLaunchCleaner(logger)
+
+    @Bean
     fun orphanedContainerCleanupScheduler(
         targetProjectDeployer: TargetProjectDeployer,
         scope: CoroutineScope,
@@ -634,4 +640,17 @@ class Beans {
         scheduler.start()
         return scheduler
     }
+
+    @Bean
+    fun koncertoDockerLifecycle(
+        dockerLaunchCleaner: DockerLaunchCleaner,
+        targetProjectDeployer: TargetProjectDeployer,
+        orphanedContainerCleanupScheduler: OrphanedContainerCleanupScheduler,
+        logger: StructuredLogger
+    ): KoncertoDockerLifecycle = KoncertoDockerLifecycle(
+        launchCleaner = dockerLaunchCleaner,
+        deployer = targetProjectDeployer,
+        orphanScheduler = orphanedContainerCleanupScheduler,
+        logger = logger
+    )
 }
