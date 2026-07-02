@@ -10,7 +10,6 @@ git:
   auto_push: true
   create_pr: true
   pr_base: main
-  remote_url: $GIT_REMOTE_URL
 projects:
   promomesh:
     tracker:
@@ -27,6 +26,7 @@ projects:
       project_admin: "user-1"
     reviewer:
       kind: human
+    git_remote_url: $GIT_REMOTE_URL
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
     agent:
