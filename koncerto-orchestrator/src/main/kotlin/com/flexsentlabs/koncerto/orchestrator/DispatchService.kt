@@ -486,7 +486,7 @@ class DispatchService(
         val gw = gitWorkflow ?: return null
         val workspacePath = runCatching { ws.ensureWorkspace(issue.identifier).path }.getOrNull() ?: return null
         val branch = gw.branchName(issue.identifier)
-        return if (gw.remoteBranchExists(branch, workspacePath)) "in review" else null
+        return if (gw.remoteBranchHasCommits(branch, workspacePath)) "in review" else null
     }
 
     private suspend fun handleNormalCompletion(

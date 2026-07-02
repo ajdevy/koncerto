@@ -480,6 +480,96 @@ class GitWorkflowTest {
     }
 
     @Test
+    fun `remoteBranchHasCommits returns false when git disabled`() {
+        val config = GitConfig(enabled = false)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/ABC-1", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `remoteBranchHasCommits returns false when branch missing on remote`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare", "--initial-branch=main")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("push", "-u", "origin", "main")
+
+        val config = GitConfig(enabled = true, prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/MISSING", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `remoteBranchHasCommits returns false when branch tip matches base tip`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare", "--initial-branch=main")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("push", "-u", "origin", "main")
+        // Branch created from main but never advanced — same tip SHA as base
+        runGit("checkout", "-b", "feature/ABC-1")
+        runGit("push", "-u", "origin", "feature/ABC-1")
+
+        val config = GitConfig(enabled = true, prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/ABC-1", repoDir)).isFalse()
+    }
+
+    @Test
+    fun `remoteBranchHasCommits returns true when branch has commits beyond base`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare", "--initial-branch=main")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("push", "-u", "origin", "main")
+        runGit("checkout", "-b", "feature/ABC-1")
+        repoDir.resolve("work.txt").writeText("progress")
+        runGit("add", "-A")
+        runGit("commit", "-m", "actual work")
+        runGit("push", "-u", "origin", "feature/ABC-1")
+
+        val config = GitConfig(enabled = true, prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/ABC-1", repoDir)).isTrue()
+    }
+
+    @Test
+    fun `remoteBranchHasCommits returns true when base ref cannot be resolved`() {
+        val bareDir = Files.createTempDirectory("bare-remote-")
+        ProcessBuilder("git", "init", "--bare")
+            .directory(bareDir.toFile())
+            .redirectErrorStream(true)
+            .start()
+            .waitFor()
+        runGit("remote", "add", "origin", bareDir.toString())
+        runGit("checkout", "-b", "feature/ABC-1")
+        runGit("push", "-u", "origin", "feature/ABC-1")
+        // No "main" ref was ever pushed to origin, so base SHA can't be resolved
+
+        val config = GitConfig(enabled = true, prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/ABC-1", repoDir)).isTrue()
+    }
+
+    @Test
+    fun `remoteBranchHasCommits returns false when git command fails`() {
+        runGit("remote", "add", "origin", "/nonexistent/koncerto-remote.git")
+
+        val config = GitConfig(enabled = true)
+        val workflow = GitWorkflow(config, noopLogger())
+        assertThat(workflow.remoteBranchHasCommits("feature/ABC-1", repoDir)).isFalse()
+    }
+
+    @Test
     fun `createBranch initializes new repo from remote base when remoteUrl set`() {
         val bareDir = createBareRemoteWithMain()
         val newDir = Files.createTempDirectory("new-remote-ws-")
