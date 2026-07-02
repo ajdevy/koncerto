@@ -1199,6 +1199,12 @@ case "${'$'}1" in
       *down*) exit 0 ;;
     esac
     ;;
+  image)
+    shift
+    case "${'$'}1" in
+      prune) exit 0 ;;
+    esac
+    ;;
 esac
 exit 0
 """

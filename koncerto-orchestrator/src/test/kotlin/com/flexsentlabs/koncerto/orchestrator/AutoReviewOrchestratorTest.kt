@@ -771,7 +771,7 @@ class AutoReviewOrchestratorTest {
 
     private fun passingReviewOrchestrator(
         workspaceDir: Path,
-        deployer: RecordingProjectDeployer? = null,
+        deployer: ProjectDeployer? = null,
         deployRepoFullName: String? = null,
         ghProcessRunner: GhProcessRunner? = null,
         onReviewPassed: (suspend (Issue, String?) -> String?)? = null
@@ -958,6 +958,42 @@ class AutoReviewOrchestratorTest {
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat(deployer.deployCalls.size).isEqualTo(1)
         assertThat(deployer.cleanupCalls.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `deployTargetProject tolerates cleanup failure when deploy fails`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        val deployer = object : ProjectDeployer {
+            override suspend fun deploy(config: DeployConfig): DeployResult =
+                DeployResult.failure("build failed", logs = "error log")
+
+            override suspend fun cleanup(config: DeployConfig) {
+                throw RuntimeException("cleanup failed")
+            }
+        }
+        val decision = passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
+    fun `deployTargetProject tolerates cleanup failure when deploy throws`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+
+        val deployer = object : ProjectDeployer {
+            override suspend fun deploy(config: DeployConfig): DeployResult =
+                throw RuntimeException("deploy exploded")
+
+            override suspend fun cleanup(config: DeployConfig) {
+                throw RuntimeException("cleanup failed")
+            }
+        }
+        val decision = passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
     }
 
     @Test
