@@ -53,7 +53,8 @@ config/ngrok.yml
 .review-*
 .model-exhausted*
 .runtime/
-/workspace/
+workspace/
+
 
 # Gradle local plugin repo variant jars
 gradle/local-plugin-repo/*-gradle85.jar
