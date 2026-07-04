@@ -197,7 +197,21 @@ open class GitWorkflow(
         if (repo != null) {
             args += listOf("--repo", repo)
         }
-        return runGhSafe(workspacePath, *args.toTypedArray())
+        val created = runGhSafe(workspacePath, *args.toTypedArray())
+        if (created != null) return created
+        // `gh pr create` fails (non-zero exit) if a PR for this branch already exists —
+        // e.g. a prior review cycle for the same issue already opened one. Treat that as
+        // success and return the existing PR's URL instead of null, so callers don't
+        // mistake "already open" for "failed to open" and endlessly re-run the review.
+        return findExistingPullRequestUrl(workspacePath, branch, repo)
+    }
+
+    private fun findExistingPullRequestUrl(workspacePath: Path, branch: String, repo: String?): String? {
+        val args = mutableListOf("pr", "view", branch, "--json", "url", "-q", ".url")
+        if (repo != null) {
+            args += listOf("--repo", repo)
+        }
+        return runGhSafe(workspacePath, *args.toTypedArray())?.trim()?.takeIf { it.isNotBlank() }
     }
 
     private fun isGitRepo(path: Path): Boolean = Files.exists(path.resolve(".git"))
