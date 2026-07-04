@@ -5,6 +5,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.coroutines.test.runTest
@@ -185,7 +186,7 @@ class DemoScenarioGeneratorTest {
         val result = gen.generate(issue, workspace)
 
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1"))
+        assertThat(calledModels).isEqualTo(listOf(FreeModelCycler.DEFAULT_FREE_MODELS[0]))
         val savedFile = File("/tmp/koncerto-demo/issue-1-scenario.yaml")
         assertThat(savedFile.exists()).isEqualTo(true)
         assertThat(savedFile.readText().contains("action: click")).isEqualTo(true)
@@ -203,13 +204,13 @@ class DemoScenarioGeneratorTest {
         val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
             val model = cmd[cmd.indexOf("--model") + 1]
             calledModels += model
-            if (model == "opencode-free-1") null else validScenarioOutput
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[0]) null else validScenarioOutput
         }
         val gen = generatorWithRunner(runner)
         val result = gen.generate(issue, workspace)
 
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2"))
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(2))
     }
 
     @Test
@@ -288,11 +289,11 @@ class DemoScenarioGeneratorTest {
         val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
             val model = cmd[cmd.indexOf("--model") + 1]
             calledModels += model
-            if (model == "opencode-free-3") validScenarioOutput else null
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[2]) validScenarioOutput else null
         }
         val result = generatorWithRunner(runner).generate(issue, workspace)
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2", "opencode-free-3"))
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(3))
     }
 
     private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {

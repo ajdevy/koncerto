@@ -1,5 +1,6 @@
 package com.flexsentlabs.koncerto.orchestrator
 
+import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import com.flexsentlabs.koncerto.workspace.Workspace
@@ -26,7 +27,7 @@ class DemoScenarioGenerator(
     }
 
     private fun runWithFallback(prompt: String, workDir: File): String? {
-        val models = listOf("opencode-free-1", "opencode-free-2", "opencode-free-3")
+        val models = FreeModelCycler.DEFAULT_FREE_MODELS
         for (model in models) {
             val cmd = opencodeCommand.split(" ") + listOf("run", "--model", model, prompt)
             val output = processRunner.run(cmd, workDir, 60)
