@@ -32,7 +32,10 @@ class DemoScenarioGenerator(
         val models = FreeModelCycler.DEFAULT_FREE_MODELS
         for (model in models) {
             val cmd = opencodeCommand.split(" ") + listOf("run", "--model", model, prompt)
-            val output = processRunner.run(cmd, workDir, 60)
+            // Free-tier models reasoning over a real diff + writing a scenario file via tool
+            // calls routinely take 60-110s; 60s cut off every single attempt before it could
+            // ever finish, guaranteeing demo_scenario_all_models_failed on every real PR.
+            val output = processRunner.run(cmd, workDir, 180)
             if (output != null) return output
             logger.warn("demo_scenario_model_failed", mapOf("model" to model))
         }
@@ -118,18 +121,41 @@ class DemoScenarioGenerator(
     }
 
     internal fun extractScenarioBlock(raw: String): String? {
-        val fenceMatch = Regex(
+        // Format A: ```yaml demo_scenario\n<content without the demo_scenario: wrapper>\n``` —
+        // the label is on the fence line itself, so the content needs wrapping/reindenting.
+        val labeledFenceMatch = Regex(
             """```(?:yaml|yml)\s+demo_scenario\s*\n(.*?)\n```""",
             RegexOption.DOT_MATCHES_ALL
-        ).find(raw)
-        if (fenceMatch != null) {
-            val yamlContent = fenceMatch.groupValues[1].trim()
+        ).findAll(raw).lastOrNull()
+        if (labeledFenceMatch != null) {
+            val yamlContent = labeledFenceMatch.groupValues[1].trim()
             if (yamlContent.isBlank()) return null
             return "demo_scenario:\n" + yamlContent.lines().joinToString("\n") { line ->
-                if (line.startsWith("  ")) line else "  $line"
+                if (line.startsWith("  ") || line.isBlank()) line else "  $line"
             }
         }
-        val rawMatch = Regex("""demo_scenario:\s*\n(?:[ \t].*\n?)+""").find(raw)
+
+        // Format B: plain ```yaml fence (no label) whose content already starts with
+        // "demo_scenario:" — the format demo-scenario.md's own example teaches, and what real
+        // models actually produce. Prefer the LAST such block: models sometimes read/critique an
+        // earlier draft before writing a final revised one.
+        val plainFenceMatch = Regex(
+            """```(?:yaml|yml)\s*\n(.*?)\n```""",
+            RegexOption.DOT_MATCHES_ALL
+        ).findAll(raw)
+            .map { it.groupValues[1] }
+            .filter { it.trimStart().startsWith("demo_scenario:") }
+            .lastOrNull()
+        if (plainFenceMatch != null) {
+            return plainFenceMatch.trim().ifBlank { null }
+        }
+
+        // Format C: unfenced "demo_scenario:\n  ..." — tolerate blank lines *within* the block
+        // (models routinely add them for readability) without swallowing unrelated trailing
+        // prose once genuine non-indented, non-blank content appears.
+        val rawMatch = Regex("""demo_scenario:\s*\n(?:(?:[ \t]+.*)?\n)*""")
+            .findAll(raw)
+            .lastOrNull { it.value.trim() != "demo_scenario:" }
         if (rawMatch != null) {
             return rawMatch.value.trimEnd()
         }

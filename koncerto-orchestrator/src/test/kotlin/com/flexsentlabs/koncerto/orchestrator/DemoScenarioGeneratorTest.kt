@@ -94,6 +94,75 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `extractScenarioBlock parses unlabeled fence whose content already starts with demo_scenario`() {
+        // The actual format real models produce, matching demo-scenario.md's own example: the
+        // fence has no inline label, and "demo_scenario:" is the first line of content.
+        val raw = """
+            Here's the scenario:
+
+            ```yaml
+            demo_scenario:
+              description: "Login flow"
+              steps:
+                - action: click
+                  selector: "text=Submit"
+            ```
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.startsWith("demo_scenario:")).isEqualTo(true)
+        assertThat(result.contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock tolerates blank lines within an unfenced demo_scenario block`() {
+        val raw = """
+            demo_scenario:
+              description: "Login flow"
+
+              steps:
+                - action: navigate
+                  url: /
+
+                - action: click
+                  selector: "text=Submit"
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.contains("action: navigate")).isEqualTo(true)
+        assertThat(result.contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock uses the last fenced block when the model revises an earlier draft`() {
+        val raw = """
+            Reading existing scenario...
+
+            ```yaml
+            demo_scenario:
+              description: "Draft"
+              steps:
+                - action: click
+                  selector: "text=Old"
+            ```
+
+            Actually, let me improve it:
+
+            ```yaml
+            demo_scenario:
+              description: "Final"
+              steps:
+                - action: click
+                  selector: "text=New"
+            ```
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.contains("text=New")).isEqualTo(true)
+        assertThat(result.contains("text=Old")).isEqualTo(false)
+    }
+
+    @Test
     fun `buildPrompt includes issue title and description`(@TempDir tmpDir: Path) {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
