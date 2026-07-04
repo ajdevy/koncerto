@@ -370,6 +370,28 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `generate tries the next model when a response can't be parsed into a scenario`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        // A model responding with something unparseable must not be treated the same as it
+        // failing to respond at all — it should still fall through to the next model rather
+        // than giving up on the very first response received.
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-6", identifier = "T-6", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val calledModels = mutableListOf<String>()
+        val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
+            val model = cmd[cmd.indexOf("--model") + 1]
+            calledModels += model
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[0]) "Sorry, I cannot help with that." else validScenarioOutput
+        }
+        val result = generatorWithRunner(runner).generate(issue, workspace)
+        assertThat(result).isNotNull()
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(2))
+    }
+
+    @Test
     fun `generate falls back to third model when first two fail`(@TempDir tmpDir: java.nio.file.Path) = runTest {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(

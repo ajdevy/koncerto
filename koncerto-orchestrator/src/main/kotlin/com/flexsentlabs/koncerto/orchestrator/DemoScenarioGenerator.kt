@@ -20,30 +20,44 @@ class DemoScenarioGenerator(
 
     fun generate(issue: Issue, workspace: Workspace): String? {
         val prompt = buildPrompt(issue, workspace)
-        val output = runWithFallback(prompt, workspace.path.toFile()) ?: return null
-        val block = extractScenarioBlock(output) ?: run {
-            logger.warn("demo_scenario_extract_failed", mapOf("issue_id" to issue.id))
-            return null
-        }
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
         return saveScenario(issue, block)
     }
 
-    private fun runWithFallback(prompt: String, workDir: File): String? {
+    private fun runWithFallback(prompt: String, workDir: File, issueId: String): String? {
         val models = FreeModelCycler.DEFAULT_FREE_MODELS
-        for (model in models) {
-            // Without this, opencode stops to ask permission for the Glob/Read/Write tool calls
-            // it needs to inspect the diff and save the scenario file. There's no TTY to approve
-            // from in this non-interactive invocation, so every real (tool-using) prompt hung.
-            val cmd = opencodeCommand.split(" ") +
-                listOf("run", "--model", model, "--dangerously-skip-permissions", prompt)
-            // Free-tier models reasoning over a real diff + writing a scenario file via tool
-            // calls routinely take 100-150s with real variance run to run; measured one real
-            // PR at both 110s and 139s. Leave real headroom rather than re-tuning to the edge.
-            val output = processRunner.run(cmd, workDir, 240)
-            if (output != null) return output
-            logger.warn("demo_scenario_model_failed", mapOf("model" to model))
+        // A custom scenario is mandatory (no demo is ever recorded without one), and real
+        // free-tier latency for this prompt is highly bimodal in practice — anywhere from ~8s
+        // to a full hang with no code-level difference between runs. Cycling through several
+        // full passes buys many independent chances at a fast run instead of one long wait.
+        for (pass in 1..PASS_COUNT) {
+            for (model in models) {
+                // Without this, opencode stops to ask permission for the Glob/Read/Write tool
+                // calls it needs to inspect the diff and save the scenario file. There's no TTY
+                // to approve from in this non-interactive invocation, so every real prompt hung.
+                val cmd = opencodeCommand.split(" ") +
+                    listOf("run", "--model", model, "--dangerously-skip-permissions", prompt)
+                val output = processRunner.run(cmd, workDir, PER_ATTEMPT_TIMEOUT_SECONDS)
+                if (output == null) {
+                    logger.warn("demo_scenario_model_failed", mapOf("model" to model, "pass" to pass.toString()))
+                    continue
+                }
+                val block = extractScenarioBlock(output)
+                if (block == null) {
+                    // The model responded but didn't produce a parseable scenario — try the
+                    // next model rather than giving up on the very first response we got.
+                    logger.warn("demo_scenario_extract_failed", mapOf(
+                        "issue_id" to issueId, "model" to model, "pass" to pass.toString()
+                    ))
+                    continue
+                }
+                return block
+            }
         }
-        logger.warn("demo_scenario_all_models_failed", mapOf("models" to models.joinToString(",")))
+        logger.warn("demo_scenario_all_models_failed", mapOf(
+            "models" to models.joinToString(","),
+            "passes" to PASS_COUNT.toString()
+        ))
         return null
     }
 
@@ -167,6 +181,13 @@ class DemoScenarioGenerator(
     }
 
     companion object {
+        // Measured 8-139s for successful runs against the real prompt; hangs (now much rarer
+        // after fixing the stdin/permission/deadlock issues) still occasionally ride out the
+        // full timeout. 300s per attempt plus several passes trades worst-case wall time for a
+        // much higher chance of eventually landing a real scenario, which is now mandatory.
+        private const val PER_ATTEMPT_TIMEOUT_SECONDS = 300L
+        private const val PASS_COUNT = 3
+
         fun defaultProcessRunner(): ProcessRunner = ProcessRunner { command, workDir, timeoutSeconds ->
             try {
                 // Without this, the child's stdin is an open, never-closed pipe by default. A CLI

@@ -563,6 +563,41 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `never deploys or records when a configured scenario generator fails to produce one`(@TempDir tmpDir: Path) = runTest {
+        // A scenario-less recording just shows the app idling — not a useful demo. When a
+        // generator IS configured but exhausts its own retries without a scenario, the pipeline
+        // must block rather than silently falling back to recording without one.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val failingGenerator = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { _, _, _ -> null }
+        )
+        val deployer = RecordingProjectDeployer()
+        var recordingCalled = false
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = failingGenerator,
+            targetProjectDeployer = deployer,
+            onReviewPassed = { _, _ -> recordingCalled = true; "http://example.com/demo.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(0)
+        assertThat(recordingCalled).isEqualTo(false)
+    }
+
+    @Test
     fun `review exhaustion sends notification to notifier`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         Files.createDirectories(workspaceDir.resolve("T-1"))

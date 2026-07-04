@@ -224,6 +224,7 @@ class AutoReviewOrchestrator(
         stage: StageAgentConfig,
         currentAttempt: Int
     ): ReviewDecision {
+        val scenarioGenerationAttempted = demoScenarioGenerator != null
         val scenarioPath = runCatching {
             workspace?.let { demoScenarioGenerator?.generate(issue, it) }
         }.onFailure { e ->
@@ -237,6 +238,21 @@ class AutoReviewOrchestrator(
         }.getOrNull()
         if (scenarioPath != null) {
             traceReviewStep(workspace, issue, "demo_scenario", "saved", mapOf("path" to scenarioPath))
+        } else if (scenarioGenerationAttempted) {
+            // A scenario generator IS configured but could not produce a scenario even after
+            // its own internal fallback/retry passes — never fall back to recording without one
+            // (a scenario-less recording just shows the app idling, which isn't a useful demo).
+            // Treat this the same as a demo recording failure: block for a human to notice
+            // rather than silently shipping a low-value recording.
+            logger.warn("demo_scenario_generation_exhausted", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "demo_scenario", "exhausted")
+            workspace?.let { cleanupReviewFiles(it.path) }
+            handleDemoRecordingFailure(issue, "scenario generation failed after exhausting all fallback models")
+            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "reason" to "no_scenario"
+            ))
+            return ReviewDecision.Blocked
         } else {
             traceReviewStep(workspace, issue, "demo_scenario", "skipped")
         }
