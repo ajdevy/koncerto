@@ -31,7 +31,11 @@ class DemoScenarioGenerator(
     private fun runWithFallback(prompt: String, workDir: File): String? {
         val models = FreeModelCycler.DEFAULT_FREE_MODELS
         for (model in models) {
-            val cmd = opencodeCommand.split(" ") + listOf("run", "--model", model, prompt)
+            // Without this, opencode stops to ask permission for the Glob/Read/Write tool calls
+            // it needs to inspect the diff and save the scenario file. There's no TTY to approve
+            // from in this non-interactive invocation, so every real (tool-using) prompt hung.
+            val cmd = opencodeCommand.split(" ") +
+                listOf("run", "--model", model, "--dangerously-skip-permissions", prompt)
             // Free-tier models reasoning over a real diff + writing a scenario file via tool
             // calls routinely take 100-150s with real variance run to run; measured one real
             // PR at both 110s and 139s. Leave real headroom rather than re-tuning to the edge.
@@ -165,7 +169,11 @@ class DemoScenarioGenerator(
     companion object {
         fun defaultProcessRunner(): ProcessRunner = ProcessRunner { command, workDir, timeoutSeconds ->
             try {
+                // Without this, the child's stdin is an open, never-closed pipe by default. A CLI
+                // that probes stdin for piped input when it isn't attached to a real terminal can
+                // block waiting for an EOF that never arrives; /dev/null delivers one immediately.
                 val pb = ProcessBuilder(command).directory(workDir).redirectErrorStream(true)
+                    .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
                 val process = pb.start()
                 // Drain stdout on a separate thread WHILE waiting, not after. A verbose opencode
                 // transcript (tool-call previews, sub-agent narration) routinely exceeds the OS
