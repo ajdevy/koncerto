@@ -198,6 +198,12 @@ class Orchestrator(
                 val allBlockersResolved = entry.issue.blockedBy.all { blocker ->
                     val blockerId = blocker.id
                     if (blockerId == null) return@all true
+                    // Only treat this as a fresh unblock transition if Koncerto was itself
+                    // tracking the blocker as running — otherwise a blocker resolved long
+                    // before this issue was ever dispatched (the normal case for any real
+                    // dependency chain) would match "resolved" on every single tick forever,
+                    // repeatedly wiping this issue's in-flight dispatch and workspace.
+                    if (blockerId !in runningIds) return@all false
                     val blockerState = states[blockerId]
                     if (blockerState == null) return@all false
                     pr.config.tracker.terminalStates.any { it.equals(blockerState, ignoreCase = true) }
