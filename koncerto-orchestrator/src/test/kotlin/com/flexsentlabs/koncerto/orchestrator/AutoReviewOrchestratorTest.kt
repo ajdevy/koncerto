@@ -324,6 +324,48 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `review pass still works when review prose merely discusses rate limiting`(@TempDir tmpDir: Path) = runTest {
+        // A review of an auth/API feature commonly flags the REVIEWED APP's own rate-limiting
+        // code (e.g. "W4 - in-process rate limit doesn't survive multi-process deployments").
+        // That must not be mistaken for Claude's own usage limit being hit.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(
+            issueDir.resolve(".review-output"),
+            "✅ PASS\nW4 — in-process rate limit doesn't survive multi-process deployments"
+        )
+
+        var commentCount = 0
+        val tracker = object : TrackerClient by fakeTracker() {
+            override suspend fun createComment(issueId: String, body: String) {
+                commentCount++
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger()
+        )
+
+        val decision = orchestrator.onReviewStageComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(commentCount).isEqualTo(0)
+    }
+
+    @Test
     fun `returns RetryWithCoding when review fails and attempts remain`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         Files.createDirectories(workspaceDir.resolve("T-1"))

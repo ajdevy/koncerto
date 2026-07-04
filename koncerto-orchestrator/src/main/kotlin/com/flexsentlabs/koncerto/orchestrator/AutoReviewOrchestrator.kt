@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.orchestrator
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
+import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.tracker.TrackerClient
 import com.flexsentlabs.koncerto.deploy.DeployConfig
@@ -512,9 +513,13 @@ class AutoReviewOrchestrator(
         val outputFile = workspacePath.resolve(".review-output")
         if (!Files.exists(outputFile)) return false
         val content = runCatching { Files.readString(outputFile) }.getOrNull() ?: return false
+        // "rate limit" alone is deliberately not checked here — it's a generic enough phrase
+        // that a passing review discussing the REVIEWED APP's own rate-limiting code (e.g. an
+        // auth/API review, which commonly flags this) false-positives as Claude's own usage
+        // limit being hit, silently discarding a real pass/fail verdict on every such review.
         return content.contains("monthly usage limit") ||
-            content.contains("rate limit") ||
-            content.contains("subscription limit")
+            content.contains("subscription limit") ||
+            PatternErrorClassifier.SUBSCRIPTION_USAGE_PATTERN.containsMatchIn(content)
     }
 
     private suspend fun handleSubscriptionLimit(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace): ReviewDecision {
