@@ -45,6 +45,11 @@ class PlaywrightRecorderTest {
 
     @Test
     fun `record returns RecorderNotAvailable when dependencies missing`() = runTest {
+        // Force the unavailable branch via the test seam rather than relying on the ambient
+        // machine lacking Node/playwright — this repo now has a real node_modules/playwright
+        // dependency (for the recorder to actually work), so isAvailable() legitimately
+        // returns true here otherwise.
+        PlaywrightRecorder.testDependenciesAvailable = false
         val output = File.createTempFile("pw-test-", ".webm")
         val result = PlaywrightRecorder().record(config, output)
         assert(result is DemoResult.Failure)

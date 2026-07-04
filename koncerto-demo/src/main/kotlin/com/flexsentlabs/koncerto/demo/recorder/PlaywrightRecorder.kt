@@ -77,6 +77,17 @@ class PlaywrightRecorder : DemoRecorder {
                     ?: ProcessBuilder("bash", shellScript.absolutePath)
                     .redirectErrorStream(true)
                 val env = pb.environment()
+                // node <file> resolves require() from the SCRIPT's own directory, not the
+                // process's cwd (unlike `node -e`, which isAvailable() uses above and which
+                // does resolve from cwd). Since pwScript lives in the OS temp dir, it has no
+                // node_modules in its ancestry — point NODE_PATH at ours so it's found anyway.
+                val nodeModulesPath = File(System.getProperty("user.dir"), "node_modules").absolutePath
+                val existingNodePath = System.getenv("NODE_PATH")
+                env["NODE_PATH"] = if (existingNodePath.isNullOrBlank()) {
+                    nodeModulesPath
+                } else {
+                    "$existingNodePath:$nodeModulesPath"
+                }
                 env["TARGET_URL"] = config.targetUrl
                 env["SCENARIO_PATH"] = scenarioArg
                 env["PW_SCRIPT_PATH"] = pwScript.absolutePath
