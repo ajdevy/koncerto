@@ -138,7 +138,7 @@ class TargetProjectDeployerTest {
         val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.yml"), tmpDir, "koncerto-demo-test")
         assertThat(result.success).isTrue()
         assertThat(result.isCompose).isTrue()
-        assertThat(result.url).isEqualTo("http://host.docker.internal:8080")
+        assertThat(result.url).isEqualTo("http://localhost:8080")
     }
 
     @Test
@@ -226,7 +226,7 @@ class TargetProjectDeployerTest {
         val result = deployer.deploy(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
         assertThat(result.success).isTrue()
         assertThat(result.isCompose).isTrue()
-        assertThat(result.url).isEqualTo("http://host.docker.internal:8080")
+        assertThat(result.url).isEqualTo("http://localhost:8080")
     }
 
     @Test
@@ -273,7 +273,7 @@ class TargetProjectDeployerTest {
         FakeDockerPath.withFakeDocker(FakeDockerPath.composeSuccessScript()) {
             val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.yml"), tmpDir, "koncerto-demo-test")
             assertThat(result.success).isTrue()
-            assertThat(result.url).isEqualTo("http://host.docker.internal:8080")
+            assertThat(result.url).isEqualTo("http://localhost:8080")
         }
     }
 
@@ -626,7 +626,7 @@ exit 0
         FakeDockerPath.withFakeDocker(script) {
             val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.demo.yml"), tmpDir, "koncerto-demo-fle-52")
             assertThat(result.success).isTrue()
-            assertThat(result.url).isEqualTo("http://host.docker.internal:17349")
+            assertThat(result.url).isEqualTo("http://localhost:17349")
         }
     }
 
@@ -657,7 +657,7 @@ exit 0
         FakeDockerPath.withFakeDockerSuspend(script) {
             val result = deployer.deploy(DeployConfig("owner/koncerto", "fle-52", projectPath = tmpDir))
             assertThat(result.success).isTrue()
-            assertThat(result.url).isEqualTo("http://host.docker.internal:17349")
+            assertThat(result.url).isEqualTo("http://localhost:17349")
         }
     }
 

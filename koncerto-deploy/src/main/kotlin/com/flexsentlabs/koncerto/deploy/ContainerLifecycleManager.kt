@@ -127,7 +127,11 @@ class ContainerLifecycleManager(
             logger.info("docker_container_started", mapOf(
                 "name" to (containerName as Any?), "port" to (hostPort.toString() as Any?)
             ))
-            Result.success(ContainerInstance(cid, hostPort, "http://host.docker.internal:$hostPort"))
+            // host.docker.internal only resolves from WITHIN a container (via Docker's bridge-mode
+            // embedded DNS) — the demo recorder (Playwright/xcrun/adb) always runs natively on this
+            // same host, where that hostname doesn't resolve at all. The container's port is
+            // published to the host, so localhost reaches it correctly either way.
+            Result.success(ContainerInstance(cid, hostPort, "http://localhost:$hostPort"))
         } catch (e: Exception) {
             Result.failure(RuntimeException("docker run error: ${e.message}"))
         }
