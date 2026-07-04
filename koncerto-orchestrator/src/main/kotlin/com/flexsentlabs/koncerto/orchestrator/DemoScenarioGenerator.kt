@@ -167,12 +167,30 @@ class DemoScenarioGenerator(
             try {
                 val pb = ProcessBuilder(command).directory(workDir).redirectErrorStream(true)
                 val process = pb.start()
+                // Drain stdout on a separate thread WHILE waiting, not after. A verbose opencode
+                // transcript (tool-call previews, sub-agent narration) routinely exceeds the OS
+                // pipe buffer; with nothing reading it, the child blocks on write() and waitFor()
+                // just spins until the timeout — every real invocation "times out" even though
+                // the model itself finished, because nobody ever drained its output.
+                val outputBuilder = StringBuilder()
+                val readerThread = Thread {
+                    try {
+                        process.inputStream.bufferedReader().forEachLine { line ->
+                            outputBuilder.append(line).append('\n')
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                readerThread.isDaemon = true
+                readerThread.start()
                 val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
                 if (!completed) {
                     process.destroyForcibly()
+                    readerThread.join(2000)
                     return@ProcessRunner null
                 }
-                val output = process.inputStream.bufferedReader().use { it.readText() }
+                readerThread.join(5000)
+                val output = outputBuilder.toString()
                 if (process.exitValue() != 0) null else output.takeIf { it.isNotBlank() }
             } catch (_: Exception) {
                 null

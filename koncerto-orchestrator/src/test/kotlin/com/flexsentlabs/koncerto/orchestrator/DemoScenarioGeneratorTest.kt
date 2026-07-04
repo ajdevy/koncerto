@@ -483,6 +483,20 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `defaultProcessRunner does not deadlock on output larger than the OS pipe buffer`() {
+        // Writing stdout before draining it (the original bug) blocks the child process once
+        // the pipe buffer (~64KB on macOS/Linux) fills, and waitFor() just spins until timeout —
+        // this reproduces that with a real subprocess producing well over that amount.
+        val output = DemoScenarioGenerator.defaultProcessRunner().run(
+            listOf("bash", "-lc", "yes X | head -c 500000"),
+            File("/tmp"),
+            10
+        )
+        assertThat(output).isNotNull()
+        assertThat(output!!.length >= 400_000).isEqualTo(true)
+    }
+
+    @Test
     fun `generate returns null when scenario directory cannot be created`(@TempDir tmpDir: Path) = runTest {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
