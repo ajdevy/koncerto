@@ -33,9 +33,9 @@ class DemoScenarioGenerator(
         for (model in models) {
             val cmd = opencodeCommand.split(" ") + listOf("run", "--model", model, prompt)
             // Free-tier models reasoning over a real diff + writing a scenario file via tool
-            // calls routinely take 60-110s; 60s cut off every single attempt before it could
-            // ever finish, guaranteeing demo_scenario_all_models_failed on every real PR.
-            val output = processRunner.run(cmd, workDir, 180)
+            // calls routinely take 100-150s with real variance run to run; measured one real
+            // PR at both 110s and 139s. Leave real headroom rather than re-tuning to the edge.
+            val output = processRunner.run(cmd, workDir, 240)
             if (output != null) return output
             logger.warn("demo_scenario_model_failed", mapOf("model" to model))
         }
