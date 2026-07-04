@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.orchestrator
 import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.logging.StructuredLogger
+import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workspace.Workspace
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -10,7 +11,8 @@ import java.util.concurrent.TimeUnit
 class DemoScenarioGenerator(
     private val opencodeCommand: String,
     private val logger: StructuredLogger,
-    private val processRunner: ProcessRunner = defaultProcessRunner()
+    private val processRunner: ProcessRunner = defaultProcessRunner(),
+    private val workflowCache: WorkflowCache? = null
 ) {
     fun interface ProcessRunner {
         fun run(command: List<String>, workDir: File, timeoutSeconds: Long): String?
@@ -61,7 +63,12 @@ class DemoScenarioGenerator(
     }
 
     internal fun buildPrompt(issue: Issue, workspace: Workspace): String {
-        val systemPromptFile = workspace.path.resolve("prompts/demo-scenario.md").toFile()
+        // The demo-scenario system prompt is a koncerto-provided template (like implement.md /
+        // review.md), not something individual target projects ship — it must resolve relative
+        // to koncerto's own workflow directory, not the target project's own workspace, or it's
+        // silently never found and the model gets no formatting instructions at all.
+        val systemPromptFile = workflowCache?.workflowDir?.resolve("prompts/demo-scenario.md")?.toFile()
+            ?: workspace.path.resolve("prompts/demo-scenario.md").toFile()
         val systemPrompt = if (systemPromptFile.exists()) systemPromptFile.readText() else ""
 
         val readmeFile = workspace.path.resolve("README.md").toFile()

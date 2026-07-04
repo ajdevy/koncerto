@@ -155,6 +155,29 @@ class DemoScenarioGeneratorTest {
         assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
     }
 
+    @Test
+    fun `buildPrompt reads demo-scenario system prompt from koncerto's own workflow dir, not the target project workspace`(
+        @TempDir tmpDir: Path,
+        @TempDir workflowDir: Path
+    ) {
+        // The demo-scenario prompt is a koncerto-provided template — target projects don't ship
+        // their own copy — so it must resolve relative to koncerto's own workflow directory.
+        val promptsDir = workflowDir.resolve("prompts").also { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.writeString(promptsDir.resolve("demo-scenario.md"), "You are a demo scenario generator.")
+        val cache = com.flexsentlabs.koncerto.workflow.WorkflowCache()
+        cache.setWorkflowDir(workflowDir)
+
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val gen = DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), workflowCache = cache)
+        val prompt = gen.buildPrompt(issue, workspace)
+        assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
+    }
+
     private fun generatorWithRunner(runner: DemoScenarioGenerator.ProcessRunner) =
         DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), processRunner = runner)
 
