@@ -4,6 +4,7 @@ import com.flexsentlabs.koncerto.core.circuitbreaker.ProviderCircuitBreaker
 import com.flexsentlabs.koncerto.core.ratelimit.RateLimitProvider
 import com.flexsentlabs.koncerto.core.retry.RetryConfig
 import com.flexsentlabs.koncerto.core.retry.RetryStrategy
+import io.netty.resolver.DefaultAddressResolverGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -11,9 +12,11 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
+import org.springframework.http.client.reactive.ReactorClientHttpConnector
 import org.springframework.web.reactive.function.client.WebClient
 import org.springframework.web.reactive.function.client.WebClientResponseException
 import org.springframework.web.reactive.function.client.bodyToMono
+import reactor.netty.http.client.HttpClient
 import java.time.Duration
 
 open class LinearGraphQLClient(
@@ -23,8 +26,17 @@ open class LinearGraphQLClient(
     private val rateLimitProvider: RateLimitProvider? = null,
     private val circuitBreaker: ProviderCircuitBreaker? = null
 ) {
+    // Reactor Netty's default async DNS resolver (netty-resolver-dns) can fail to resolve
+    // hosts that the OS resolver handles fine — e.g. behind VPNs/split-DNS setups where its
+    // own /etc/resolver parsing diverges from the system resolver. Force the JDK's blocking
+    // system resolver instead, matching what curl/java.net.InetAddress use.
     private val client: WebClient = WebClient.builder()
         .baseUrl(endpoint)
+        .clientConnector(
+            ReactorClientHttpConnector(
+                HttpClient.create().resolver(DefaultAddressResolverGroup.INSTANCE)
+            )
+        )
         .defaultHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
         .build()
 

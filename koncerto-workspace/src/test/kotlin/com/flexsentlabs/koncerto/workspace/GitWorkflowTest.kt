@@ -495,6 +495,39 @@ class GitWorkflowTest {
     }
 
     @Test
+    fun `createBranch checks out remote branch even when workspace already has an untracked gitignore`() {
+        // Mirrors WorkspaceManager.ensureWorkspace(), which writes .gitignore before
+        // createBranch() ever runs. The remote's own tracked .gitignore must not collide
+        // with it and abort the checkout.
+        val bareDir = Files.createTempDirectory("bare-origin-")
+        ProcessBuilder("git", "init", "--bare", "--initial-branch=main")
+            .directory(bareDir.toFile()).redirectErrorStream(true).start().waitFor()
+        val seedDir = Files.createTempDirectory("seed-repo-")
+        ProcessBuilder("git", "init", "--initial-branch=main")
+            .directory(seedDir.toFile()).redirectErrorStream(true).start().waitFor()
+        runGitIn(seedDir, "config", "user.email", "test@test.com")
+        runGitIn(seedDir, "config", "user.name", "Test")
+        seedDir.resolve(".gitignore").writeText("node_modules/\n")
+        seedDir.resolve("README.md").writeText("# seed")
+        runGitIn(seedDir, "add", "-A")
+        runGitIn(seedDir, "commit", "-m", "initial")
+        runGitIn(seedDir, "remote", "add", "origin", bareDir.toString())
+        runGitIn(seedDir, "push", "-u", "origin", "main")
+
+        val newDir = Files.createTempDirectory("new-remote-ws-")
+        newDir.resolve(".gitignore").writeText(KoncertoArtifactIgnore.GITIGNORE_BLOCK)
+
+        val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
+        val workflow = GitWorkflow(config, noopLogger())
+        workflow.createBranch(newDir, "GITIGNORE-1")
+
+        val branch = runGitIn(newDir, "rev-parse", "--abbrev-ref", "HEAD")
+        assertThat(branch).isEqualTo("feature/GITIGNORE-1")
+        assertThat(newDir.resolve("README.md").toFile().exists()).isTrue()
+        assertThat(newDir.resolve(".gitignore").readText()).contains(KoncertoArtifactIgnore.MARKER)
+    }
+
+    @Test
     fun `createBranch on existing repo checks out from origin base when remoteUrl set`() {
         val bareDir = createBareRemoteWithMain()
         runGit("remote", "add", "origin", bareDir.toString())

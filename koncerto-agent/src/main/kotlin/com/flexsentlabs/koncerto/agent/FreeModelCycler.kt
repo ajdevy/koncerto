@@ -101,10 +101,14 @@ class FreeModelCycler(
     }
 
     companion object {
+        // These must be real opencode model IDs (see `opencode models`) — they're passed
+        // directly as `--model <id>` to the opencode CLI. Placeholder names like
+        // "opencode-free-1" aren't resolvable and fail every call with a server error.
         val DEFAULT_FREE_MODELS = listOf(
-            "opencode-free-1",
-            "opencode-free-2",
-            "opencode-free-3"
+            "opencode/deepseek-v4-flash-free",
+            "opencode/mimo-v2.5-free",
+            "opencode/nemotron-3-ultra-free",
+            "opencode/north-mini-code-free"
         )
 
         fun createDefault(logger: StructuredLogger, maxRetriesPerModel: Int = 3): FreeModelCycler {

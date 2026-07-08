@@ -75,58 +75,62 @@ open class GitWorkflow(
         runGitSafe(workspacePath, "reset", "--hard", "HEAD")
         runGitSafe(workspacePath, "clean", "-fd")
 
-        // Add gitignore after cleanup so stale artifacts are removed first
-        KoncertoArtifactIgnore.ensureGitignore(workspacePath)
-
-        if (isNewRepo && config.remoteUrl.isNotBlank()) {
-            val branch = branchName(issueIdentifier)
-            val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
-            if (fetchResult != null) {
-                runGitSafe(workspacePath, "branch", "-f", config.prBase, "origin/${config.prBase}")
-                if (remoteBranchExists(branch, workspacePath)) {
-                    runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
-                } else {
-                    runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
+        // Gitignore is (re-)added in the `finally` below, AFTER any fetch+checkout of a real
+        // remote branch — adding it beforehand leaves an untracked .gitignore in the working
+        // tree that collides with the remote branch's own tracked .gitignore, aborting checkout.
+        try {
+            if (isNewRepo && config.remoteUrl.isNotBlank()) {
+                val branch = branchName(issueIdentifier)
+                val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
+                if (fetchResult != null) {
+                    runGitSafe(workspacePath, "branch", "-f", config.prBase, "origin/${config.prBase}")
+                    if (remoteBranchExists(branch, workspacePath)) {
+                        runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
+                    } else {
+                        runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
+                    }
+                    return
                 }
+                // Fall through to local init if fetch fails
+                val readme = workspacePath.resolve("README.md")
+                if (!readme.toFile().exists()) {
+                    readme.toFile().writeText("# ${workspacePath.fileName}\n")
+                }
+                runGitSafe(workspacePath, "add", "-A")
+                runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "initial")
+            }
+
+            val branch = branchName(issueIdentifier)
+            if (!isNewRepo && config.remoteUrl.isNotBlank()) {
+                runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
+            }
+
+            val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
+            val remoteBranchExists = remoteBranchExists(branch, workspacePath)
+            if (branchExists && remoteBranchExists) {
+                runGitSafe(workspacePath, "checkout", branch)
+                runGitSafe(workspacePath, "reset", "--hard", "origin/$branch")
                 return
             }
-            // Fall through to local init if fetch fails
-            val readme = workspacePath.resolve("README.md")
-            if (!readme.toFile().exists()) {
-                readme.toFile().writeText("# ${workspacePath.fileName}\n")
+            if (branchExists) {
+                runGitSafe(workspacePath, "checkout", branch)
+                return
             }
-            runGitSafe(workspacePath, "add", "-A")
-            runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "initial")
-        }
-
-        val branch = branchName(issueIdentifier)
-        if (!isNewRepo && config.remoteUrl.isNotBlank()) {
-            runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
-        }
-
-        val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
-        val remoteBranchExists = remoteBranchExists(branch, workspacePath)
-        if (branchExists && remoteBranchExists) {
-            runGitSafe(workspacePath, "checkout", branch)
-            runGitSafe(workspacePath, "reset", "--hard", "origin/$branch")
-            return
-        }
-        if (branchExists) {
-            runGitSafe(workspacePath, "checkout", branch)
-            return
-        }
-        if (remoteBranchExists) {
-            runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
-            return
-        }
-        val remoteRef = "origin/${config.prBase}"
-        val remoteExists = runGitSafe(workspacePath, "rev-parse", "--verify", remoteRef)
-        if (remoteExists != null) {
-            // Sync local base branch to origin so gh PR create works
-            runGitSafe(workspacePath, "branch", "-f", config.prBase, remoteRef)
-            runGitSafe(workspacePath, "checkout", "-b", branch, remoteRef)
-        } else {
-            runGitSafe(workspacePath, "checkout", "-b", branch)
+            if (remoteBranchExists) {
+                runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
+                return
+            }
+            val remoteRef = "origin/${config.prBase}"
+            val remoteExists = runGitSafe(workspacePath, "rev-parse", "--verify", remoteRef)
+            if (remoteExists != null) {
+                // Sync local base branch to origin so gh PR create works
+                runGitSafe(workspacePath, "branch", "-f", config.prBase, remoteRef)
+                runGitSafe(workspacePath, "checkout", "-b", branch, remoteRef)
+            } else {
+                runGitSafe(workspacePath, "checkout", "-b", branch)
+            }
+        } finally {
+            KoncertoArtifactIgnore.ensureGitignore(workspacePath)
         }
     }
 
@@ -193,7 +197,21 @@ open class GitWorkflow(
         if (repo != null) {
             args += listOf("--repo", repo)
         }
-        return runGhSafe(workspacePath, *args.toTypedArray())
+        val created = runGhSafe(workspacePath, *args.toTypedArray())
+        if (created != null) return created
+        // `gh pr create` fails (non-zero exit) if a PR for this branch already exists —
+        // e.g. a prior review cycle for the same issue already opened one. Treat that as
+        // success and return the existing PR's URL instead of null, so callers don't
+        // mistake "already open" for "failed to open" and endlessly re-run the review.
+        return findExistingPullRequestUrl(workspacePath, branch, repo)
+    }
+
+    private fun findExistingPullRequestUrl(workspacePath: Path, branch: String, repo: String?): String? {
+        val args = mutableListOf("pr", "view", branch, "--json", "url", "-q", ".url")
+        if (repo != null) {
+            args += listOf("--repo", repo)
+        }
+        return runGhSafe(workspacePath, *args.toTypedArray())?.trim()?.takeIf { it.isNotBlank() }
     }
 
     private fun isGitRepo(path: Path): Boolean = Files.exists(path.resolve(".git"))

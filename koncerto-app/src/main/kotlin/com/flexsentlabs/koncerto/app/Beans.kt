@@ -415,7 +415,7 @@ class Beans {
                         targetProjectDeployer = targetProjectDeployer(logger),
                         deployRepoFullName = parseRepoFullName(config),
                         demoFailureReporter = DemoFailureReporter(logger),
-                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger)
+                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache)
                     )
                 }
             } else null

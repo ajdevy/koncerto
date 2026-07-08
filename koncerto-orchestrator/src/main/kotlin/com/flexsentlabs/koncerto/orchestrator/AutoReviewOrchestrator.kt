@@ -3,6 +3,7 @@ package com.flexsentlabs.koncerto.orchestrator
 import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
+import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.tracker.TrackerClient
 import com.flexsentlabs.koncerto.deploy.DeployConfig
@@ -223,6 +224,7 @@ class AutoReviewOrchestrator(
         stage: StageAgentConfig,
         currentAttempt: Int
     ): ReviewDecision {
+        val scenarioGenerationAttempted = demoScenarioGenerator != null
         val scenarioPath = runCatching {
             workspace?.let { demoScenarioGenerator?.generate(issue, it) }
         }.onFailure { e ->
@@ -236,6 +238,21 @@ class AutoReviewOrchestrator(
         }.getOrNull()
         if (scenarioPath != null) {
             traceReviewStep(workspace, issue, "demo_scenario", "saved", mapOf("path" to scenarioPath))
+        } else if (scenarioGenerationAttempted) {
+            // A scenario generator IS configured but could not produce a scenario even after
+            // its own internal fallback/retry passes — never fall back to recording without one
+            // (a scenario-less recording just shows the app idling, which isn't a useful demo).
+            // Treat this the same as a demo recording failure: block for a human to notice
+            // rather than silently shipping a low-value recording.
+            logger.warn("demo_scenario_generation_exhausted", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "demo_scenario", "exhausted")
+            workspace?.let { cleanupReviewFiles(it.path) }
+            handleDemoRecordingFailure(issue, "scenario generation failed after exhausting all fallback models")
+            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                "attempt" to currentAttempt.toString(),
+                "reason" to "no_scenario"
+            ))
+            return ReviewDecision.Blocked
         } else {
             traceReviewStep(workspace, issue, "demo_scenario", "skipped")
         }
@@ -512,9 +529,13 @@ class AutoReviewOrchestrator(
         val outputFile = workspacePath.resolve(".review-output")
         if (!Files.exists(outputFile)) return false
         val content = runCatching { Files.readString(outputFile) }.getOrNull() ?: return false
+        // "rate limit" alone is deliberately not checked here — it's a generic enough phrase
+        // that a passing review discussing the REVIEWED APP's own rate-limiting code (e.g. an
+        // auth/API review, which commonly flags this) false-positives as Claude's own usage
+        // limit being hit, silently discarding a real pass/fail verdict on every such review.
         return content.contains("monthly usage limit") ||
-            content.contains("rate limit") ||
-            content.contains("subscription limit")
+            content.contains("subscription limit") ||
+            PatternErrorClassifier.SUBSCRIPTION_USAGE_PATTERN.containsMatchIn(content)
     }
 
     private suspend fun handleSubscriptionLimit(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace): ReviewDecision {

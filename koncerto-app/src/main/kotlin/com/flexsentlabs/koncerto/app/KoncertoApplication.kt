@@ -75,6 +75,11 @@ fun main(args: Array<String>) {
                 }
             }
         }
+        // Always stop the tick loop on shutdown, not just when agents were draining above —
+        // otherwise an idle orchestrator keeps polling/dispatching against a torn-down Spring
+        // context (e.g. a closed FileAuditLogger) for as long as this hook thread is still
+        // running its own cleanup, surfacing as spurious "Stream closed" dispatch failures.
+        orchestrator.stop()
         dockerLifecycle.cleanOnShutdown()
     })
 }

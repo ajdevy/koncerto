@@ -36,6 +36,9 @@ log/
 __pycache__/
 *.py[cod]
 
+# Node (PlaywrightRecorder's Node.js playwright package)
+node_modules/
+
 # Local secrets (bot tokens, API keys)
 local.properties
 
@@ -53,7 +56,7 @@ config/ngrok.yml
 .review-*
 .model-exhausted*
 .runtime/
-workspace/
+/workspace/
 
 
 # Gradle local plugin repo variant jars

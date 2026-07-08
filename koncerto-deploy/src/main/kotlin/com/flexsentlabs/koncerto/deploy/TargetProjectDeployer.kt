@@ -195,7 +195,9 @@ class TargetProjectDeployer(
                     "tag" to tag,
                     "port" to hostPort.toString()
                 ))
-                return DeployResult.success("http://host.docker.internal:$hostPort", isCompose = true, tag = tag)
+                // host.docker.internal only resolves from within a container; the demo recorder
+                // always runs natively on this host, where localhost reaches the published port.
+                return DeployResult.success("http://localhost:$hostPort", isCompose = true, tag = tag)
             }
 
             // Infra-only compose: keep infra running, detect and deploy the app

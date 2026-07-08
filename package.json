@@ -1,0 +1,10 @@
+{
+  "name": "koncerto",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js runtime dependency for Koncerto's PlaywrightRecorder demo recording",
+  "license": "ISC",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

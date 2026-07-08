@@ -5,6 +5,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.coroutines.test.runTest
@@ -93,6 +94,75 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `extractScenarioBlock parses unlabeled fence whose content already starts with demo_scenario`() {
+        // The actual format real models produce, matching demo-scenario.md's own example: the
+        // fence has no inline label, and "demo_scenario:" is the first line of content.
+        val raw = """
+            Here's the scenario:
+
+            ```yaml
+            demo_scenario:
+              description: "Login flow"
+              steps:
+                - action: click
+                  selector: "text=Submit"
+            ```
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.startsWith("demo_scenario:")).isEqualTo(true)
+        assertThat(result.contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock tolerates blank lines within an unfenced demo_scenario block`() {
+        val raw = """
+            demo_scenario:
+              description: "Login flow"
+
+              steps:
+                - action: navigate
+                  url: /
+
+                - action: click
+                  selector: "text=Submit"
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.contains("action: navigate")).isEqualTo(true)
+        assertThat(result.contains("action: click")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock uses the last fenced block when the model revises an earlier draft`() {
+        val raw = """
+            Reading existing scenario...
+
+            ```yaml
+            demo_scenario:
+              description: "Draft"
+              steps:
+                - action: click
+                  selector: "text=Old"
+            ```
+
+            Actually, let me improve it:
+
+            ```yaml
+            demo_scenario:
+              description: "Final"
+              steps:
+                - action: click
+                  selector: "text=New"
+            ```
+        """.trimIndent()
+        val result = generator().extractScenarioBlock(raw)
+        assertThat(result).isNotNull()
+        assertThat(result!!.contains("text=New")).isEqualTo(true)
+        assertThat(result.contains("text=Old")).isEqualTo(false)
+    }
+
+    @Test
     fun `buildPrompt includes issue title and description`(@TempDir tmpDir: Path) {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
@@ -154,6 +224,29 @@ class DemoScenarioGeneratorTest {
         assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
     }
 
+    @Test
+    fun `buildPrompt reads demo-scenario system prompt from koncerto's own workflow dir, not the target project workspace`(
+        @TempDir tmpDir: Path,
+        @TempDir workflowDir: Path
+    ) {
+        // The demo-scenario prompt is a koncerto-provided template — target projects don't ship
+        // their own copy — so it must resolve relative to koncerto's own workflow directory.
+        val promptsDir = workflowDir.resolve("prompts").also { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.writeString(promptsDir.resolve("demo-scenario.md"), "You are a demo scenario generator.")
+        val cache = com.flexsentlabs.koncerto.workflow.WorkflowCache()
+        cache.setWorkflowDir(workflowDir)
+
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Fix bug", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val gen = DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), workflowCache = cache)
+        val prompt = gen.buildPrompt(issue, workspace)
+        assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
+    }
+
     private fun generatorWithRunner(runner: DemoScenarioGenerator.ProcessRunner) =
         DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), processRunner = runner)
 
@@ -185,7 +278,7 @@ class DemoScenarioGeneratorTest {
         val result = gen.generate(issue, workspace)
 
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1"))
+        assertThat(calledModels).isEqualTo(listOf(FreeModelCycler.DEFAULT_FREE_MODELS[0]))
         val savedFile = File("/tmp/koncerto-demo/issue-1-scenario.yaml")
         assertThat(savedFile.exists()).isEqualTo(true)
         assertThat(savedFile.readText().contains("action: click")).isEqualTo(true)
@@ -203,13 +296,13 @@ class DemoScenarioGeneratorTest {
         val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
             val model = cmd[cmd.indexOf("--model") + 1]
             calledModels += model
-            if (model == "opencode-free-1") null else validScenarioOutput
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[0]) null else validScenarioOutput
         }
         val gen = generatorWithRunner(runner)
         val result = gen.generate(issue, workspace)
 
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2"))
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(2))
     }
 
     @Test
@@ -277,6 +370,28 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `generate tries the next model when a response can't be parsed into a scenario`(@TempDir tmpDir: java.nio.file.Path) = runTest {
+        // A model responding with something unparseable must not be treated the same as it
+        // failing to respond at all — it should still fall through to the next model rather
+        // than giving up on the very first response received.
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-6", identifier = "T-6", title = "Feature", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val calledModels = mutableListOf<String>()
+        val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
+            val model = cmd[cmd.indexOf("--model") + 1]
+            calledModels += model
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[0]) "Sorry, I cannot help with that." else validScenarioOutput
+        }
+        val result = generatorWithRunner(runner).generate(issue, workspace)
+        assertThat(result).isNotNull()
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(2))
+    }
+
+    @Test
     fun `generate falls back to third model when first two fail`(@TempDir tmpDir: java.nio.file.Path) = runTest {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
@@ -288,11 +403,11 @@ class DemoScenarioGeneratorTest {
         val runner = DemoScenarioGenerator.ProcessRunner { cmd, _, _ ->
             val model = cmd[cmd.indexOf("--model") + 1]
             calledModels += model
-            if (model == "opencode-free-3") validScenarioOutput else null
+            if (model == FreeModelCycler.DEFAULT_FREE_MODELS[2]) validScenarioOutput else null
         }
         val result = generatorWithRunner(runner).generate(issue, workspace)
         assertThat(result).isNotNull()
-        assertThat(calledModels).isEqualTo(listOf("opencode-free-1", "opencode-free-2", "opencode-free-3"))
+        assertThat(calledModels).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.take(3))
     }
 
     private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {
@@ -387,6 +502,20 @@ class DemoScenarioGeneratorTest {
             1
         )
         assertThat(output).isNull()
+    }
+
+    @Test
+    fun `defaultProcessRunner does not deadlock on output larger than the OS pipe buffer`() {
+        // Writing stdout before draining it (the original bug) blocks the child process once
+        // the pipe buffer (~64KB on macOS/Linux) fills, and waitFor() just spins until timeout —
+        // this reproduces that with a real subprocess producing well over that amount.
+        val output = DemoScenarioGenerator.defaultProcessRunner().run(
+            listOf("bash", "-lc", "yes X | head -c 500000"),
+            File("/tmp"),
+            10
+        )
+        assertThat(output).isNotNull()
+        assertThat(output!!.length >= 400_000).isEqualTo(true)
     }
 
     @Test
