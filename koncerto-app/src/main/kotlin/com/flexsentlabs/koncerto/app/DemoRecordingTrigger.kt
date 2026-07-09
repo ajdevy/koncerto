@@ -79,11 +79,13 @@ object DemoRecordingTrigger {
             if (deployResult?.logs != null) println(deployResult.logs)
             kotlin.system.exitProcess(1)
         }
-        val targetUrl = deployResult.url ?: error("Deploy succeeded but no URL returned")
-        println("Target project deployed at: $targetUrl")
+        val hostUrl = deployResult.url ?: error("Deploy succeeded but no URL returned")
+        val recordingUrl = deployResult.internalUrl
+            ?: error("Deploy succeeded but no internal network URL was returned — the recorder runs in Docker and needs one")
+        println("Target project deployed at: $hostUrl (recording via $recordingUrl)")
 
-        println("Recording demo for $issueIdentifier ($resolvedIssueId) at $targetUrl...")
-        val recordingService = createRecordingService(config, dbPath, targetUrl, logger)
+        println("Recording demo for $issueIdentifier ($resolvedIssueId) at $recordingUrl...")
+        val recordingService = createRecordingService(config, dbPath, recordingUrl, logger)
         val result = runBlocking {
             recordingService.requestRecording(
                 issueId = resolvedIssueId,
@@ -91,7 +93,7 @@ object DemoRecordingTrigger {
                 projectSlug = projectSlug,
                 platform = null,
                 trigger = DemoTrigger.MANUAL,
-                targetUrl = targetUrl
+                targetUrl = recordingUrl
             )
         }
 
