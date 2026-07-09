@@ -85,11 +85,14 @@ data class ServiceConfig(
             val gitRemoteUrl = resolveEnvRef(map["git_remote_url"] as? String)
                 ?: resolveEnvRef(map["remote_url"] as? String)
                 ?: ""
+            val demoSecretsFile = resolveEnvRef(map["demo_secrets_file"] as? String)
+                ?: resolveEnvRef(map["demoSecretsFile"] as? String)
             return ProjectConfig(
                 tracker = tracker, workspace = workspace, agent = agent,
                 gitRemoteUrl = gitRemoteUrl,
                 rateLimiter = rateLimiter, circuitBreaker = circuitBreaker,
-                notifications = notifications
+                notifications = notifications,
+                demoSecretsFile = demoSecretsFile
             )
         }
 

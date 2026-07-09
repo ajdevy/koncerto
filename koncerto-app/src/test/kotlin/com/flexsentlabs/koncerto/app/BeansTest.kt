@@ -46,6 +46,8 @@ import com.flexsentlabs.koncerto.logging.audit.FileAuditLogger
 import com.flexsentlabs.koncerto.metrics.MetricsRepository
 import com.flexsentlabs.koncerto.metrics.SqliteMetricsRepository
 import com.flexsentlabs.koncerto.notifications.channel.LoggingNotifier
+import com.flexsentlabs.koncerto.orchestrator.AutoReviewOrchestrator
+import com.flexsentlabs.koncerto.orchestrator.Orchestrator
 import com.flexsentlabs.koncerto.orchestrator.RuntimeState
 import com.flexsentlabs.koncerto.orchestrator.SubtaskFrontier
 import com.flexsentlabs.koncerto.orchestrator.WorkplanParser
@@ -572,9 +574,106 @@ class BeansTest {
             subtaskOrchestrator = subtaskOrchestrator,
             workplanParser = workplanParser,
             auditLogger = auditLogger,
-            demoEventListener = null
+            demoEventListener = null,
+            targetProjectDeployer = beans.targetProjectDeployer(logger)
         )
         assertThat(orchestrator).isNotNull()
+    }
+
+    @Test
+    fun `orchestrator wires the same targetProjectDeployer singleton into AutoReviewOrchestrator`() {
+        // Regression test for a real production bug: Beans is @Configuration(proxyBeanMethods
+        // = false), so calling targetProjectDeployer(logger) directly inside the
+        // autoReviewOrchestratorFactory lambda (instead of receiving it as an injected
+        // parameter) silently built a BRAND NEW TargetProjectDeployer, disconnected from the
+        // singleton the orphan-container cleanup scheduler holds. That meant an in-flight-
+        // deployment guard on one instance was invisible to the periodic sweep running against
+        // the other, and the sweep force-removed a container mid-recording. Fixed by adding
+        // targetProjectDeployer as a real @Bean-injected parameter and threading that same
+        // reference through to AutoReviewOrchestrator.
+        val stageConfig = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = null
+        )
+        val config = ServiceConfig(
+            projects = mapOf("test" to ProjectConfig(
+                tracker = TrackerConfig("linear", "x", "k", "p"),
+                workspace = WorkspaceConfig("/tmp"),
+                agent = AgentProjectConfig(kind = "opencode", stages = mapOf("in review" to stageConfig))
+            ))
+        )
+        val tempDir = Files.createTempDirectory("orchestrator-deployer-wiring-test")
+        val hookExecutor = HookExecutor { _, _ -> }
+        val workspaces = WorkspaceManager(tempDir, hookExecutor)
+        val agentRuntimeFactory = AgentRuntimeFactory(logger)
+        val gitWorkflow = GitWorkflow(GitConfig(false), logger)
+        val runtimeStates = mapOf("test" to RuntimeState())
+        val circuitBreaker = AgentCircuitBreaker()
+        val errorTracker = DefaultErrorTracker()
+        val healthChecker = DefaultAgentHealthChecker()
+        val errorClassifier = PatternErrorClassifier()
+        val freeModelCycler = FreeModelCycler.createDefault(logger)
+        val logNotifier = LoggingNotifier(logger)
+        val compositeNotifier = com.flexsentlabs.koncerto.notifications.CompositeNotifier(listOf(logNotifier))
+        val linearClientFactory: (ProjectConfig) -> LinearClient = {
+            com.flexsentlabs.koncerto.linear.DefaultLinearClient(
+                com.flexsentlabs.koncerto.linear.LinearGraphQLClient("http://x", "k"),
+                "p"
+            )
+        }
+        val modelRetryHandler = com.flexsentlabs.koncerto.agent.ModelRetryHandler(
+            cycler = freeModelCycler,
+            projectConfig = config.projects.values.first(),
+            linearClient = linearClientFactory(config.projects.values.first()),
+            notifier = compositeNotifier,
+            logger = logger
+        )
+        val runner = beans.agentRunner(
+            config, workspaces, logger, agentRuntimeFactory, gitWorkflow,
+            runtimeStates, circuitBreaker, errorTracker, healthChecker,
+            errorClassifier, freeModelCycler, modelRetryHandler
+        )
+        val cache = WorkflowCache()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val workspaceManagerFactory: (ProjectConfig) -> WorkspaceManager = { pc ->
+            WorkspaceManager(Paths.get(pc.workspace.root), hookExecutor)
+        }
+        val metricsRepository = SqliteMetricsRepository(":memory:")
+        val subtaskOrchestrator = beans.subtaskOrchestrator(DefaultSubtaskRunner(logger, null), gitWorkflow, logger)
+        val workplanParser = WorkplanParser(logger)
+        val auditLogger = FileAuditLogger(Files.createTempFile("audit", ".log"))
+        val theSingleton = beans.targetProjectDeployer(logger)
+
+        val orchestrator = beans.orchestrator(
+            config = config,
+            runner = runner,
+            cache = cache,
+            logger = logger,
+            scope = scope,
+            linearClientFactory = linearClientFactory,
+            workspaceManagerFactory = workspaceManagerFactory,
+            runtimeStates = runtimeStates,
+            metricsRepository = metricsRepository,
+            compositeNotifier = compositeNotifier,
+            subtaskOrchestrator = subtaskOrchestrator,
+            workplanParser = workplanParser,
+            auditLogger = auditLogger,
+            demoEventListener = null,
+            targetProjectDeployer = theSingleton
+        )
+
+        val factoryField = Orchestrator::class.java.getDeclaredField("autoReviewOrchestratorFactory")
+        factoryField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val factory = factoryField.get(orchestrator)
+            as (ProjectConfig, RuntimeState) -> AutoReviewOrchestrator
+        val autoReview = factory(config.projects.values.first(), RuntimeState())
+
+        val deployerField = AutoReviewOrchestrator::class.java.getDeclaredField("targetProjectDeployer")
+        deployerField.isAccessible = true
+        val wiredDeployer = deployerField.get(autoReview)
+
+        assertThat(wiredDeployer === theSingleton).isTrue()
     }
 
     @Test
@@ -1389,7 +1488,8 @@ class BeansTest {
             subtaskOrchestrator = beans.subtaskOrchestrator(DefaultSubtaskRunner(logger, null), gitWorkflow, logger),
             workplanParser = WorkplanParser(logger),
             auditLogger = FileAuditLogger(Files.createTempFile("audit", ".log")),
-            demoEventListener = null
+            demoEventListener = null,
+            targetProjectDeployer = beans.targetProjectDeployer(logger)
         )
     }
 }

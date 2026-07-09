@@ -59,6 +59,13 @@ class AutoReviewOrchestrator(
 
     private var reviewSequence = 0
 
+    private companion object {
+        // Max demo→fix recovery cycles per issue before the ticket is Blocked. Counts both
+        // scenario repairs and code-fix escalations, so a persistently-unrecordable demo can't
+        // loop indefinitely.
+        const val MAX_DEMO_RECOVERY = 3
+    }
+
     suspend fun onCodingComplete(issue: Issue): ReviewDecision {
         val stage = reviewStage ?: return ReviewDecision.NoReview
 
@@ -257,103 +264,154 @@ class AutoReviewOrchestrator(
             traceReviewStep(workspace, issue, "demo_scenario", "skipped")
         }
 
-        val deployResult = runCatching {
-            deployTargetProject(issue, workspace)
-        }.onFailure { e ->
-            logger.warn("deploy_target_project_unhandled_error", mapOf(
-                "issue_id" to issue.id,
-                "error" to (e.message ?: "unknown")
-            ))
-            traceReviewStep(workspace, issue, "deploy_target_project", "failed", mapOf(
-                "error" to (e.message ?: "unknown")
-            ))
-        }.getOrNull()
+        // Reliable missing-secret gate: the dispatch-start preflight can be a no-op on a brand-new
+        // ticket (the repo isn't checked out yet), but by now the workspace is fully populated, so we
+        // can detect required secrets accurately. A missing operator secret is NOT agent-fixable, so
+        // block directly here rather than feeding it into the self-healing recovery loop.
+        if (workspace != null) {
+            val missing = runCatching {
+                val required = com.flexsentlabs.koncerto.deploy.SecretRequirementDetector().detect(workspace.path)
+                val provided = com.flexsentlabs.koncerto.deploy.SecretsFile.load(projectConfig.demoSecretsFile).keys
+                (required - provided).sorted()
+            }.getOrDefault(emptyList())
+            if (missing.isNotEmpty()) {
+                logger.warn("demo_blocked_missing_secrets", mapOf(
+                    "issue_id" to issue.id, "missing" to missing.joinToString(",")))
+                cleanupReviewFiles(workspace.path)
+                handleDemoRecordingFailure(issue,
+                    "required secret(s) not configured: ${missing.joinToString(", ")}. " +
+                        "Add them to this project's demo secrets file, then unblock.")
+                traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                    "attempt" to currentAttempt.toString(), "reason" to "missing_secrets"))
+                return ReviewDecision.Blocked
+            }
+        }
+
+        return runDemoWithRecovery(issue, workspace, stage, currentAttempt, scenarioPath)
+    }
+
+    /**
+     * Records the demo with bounded self-healing. On a recording failure it first tries a cheap
+     * scenario repair and re-records against the SAME deployment (no re-review). If a scenario
+     * repair cannot be produced, it escalates to a target-code fix by writing the failure as
+     * coding feedback and returning [ReviewDecision.RetryWithCoding], so the normal coding+review
+     * loop re-runs and — on a fresh review pass — re-enters here. A per-issue counter caps the
+     * whole thing at [MAX_DEMO_RECOVERY] cycles, after which the ticket is Blocked with a comment.
+     */
+    private suspend fun runDemoWithRecovery(
+        issue: Issue,
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        stage: StageAgentConfig,
+        currentAttempt: Int,
+        initialScenarioPath: String?
+    ): ReviewDecision {
+        val deployResult = runCatching { deployTargetProject(issue, workspace) }
+            .onFailure { e ->
+                logger.warn("deploy_target_project_unhandled_error", mapOf(
+                    "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+                traceReviewStep(workspace, issue, "deploy_target_project", "failed", mapOf(
+                    "error" to (e.message ?: "unknown")))
+            }.getOrNull()
         val deployUrl = deployResult?.url
         if (deployResult != null) {
             traceReviewStep(workspace, issue, "deploy_target_project", if (deployResult.success) "ok" else "failed", mapOf(
-                "url" to (deployUrl ?: ""),
-                "error" to (deployResult.error ?: "")
-            ))
+                "url" to (deployUrl ?: ""), "error" to (deployResult.error ?: "")))
         }
 
-        var demoRecordingError: String? = null
-        val demoUrl = runCatching {
-            onReviewPassed?.invoke(issue, deployUrl)
-        }.onFailure { e ->
-            demoRecordingError = e.message ?: "unknown"
-            logger.warn("demo_recording_callback_failed", mapOf(
-                "issue_id" to issue.id,
-                "error" to (e.message ?: "unknown")
-            ))
-            traceReviewStep(workspace, issue, "demo_recording", "failed", mapOf(
-                "error" to (e.message ?: "unknown")
-            ))
-        }.getOrNull()
-        if (demoUrl != null) {
-            traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
-        } else if (demoRecordingError != null) {
-            if (deployResult != null) {
-                runCatching {
-                    cleanupDemoDeploy(issue, workspace, deployResult)
-                }.onFailure { e ->
-                    logger.warn("demo_cleanup_failed", mapOf(
-                        "issue_id" to issue.id,
-                        "error" to (e.message ?: "unknown")
-                    ))
-                    traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
-                        "error" to (e.message ?: "unknown")
-                    ))
-                }
-                traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
+        while (true) {
+            var demoRecordingError: String? = null
+            val demoUrl = runCatching { onReviewPassed?.invoke(issue, deployUrl) }
+                .onFailure { e ->
+                    demoRecordingError = e.message ?: "unknown"
+                    logger.warn("demo_recording_callback_failed", mapOf(
+                        "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+                    traceReviewStep(workspace, issue, "demo_recording", "failed", mapOf(
+                        "error" to (e.message ?: "unknown")))
+                }.getOrNull()
+
+            // Success (or nothing to record) → post comment, clean up, pass.
+            if (demoUrl != null || demoRecordingError == null) {
+                if (demoUrl != null) traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
+                else traceReviewStep(workspace, issue, "demo_recording", "skipped")
+                runCatching { postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl) }
+                    .onFailure { e ->
+                        logger.warn("review_comment_pipeline_failed", mapOf(
+                            "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+                        traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf("error" to (e.message ?: "unknown")))
+                    }
+                traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf("demo_url" to (demoUrl ?: "")))
+                cleanupDeployBestEffort(issue, workspace, deployResult)
+                workspace?.let { cleanupReviewFiles(it.path) }
+                // Clear the recovery counter on success (mirrors reviewAttempts) so a later demo for
+                // the same issue starts with a fresh budget instead of inheriting a stale count.
+                runtimeState.demoRecoveryAttempts.remove(issue.id)
+                traceReviewStep(workspace, issue, "review_pass", "complete", mapOf(
+                    "attempt" to currentAttempt.toString(), "demo_url" to (demoUrl ?: ""), "deploy_url" to (deployUrl ?: "")))
+                return ReviewDecision.Pass(stage.onCompleteState)
             }
-            workspace?.let { cleanupReviewFiles(it.path) }
-            handleDemoRecordingFailure(issue, demoRecordingError!!)
-            traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
-                "attempt" to currentAttempt.toString(),
-                "demo_error" to demoRecordingError!!
-            ))
-            return ReviewDecision.Blocked
-        } else {
-            traceReviewStep(workspace, issue, "demo_recording", "skipped")
-        }
 
+            // Recording failed — count this recovery cycle.
+            val cycle = (runtimeState.demoRecoveryAttempts[issue.id] ?: 0) + 1
+            runtimeState.demoRecoveryAttempts[issue.id] = cycle
+            logger.info("demo_recovery_cycle", mapOf(
+                "issue_id" to issue.id, "cycle" to cycle.toString(), "error" to (demoRecordingError ?: "unknown")))
+
+            if (cycle >= MAX_DEMO_RECOVERY) {
+                cleanupDeployBestEffort(issue, workspace, deployResult)
+                workspace?.let { cleanupReviewFiles(it.path) }
+                handleDemoRecordingFailure(issue,
+                    "demo could not be produced after $cycle recovery cycles: ${demoRecordingError}")
+                // Reset so that if an operator later unblocks and re-dispatches this issue, it gets a
+                // fresh set of recovery cycles instead of being re-blocked on the very first failure.
+                runtimeState.demoRecoveryAttempts.remove(issue.id)
+                traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
+                    "attempt" to currentAttempt.toString(), "cycles" to cycle.toString(), "demo_error" to demoRecordingError!!))
+                return ReviewDecision.Blocked
+            }
+
+            // Scenario-first repair: re-record against the SAME deployment, no re-review.
+            val priorScenario = initialScenarioPath?.let { runCatching { java.io.File(it).readText() }.getOrNull() }
+            val generator = demoScenarioGenerator
+            val repaired = if (workspace != null && generator != null && priorScenario != null && deployUrl != null) {
+                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!) }.getOrNull()
+            } else null
+            if (repaired != null) {
+                traceReviewStep(workspace, issue, "demo_scenario", "repaired", mapOf("cycle" to cycle.toString()))
+                continue
+            }
+
+            // Scenario repair unavailable/ineffective → escalate to a target code fix + re-review.
+            cleanupDeployBestEffort(issue, workspace, deployResult)
+            workspace?.let { writeDemoFixRequest(it.path, demoRecordingError!!) }
+            traceReviewStep(workspace, issue, "demo_recovery", "escalated_to_code_fix", mapOf("cycle" to cycle.toString()))
+            logger.info("demo_recovery_code_fix", mapOf("issue_id" to issue.id, "cycle" to cycle.toString()))
+            return ReviewDecision.RetryWithCoding(stage.onFailureState)
+        }
+    }
+
+    private suspend fun cleanupDeployBestEffort(
+        issue: Issue,
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        deployResult: DeployResult?
+    ) {
+        if (deployResult == null) return
+        runCatching { cleanupDemoDeploy(issue, workspace, deployResult) }.onFailure { e ->
+            logger.warn("demo_cleanup_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf("error" to (e.message ?: "unknown")))
+        }
+        traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
+    }
+
+    /** Records the demo failure as coding feedback so a re-dispatched fix agent knows what to repair. */
+    private fun writeDemoFixRequest(workspacePath: Path, failureReason: String) {
         runCatching {
-            postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl)
+            workspacePath.resolve(".demo-fix-request").toFile().writeText(
+                "The demo recording failed and scenario repair did not resolve it. Fix the underlying " +
+                    "issue in the app so the demo flow works, then the demo will be re-recorded.\n\n" +
+                    "Failure detail:\n$failureReason\n")
         }.onFailure { e ->
-            logger.warn("review_comment_pipeline_failed", mapOf(
-                "issue_id" to issue.id,
-                "error" to (e.message ?: "unknown")
-            ))
-            traceReviewStep(workspace, issue, "pr_comment", "failed", mapOf(
-                "error" to (e.message ?: "unknown")
-            ))
+            logger.warn("demo_fix_request_write_failed", mapOf("error" to (e.message ?: "unknown")))
         }
-        traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf(
-            "demo_url" to (demoUrl ?: "")
-        ))
-
-        if (deployResult != null) {
-            runCatching {
-                cleanupDemoDeploy(issue, workspace, deployResult)
-            }.onFailure { e ->
-                logger.warn("demo_cleanup_failed", mapOf(
-                    "issue_id" to issue.id,
-                    "error" to (e.message ?: "unknown")
-                ))
-                traceReviewStep(workspace, issue, "deploy_cleanup", "failed", mapOf(
-                    "error" to (e.message ?: "unknown")
-                ))
-            }
-            traceReviewStep(workspace, issue, "deploy_cleanup", "attempted")
-        }
-
-        workspace?.let { cleanupReviewFiles(it.path) }
-        traceReviewStep(workspace, issue, "review_pass", "complete", mapOf(
-            "attempt" to currentAttempt.toString(),
-            "demo_url" to (demoUrl ?: ""),
-            "deploy_url" to (deployUrl ?: "")
-        ))
-        return ReviewDecision.Pass(stage.onCompleteState)
     }
 
     private suspend fun handleDemoRecordingFailure(issue: Issue, errorMessage: String) {
@@ -597,11 +655,16 @@ class AutoReviewOrchestrator(
         if (!Files.isDirectory(ws.path)) return null
 
         logger.info("deploy_target_project_start", mapOf("issue_id" to issue.id, "repo" to repoFullName))
+        val secrets = com.flexsentlabs.koncerto.deploy.SecretsFile.load(projectConfig.demoSecretsFile)
+        if (secrets.isEmpty()) {
+            logger.info("demo_secrets_none", mapOf("issue_id" to issue.id))
+        }
         val deployConfig = DeployConfig(
             repoFullName = repoFullName,
             prBranch = issue.identifier,
             baseBranch = "main",
-            projectPath = ws.path
+            projectPath = ws.path,
+            envVars = secrets
         )
         return try {
             val result = deployer.deploy(deployConfig)

@@ -379,7 +379,8 @@ class Beans {
         subtaskOrchestrator: SubtaskOrchestrator?,
         workplanParser: WorkplanParser?,
         auditLogger: AuditLogger?,
-        demoEventListener: DemoEventListener?
+        demoEventListener: DemoEventListener?,
+        targetProjectDeployer: TargetProjectDeployer
     ): Orchestrator {
         val notifier = compositeNotifier ?: CompositeNotifier(emptyList())
         return Orchestrator(
@@ -412,7 +413,7 @@ class Beans {
                         onReviewPassed = demoEventListener?.let { listener ->
                             { issue, targetUrl -> listener.onReviewPassed(issue.id, issue.identifier, slug, targetUrl) }
                         },
-                        targetProjectDeployer = targetProjectDeployer(logger),
+                        targetProjectDeployer = targetProjectDeployer,
                         deployRepoFullName = parseRepoFullName(config),
                         demoFailureReporter = DemoFailureReporter(logger),
                         demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache)

@@ -62,6 +62,37 @@ class ServiceConfigTest {
     }
 
     @Test
+    fun `demo_secrets_file is parsed onto the project config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf<String, Any?>(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf<String, Any?>(),
+                    "demo_secrets_file" to "/tmp/secrets/promomesh.env"
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().demoSecretsFile).isEqualTo("/tmp/secrets/promomesh.env")
+    }
+
+    @Test
+    fun `demo_secrets_file defaults to null when absent`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().demoSecretsFile).isNull()
+    }
+
+    @Test
     fun `agent kind codex is accepted`() {
         val config = ServiceConfig.fromMap(
             mapOf("projects" to mapOf(

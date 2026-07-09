@@ -27,6 +27,7 @@ projects:
     reviewer:
       kind: human
     git_remote_url: $GIT_REMOTE_URL
+    demo_secrets_file: $KONCERTO_PROMOMESH_SECRETS
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
     agent:

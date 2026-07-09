@@ -802,6 +802,141 @@ class DispatchServiceTest {
         }
     }
 
+    @Test
+    fun `dispatch blocks and comments when a required secret is missing, without running the agent`() {
+        val root = Files.createTempDirectory("secret-preflight-block-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo")
+            trackingLinear.addIssue(testIssue)
+
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.writeString(workspace.path.resolve(".env.example"), "BREVO_API_KEY=\nDB_URL=postgres://x\n")
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            // No secrets file configured → BREVO_API_KEY is missing.
+            val projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked"))
+            val svc = createService(
+                projectConfig = projectConfig, state = state, linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(0)
+            assertThat(trackingLinear.commentedIssueId).isEqualTo("1")
+            assertThat(trackingLinear.commentedBody!!.contains("BREVO_API_KEY")).isTrue()
+            assertThat(trackingLinear.transitionedIssueId).isEqualTo("1")
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dispatch proceeds when the required secret is provided by the secrets file`() {
+        val root = Files.createTempDirectory("secret-preflight-pass-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo")
+            trackingLinear.addIssue(testIssue)
+
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.writeString(workspace.path.resolve(".env.example"), "BREVO_API_KEY=\n")
+            val secretsFile = root.resolve("secrets.env")
+            Files.writeString(secretsFile, "BREVO_API_KEY=xkeysib-provided\n")
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            val projectConfig = config().copy(
+                tracker = config().tracker.copy(blockedState = "Blocked"),
+                demoSecretsFile = secretsFile.toString()
+            )
+            val svc = createService(
+                projectConfig = projectConfig, state = state, linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+            assertThat(trackingLinear.commentedBody?.contains("required secret") ?: false).isFalse()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dispatch proceeds when the target declares no required secrets`() {
+        val root = Files.createTempDirectory("secret-preflight-none-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo")
+            trackingLinear.addIssue(testIssue)
+            // Workspace has no env template at all → empty required set → no gate.
+            workspaces.ensureWorkspace(testIssue.identifier)
+
+            val runner = CollectingAgentRunner()
+            val svc = createService(
+                projectConfig = config(), state = RuntimeState(), linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `missing-secret preflight marks the issue blocked so it is not re-processed`() {
+        val root = Files.createTempDirectory("secret-preflight-mark-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo")
+            trackingLinear.addIssue(testIssue)
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.writeString(workspace.path.resolve(".env.example"), "BREVO_API_KEY=\n")
+
+            val state = RuntimeState()
+            val svc = createService(
+                projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked")),
+                state = state, linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = CollectingAgentRunner()
+            )
+            runDispatchAwait(svc)
+            // Marked blocked locally so a tracker-side transition failure can't cause re-comment spam.
+            assertThat(state.isBlocked("1")).isTrue()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `consumeDemoFixRequest returns and deletes the fix request, then null on second read`() {
+        val root = Files.createTempDirectory("demo-fix-req-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val testIssue = issue("1", "A-1", "Todo")
+            val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+            Files.writeString(workspace.path.resolve(".demo-fix-request"), "the send-code button did nothing")
+
+            val svc = createService(workspaces = workspaces)
+            val first = runBlocking { svc.consumeDemoFixRequest(testIssue) }
+            assertThat(first).isNotNull()
+            assertThat(first!!.contains("send-code button")).isTrue()
+            // One-shot: file deleted, second read is null.
+            assertThat(Files.exists(workspace.path.resolve(".demo-fix-request"))).isFalse()
+            val second = runBlocking { svc.consumeDemoFixRequest(testIssue) }
+            assertThat(second).isEqualTo(null as String?)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     private fun createService(
         projectConfig: ProjectConfig? = null,
         state: RuntimeState = RuntimeState(),
