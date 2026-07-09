@@ -664,7 +664,8 @@ class AutoReviewOrchestrator(
             prBranch = issue.identifier,
             baseBranch = "main",
             projectPath = ws.path,
-            envVars = secrets
+            envVars = secrets,
+            postDeployCommand = projectConfig.demoPostDeployCommand
         )
         return try {
             val result = deployer.deploy(deployConfig)
