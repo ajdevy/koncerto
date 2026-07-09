@@ -238,8 +238,18 @@ class DemoScenarioGenerator(
             .redirectErrorStream(true)
         val process = pb.start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
-        process.waitFor(30, TimeUnit.SECONDS)
-        output.takeIf { it.isNotBlank() }
+        val completed = process.waitFor(30, TimeUnit.SECONDS)
+        // redirectErrorStream(true) merges stderr into stdout, so a failure (e.g. no "main"
+        // branch/ref in this checkout) produces non-blank "fatal: ..." text that isBlank()
+        // alone wouldn't catch — that text would silently pass for a real diff, and
+        // extractRealSelectors/extractRealRoutes would then find nothing in it. Require a
+        // clean exit before trusting the output at all.
+        if (!completed || process.exitValue() != 0) {
+            logger.warn("demo_scenario_git_diff_failed", mapOf("error" to output.take(200)))
+            null
+        } else {
+            output.takeIf { it.isNotBlank() }
+        }
     } catch (e: Exception) {
         logger.warn("demo_scenario_git_diff_failed", mapOf("error" to (e.message ?: "unknown")))
         null

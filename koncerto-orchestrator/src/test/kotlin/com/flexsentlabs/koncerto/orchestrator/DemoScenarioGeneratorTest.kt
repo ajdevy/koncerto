@@ -451,7 +451,10 @@ class DemoScenarioGeneratorTest {
         // cutoff — so the model never saw them in the raw "## PR Changes" text and invented
         // non-existent selectors instead. extractRealSelectors must run on the FULL diff so
         // real attributes surface regardless of where they land in a large diff.
-        runProcess(listOf("git", "init"), tmpDir)
+        // runGitDiff() hard-codes a diff against "main" — explicitly name the initial branch
+        // so this doesn't depend on the ambient git client's init.defaultBranch config (which
+        // differs between local machines and CI runners, e.g. "master" vs "main").
+        runProcess(listOf("git", "init", "-b", "main"), tmpDir)
         runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
         runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
         java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial content")
@@ -625,6 +628,33 @@ class DemoScenarioGeneratorTest {
             labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
         )
         val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt does not leak git error text as diff content when main branch is absent`(@TempDir tmpDir: Path) {
+        // Regression test: runGitDiff hard-codes `git diff main...HEAD`. Merging stderr into
+        // stdout meant a checkout whose default branch ISN'T "main" (e.g. "master") produced a
+        // non-blank "fatal: ambiguous argument 'main...HEAD'..." string that isBlank() alone
+        // didn't catch, so that error text got treated as if it were the real diff — silently
+        // reintroducing the exact selector-invention failure the full-diff extraction was
+        // built to prevent, for any target project not on a branch literally named "main".
+        runProcess(listOf("git", "init", "-b", "master"), tmpDir)
+        runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
+        runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial")
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "initial"), tmpDir)
+
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Add login", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("fatal:")).isEqualTo(false)
+        assertThat(prompt.contains("ambiguous argument")).isEqualTo(false)
         assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
     }
 
