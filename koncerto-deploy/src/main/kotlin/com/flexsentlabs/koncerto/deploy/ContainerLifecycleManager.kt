@@ -188,4 +188,34 @@ class ContainerLifecycleManager(
             logger.info("docker_container_removed", mapOf("id" to (containerId as Any?)))
         } catch (_: Exception) {}
     }
+
+    /** Builds the `docker exec` argv that runs `command` inside `containerId` via a shell. */
+    internal fun buildExecCommand(containerId: String, command: String): List<String> {
+        return listOf("docker", "exec", containerId, "sh", "-c", command)
+    }
+
+    /**
+     * Runs `command` inside the running container via `docker exec`, capturing combined
+     * stdout/stderr. Bounded by `timeoutSec` so a stuck command (e.g. a hung migration) can't
+     * stall the deploy indefinitely — mirrors the `docker compose up` timeout pattern in
+     * TargetProjectDeployer: wait with a timeout first, then read whatever output resulted.
+     */
+    fun execCommand(containerId: String, command: String, timeoutSec: Int = 120): Result<String> {
+        return try {
+            val pb = ProcessBuilder(buildExecCommand(containerId, command)).redirectErrorStream(true)
+            val p = pb.start()
+            val completed = p.waitFor(timeoutSec.toLong(), TimeUnit.SECONDS)
+            val output = p.inputStream.bufferedReader().use { it.readText() }
+            if (!completed) {
+                p.destroyForcibly()
+                return Result.failure(RuntimeException("post-deploy command timed out after ${timeoutSec}s"))
+            }
+            if (p.exitValue() != 0) {
+                return Result.failure(RuntimeException("post-deploy command failed (exit ${p.exitValue()}):\n$output"))
+            }
+            Result.success(output)
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("post-deploy command error: ${e.message}"))
+        }
+    }
 }
