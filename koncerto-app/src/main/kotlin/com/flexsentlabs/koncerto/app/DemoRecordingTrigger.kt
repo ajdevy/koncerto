@@ -74,8 +74,9 @@ object DemoRecordingTrigger {
 
         println("Deploying target project for $issueIdentifier...")
         val deployResult = runBlocking { deployProject(config, projectPath, issueIdentifier, projectSlug, logger) }
-        if (deployResult == null) {
-            println("Deployment failed, aborting")
+        if (deployResult == null || !deployResult.success) {
+            println("Deployment failed: ${deployResult?.error ?: "unknown"}")
+            if (deployResult?.logs != null) println(deployResult.logs)
             kotlin.system.exitProcess(1)
         }
         val targetUrl = deployResult.url ?: error("Deploy succeeded but no URL returned")
