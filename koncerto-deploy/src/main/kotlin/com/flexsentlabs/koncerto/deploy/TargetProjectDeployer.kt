@@ -29,7 +29,9 @@ data class DeployConfig(
     val repoFullName: String,
     val prBranch: String,
     val baseBranch: String = "main",
-    val projectPath: Path
+    val projectPath: Path,
+    // Secrets/env injected into the demo container (KEY=VALUE). Values are masked in all logs.
+    val envVars: Map<String, String> = emptyMap()
 )
 
 class TargetProjectDeployer(
@@ -39,17 +41,32 @@ class TargetProjectDeployer(
     private val containerManager: ContainerLifecycleManager,
     private val logger: StructuredLogger
 ) : ProjectDeployer {
+    // Guards the periodic orphan-container sweep (OrphanedContainerCleanupScheduler, every 5
+    // minutes) from racing an in-flight deployment. Both the deploy container and any
+    // docker-compose infra it stands up are named/tagged koncerto-demo-* — the same pattern
+    // cleanupOrphans() force-removes — so a sweep landing between deploy_success and the
+    // recording finishing killed the container out from under an active demo recording.
+    @Volatile
+    private var deploymentInFlight = false
+
     override suspend fun deploy(config: DeployConfig): DeployResult {
+        deploymentInFlight = true
         val projectPath = config.projectPath
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
         traceDeployStep(projectPath, "deploy", "start", mapOf("tag" to tag))
 
         // Phase 1: Detect existing Docker config
         val existingConfig = configDetector.detect(projectPath)
+        if (config.envVars.isNotEmpty()) {
+            logger.info("deploy_secrets_injected", mapOf(
+                "count" to (config.envVars.size.toString() as Any?),
+                "keys" to (config.envVars.keys.joinToString(",") as Any?)
+            ))
+        }
         if (existingConfig != null) {
             logger.info("deploy_docker_config_found", mapOf("type" to existingConfig.type.name))
             traceDeployStep(projectPath, "deploy", "docker_config_found", mapOf("type" to existingConfig.type.name))
-            return buildAndRun(existingConfig, projectPath, tag)
+            return buildAndRun(existingConfig, projectPath, tag, config.envVars)
         }
 
         // Phase 2: Check for framework and generate Dockerfile
@@ -67,7 +84,7 @@ class TargetProjectDeployer(
             tempDockerfile.toFile().writeText(dockerfileContent)
             traceDeployStep(projectPath, "deploy", "temp_dockerfile_written")
             val detected = DetectedDockerConfig(DockerConfigType.DOCKERFILE, dockerfile = tempDockerfile)
-            return buildAndRun(detected, projectPath, tag)
+            return buildAndRun(detected, projectPath, tag, config.envVars)
         } finally {
             tempDockerfile.toFile().delete()
         }
@@ -75,18 +92,18 @@ class TargetProjectDeployer(
 
     private val webPorts = setOf(80, 3000, 5000, 8000, 8080, 8443, 3001, 5173, 4200, 8001, 9090, 17349)
 
-    private fun buildAndRun(config: DetectedDockerConfig, projectPath: Path, tag: String): DeployResult {
+    private fun buildAndRun(config: DetectedDockerConfig, projectPath: Path, tag: String, envVars: Map<String, String> = emptyMap()): DeployResult {
         return try {
             when (config.type) {
                 DockerConfigType.DOCKER_COMPOSE -> {
                     val composeFile = requireNotNull(config.composeFile) { "DOCKER_COMPOSE config missing composeFile" }
                     traceDeployStep(projectPath, "build_and_run", "compose")
-                    deployWithCompose(composeFile, projectPath, tag)
+                    deployWithCompose(composeFile, projectPath, tag, envVars)
                 }
                 DockerConfigType.DOCKERFILE -> {
                     val dockerfile = requireNotNull(config.dockerfile) { "DOCKERFILE config missing dockerfile" }
                     traceDeployStep(projectPath, "build_and_run", "dockerfile")
-                    deployWithDockerfile(dockerfile, projectPath, tag)
+                    deployWithDockerfile(dockerfile, projectPath, tag, envVars = envVars)
                 }
             }
         } catch (e: Exception) {
@@ -95,7 +112,7 @@ class TargetProjectDeployer(
         }
     }
 
-    private fun deployWithDockerfile(dockerfile: Path, projectPath: Path, tag: String, network: String? = null): DeployResult {
+    private fun deployWithDockerfile(dockerfile: Path, projectPath: Path, tag: String, network: String? = null, envVars: Map<String, String> = emptyMap()): DeployResult {
         val buildResult = containerManager.buildImage(projectPath, dockerfile, tag)
         if (buildResult.isFailure) {
             traceDeployStep(projectPath, "deploy_dockerfile", "build_failed", mapOf(
@@ -112,7 +129,7 @@ class TargetProjectDeployer(
         val containerPort = framework?.ports?.firstOrNull() ?: 8080
         val hostPort = containerManager.allocatePort()
 
-        val runResult = containerManager.runContainer(tag, hostPort, containerPort, network)
+        val runResult = containerManager.runContainer(tag, hostPort, containerPort, network, envVars)
         if (runResult.isFailure) {
             containerManager.releasePort(hostPort)
             traceDeployStep(projectPath, "deploy_dockerfile", "run_failed", mapOf(
@@ -148,7 +165,7 @@ class TargetProjectDeployer(
         return DeployResult.success(container.baseUrl, tag = tag)
     }
 
-    private fun deployWithCompose(composeFile: Path, projectPath: Path, tag: String): DeployResult {
+    private fun deployWithCompose(composeFile: Path, projectPath: Path, tag: String, envVars: Map<String, String> = emptyMap()): DeployResult {
         val projectName = "koncerto-demo"
         try {
             // Clean up any previous compose instance
@@ -190,6 +207,16 @@ class TargetProjectDeployer(
             val hostPort = portMatch?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
             if (hostPort > 0 && hostPort in webPorts) {
+                if (envVars.isNotEmpty()) {
+                    // The web app is served directly by a compose service we don't start via
+                    // `docker run`, so -e injection doesn't reach it. Secrets must be referenced by
+                    // the compose file itself (e.g. `${VAR}` / env_file). Surface this rather than
+                    // silently dropping them.
+                    logger.warn("deploy_compose_env_not_injected", mapOf(
+                        "keys" to (envVars.keys.joinToString(",") as Any?),
+                        "reason" to "web_app_served_by_compose_service"
+                    ))
+                }
                 logger.info("deploy_compose_success", mapOf("port" to hostPort.toString()))
                 traceDeployStep(projectPath, "deploy_compose", "success", mapOf(
                     "tag" to tag,
@@ -210,7 +237,7 @@ class TargetProjectDeployer(
                 "port" to hostPort.toString()
             ))
             val composeNetwork = resolveComposeNetwork(projectPath, composeFile)
-            return deployAppOnNetwork(projectPath, tag, composeNetwork)
+            return deployAppOnNetwork(projectPath, tag, composeNetwork, envVars)
         } catch (e: Exception) {
             traceDeployStep(projectPath, "deploy_compose", "failed", mapOf("error" to (e.message ?: "unknown")))
             return DeployResult.failure("docker compose error: ${e.message}")
@@ -245,20 +272,28 @@ class TargetProjectDeployer(
         }
     }
 
-    private fun deployAppOnNetwork(projectPath: Path, tag: String, network: String): DeployResult {
+    private fun deployAppOnNetwork(projectPath: Path, tag: String, network: String, envVars: Map<String, String> = emptyMap()): DeployResult {
         val framework = frameworkDetector.detectFramework(projectPath)
             ?: return DeployResult.failure("Could not detect framework for app build")
         val dockerfileContent = dockerfileGenerator.generate(framework)
         val tempDockerfile = projectPath.resolve("Dockerfile.koncerto")
         try {
             tempDockerfile.toFile().writeText(dockerfileContent)
-            return deployWithDockerfile(tempDockerfile, projectPath, tag, network)
+            return deployWithDockerfile(tempDockerfile, projectPath, tag, network, envVars)
         } finally {
             tempDockerfile.toFile().delete()
         }
     }
 
-    override suspend fun cleanup(config: DeployConfig) {
+    override suspend fun cleanup(config: DeployConfig) = try {
+        cleanupInternal(config)
+    } finally {
+        // The deployment (and whatever it protected from the orphan sweep) is torn down
+        // regardless of how cleanup itself went — always release the guard.
+        deploymentInFlight = false
+    }
+
+    private fun cleanupInternal(config: DeployConfig) {
         val tag = "koncerto-demo-${config.prBranch.replace("/", "-").lowercase()}"
         logger.info("deploy_cleanup_start", mapOf("tag" to (tag as Any?)))
         traceDeployStep(config.projectPath, "cleanup", "start", mapOf("tag" to tag))
@@ -331,6 +366,10 @@ class TargetProjectDeployer(
     }
 
     suspend fun cleanupOrphans() {
+        if (deploymentInFlight) {
+            logger.info("deploy_orphan_cleanup_skipped", mapOf("reason" to "deployment_in_flight"))
+            return
+        }
         logger.info("deploy_orphan_cleanup_start", emptyMap())
 
         // Find and remove all containers with name koncerto-demo-*

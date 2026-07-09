@@ -73,7 +73,8 @@ class AutoReviewOrchestratorTest {
 
     private fun projectConfig(
         stages: Map<String, StageAgentConfig> = emptyMap(),
-        workspaceRoot: String = "/tmp"
+        workspaceRoot: String = "/tmp",
+        demoSecretsFile: String? = null
     ) = ProjectConfig(
         tracker = TrackerConfig(
             kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
@@ -87,7 +88,8 @@ class AutoReviewOrchestratorTest {
             maxConcurrentAgentsByState = emptyMap(),
             turnTimeoutMs = 60000, readTimeoutMs = 5000, stallTimeoutMs = 30000,
             stages = stages
-        )
+        ),
+        demoSecretsFile = demoSecretsFile
     )
 
     private fun issue(id: String = "issue-1", identifier: String = "T-1") = Issue(
@@ -824,6 +826,225 @@ class AutoReviewOrchestratorTest {
             workspace.resolve(".git"),
             "gitdir: ${gitDir.toAbsolutePath()}"
         )
+    }
+
+    @Test
+    fun `demo stage blocks with a comment when a required secret is not provided`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        // Target declares BREVO_API_KEY as required (empty in template), no secrets file provides it.
+        Files.writeString(issueDir.resolve(".env.example"), "BREVO_API_KEY=\n")
+
+        var lastComment: String? = null
+        val tracker = object : TrackerClient by fakeTracker() {
+            override suspend fun createComment(issueId: String, body: String) { lastComment = body }
+        }
+        val deployer = RecordingProjectDeployer()
+        var recorded = false
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString(), demoSecretsFile = null),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            targetProjectDeployer = deployer,
+            onReviewPassed = { _, _ -> recorded = true; "url" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(0)   // blocked BEFORE deploy
+        assertThat(recorded).isEqualTo(false)
+        assertThat(lastComment!!.contains("BREVO_API_KEY")).isTrue()
+    }
+
+    @Test
+    fun `provided secrets are threaded into the deploy config envVars`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "PASS")
+        // No .env.example → no required-secret gate; secrets file still supplies vars to inject.
+        val secretsFile = tmpDir.resolve("secrets.env")
+        Files.writeString(secretsFile, "BREVO_API_KEY=xkeysib-provided\n")
+
+        val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString(), demoSecretsFile = secretsFile.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = { command, _ ->
+                if (command.contains("comment")) GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                else GhProcessResult(0, """{"number":7}""")
+            },
+            targetProjectDeployer = deployer,
+            deployRepoFullName = "acme/widget",
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
+        assertThat(deployer.deployCalls[0].envVars["BREVO_API_KEY"]).isEqualTo("xkeysib-provided")
+    }
+
+    @Test
+    fun `demoRecoveryAttempts counter is cleared after a successful demo`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "PASS")
+
+        val runtimeState = RuntimeState()
+        runtimeState.demoRecoveryAttempts["issue-1"] = 2   // pretend prior cycles happened
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = runtimeState,
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = { command, _ ->
+                if (command.contains("comment")) GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                else GhProcessResult(0, """{"number":7}""")
+            },
+            deployRepoFullName = "acme/widget",
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(runtimeState.demoRecoveryAttempts.containsKey("issue-1")).isEqualTo(false)
+    }
+
+    @Test
+    fun `demo recording failure escalates to a code fix and writes a fix request`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val runtimeState = RuntimeState()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = runtimeState,
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            onReviewPassed = { _, _ -> throw RuntimeException("recording timed out") }
+        )
+
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat((decision as AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).rerouteToState).isEqualTo("In Progress")
+        assertThat(runtimeState.demoRecoveryAttempts["issue-1"]).isEqualTo(1)
+        assertThat(Files.exists(issueDir.resolve(".demo-fix-request"))).isTrue()
+        assertThat(Files.readString(issueDir.resolve(".demo-fix-request"))).contains("recording timed out")
+    }
+
+    @Test
+    fun `demo recovery blocks with a comment after the max cycles are exhausted`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        var lastComment: String? = null
+        val tracker = object : TrackerClient by fakeTracker() {
+            override suspend fun createComment(issueId: String, body: String) { lastComment = body }
+        }
+        val runtimeState = RuntimeState()
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = tracker,
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = runtimeState,
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            onReviewPassed = { _, _ -> throw RuntimeException("recording timed out") }
+        )
+
+        // Cycles 1 and 2 escalate; the review-status file survives escalation so review re-passes.
+        repeat(2) {
+            Files.writeString(issueDir.resolve(".review-status"), "pass")
+            val d = orchestrator.onCodingComplete(issue())
+            assertThat(d).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        }
+        // Cycle 3 exhausts the budget → Blocked with a comment.
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val finalDecision = orchestrator.onCodingComplete(issue())
+        assertThat(finalDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        // The counter is cleared on block so a later unblock+retry gets a fresh recovery budget.
+        assertThat(runtimeState.demoRecoveryAttempts.containsKey("issue-1")).isEqualTo(false)
+        assertThat(lastComment).isNotNull()
+        assertThat(lastComment!!).contains("demo")
+    }
+
+    @Test
+    fun `scenario repair re-records against the same deployment and passes without re-review`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "PASS")
+
+        // Generator produces a scenario on generate() and again on repair().
+        val scenarioOutput = """
+            demo_scenario:
+              description: "flow"
+              steps:
+                - action: click
+                  selector: "text=Go"
+                - action: wait
+                  ms: 500
+        """.trimIndent()
+        val generator = DemoScenarioGenerator(
+            opencodeCommand = "opencode", logger = noopLogger(),
+            processRunner = { _, _, _ -> scenarioOutput }
+        )
+        val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
+
+        var recordCalls = 0
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = { command, _ ->
+                if (command.contains("comment")) GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                else GhProcessResult(0, """{"number":7}""")
+            },
+            demoScenarioGenerator = generator,
+            targetProjectDeployer = deployer,
+            deployRepoFullName = "acme/widget",
+            onReviewPassed = { _, _ ->
+                recordCalls++
+                if (recordCalls == 1) throw RuntimeException("first recording failed") else "https://demo.example/rec.webm"
+            }
+        )
+
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        // Recorded twice (fail then success) but deployed only once — repair re-records the same deploy.
+        assertThat(recordCalls).isEqualTo(2)
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
     }
 
     private class RecordingProjectDeployer(
@@ -1885,7 +2106,10 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `pass pipeline blocks when demo callback fails`(@TempDir tmpDir: Path) = runTest {
+    fun `pass pipeline escalates to a code fix on the first demo callback failure`(@TempDir tmpDir: Path) = runTest {
+        // Self-healing: the first demo failure no longer blocks immediately — it escalates to a
+        // target code fix (RetryWithCoding). Blocking only happens after MAX_DEMO_RECOVERY cycles
+        // (covered by `demo recovery blocks with a comment after the max cycles are exhausted`).
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-status"), "pass")
@@ -1895,7 +2119,7 @@ class AutoReviewOrchestratorTest {
             onReviewPassed = { _, _ -> throw IllegalStateException("site cannot be reached") }
         ).onCodingComplete(issue())
 
-        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
     }
 
     @Test

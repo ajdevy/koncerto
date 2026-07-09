@@ -27,6 +27,31 @@ class ContainerLifecycleManagerTest {
     }
 
     @Test
+    fun `buildRunCommand injects one -e per env var and appends image last`() {
+        val cmd = manager.buildRunCommand(
+            containerName = "koncerto-demo-1",
+            network = "net",
+            hostPort = 32768,
+            containerPort = 8080,
+            image = "koncerto-demo-fle-52",
+            envVars = linkedMapOf("BREVO_API_KEY" to "xkeysib-secret", "DEBUG_TOKEN" to "tok")
+        )
+        assertThat(cmd).contains("BREVO_API_KEY=xkeysib-secret")
+        assertThat(cmd).contains("DEBUG_TOKEN=tok")
+        // Image must be the final argument so the -e flags apply to it.
+        assertThat(cmd.last()).isEqualTo("koncerto-demo-fle-52")
+        // Exactly two -e flags for two env entries.
+        assertThat(cmd.count { it == "-e" }).isEqualTo(2)
+    }
+
+    @Test
+    fun `buildRunCommand with no env vars has no -e flags`() {
+        val cmd = manager.buildRunCommand("c", "net", 32768, 8080, "img", emptyMap())
+        assertThat(cmd.count { it == "-e" }).isEqualTo(0)
+        assertThat(cmd.last()).isEqualTo("img")
+    }
+
+    @Test
     fun `releasePort allows reallocation`() {
         val port = manager.allocatePort()
         manager.releasePort(port)

@@ -397,6 +397,20 @@ if (!url || !readyFile) {
   process.exit(1);
 }
 
+// Safety net: if the underlying browser/renderer crashes mid-scenario (observed with
+// longer, multi-page scenarios), Playwright's own cleanup (context.close/browser.close,
+// or even the try/catch around a failed step) can hang indefinitely waiting on a CDP
+// connection that will never respond — process.exit() calls made in that state don't
+// reliably terminate Node either. Without this, the recorder just hangs until the
+// caller's own multi-minute wait times out, and every retry hits the exact same wall.
+// unref() means this timer never itself keeps the process alive if everything else
+// finishes cleanly and quickly.
+const hardExitTimer = setTimeout(() => {
+  console.error('[watchdog] forcing exit — browser/cleanup hung past the hard deadline');
+  process.exit(1);
+}, (maxDurationSeconds + 90) * 1000);
+hardExitTimer.unref();
+
 async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
@@ -818,7 +832,11 @@ function parseSimpleYaml(yaml) {
   let stepIndex = 0;
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
-    const trimmed = line.trimEnd();
+    // Structural checks below (steps:, - action:, - key:value) match against the start
+    // of the line, so leading indentation must be stripped too, not just trailing
+    // whitespace — every real scenario is indented under demo_scenario: and steps:,
+    // so trimEnd() alone left every step marker unmatched and steps silently empty.
+    const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
     const indent = line.search(/\S/);
     if (indent < 0) continue;
@@ -871,9 +889,21 @@ function parseSimpleYaml(yaml) {
         continue;
       }
       if (val.startsWith('"') && val.endsWith('"')) {
-        val = val.slice(1, -1);
+        // A YAML double-quoted scalar treats \" as an escaped literal quote, not two
+        // characters — without unescaping, a selector like "[data-testid=\"foo\"]" keeps
+        // its backslashes and becomes an invalid CSS selector that matches nothing, so
+        // every step referencing it silently fails even though the value LOOKS right.
+        val = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
       } else if (val.startsWith("'") && val.endsWith("'")) {
         val = val.slice(1, -1);
+      } else if (/^-?\d+$/.test(val)) {
+        // Everything out of this parser is a string by default, but Playwright validates
+        // numeric options (delay, timeout, ms, amount, width/height) strictly — passing a
+        // numeric-looking string like "50" as `delay` throws "expected float, got string"
+        // and the step never runs at all, rather than degrading gracefully like most
+        // failures here do.
+        currentStep[key] = Number(val);
+        continue;
       }
       currentStep[key] = val;
       continue;

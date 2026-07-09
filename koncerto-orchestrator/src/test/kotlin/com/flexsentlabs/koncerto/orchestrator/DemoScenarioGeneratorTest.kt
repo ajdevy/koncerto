@@ -182,6 +182,27 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `buildRepairPrompt includes the prior scenario, the failure reason and the base prompt`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1",
+            title = "Email login", description = "Send code and verify",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prior = "demo_scenario:\n  steps:\n    - action: click\n      selector: \"[data-testid=\\\"nope\\\"]\""
+        val reason = "click target not found: [data-testid=\"nope\"]"
+        val prompt = generator().buildRepairPrompt(issue, workspace, prior, reason)
+
+        assertThat(prompt.contains("The previous demo scenario FAILED")).isEqualTo(true)
+        assertThat(prompt.contains(reason)).isEqualTo(true)
+        assertThat(prompt.contains("data-testid=\\\"nope\\\"")).isEqualTo(true)
+        // Must still carry the base prompt (issue context + instructions).
+        assertThat(prompt.contains("Email login")).isEqualTo(true)
+        assertThat(prompt.contains("Generate the demo_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
     fun `buildPrompt includes README when present`(@TempDir tmpDir: Path) {
         java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "# My App\nThis app does cool things.")
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
@@ -332,6 +353,129 @@ class DemoScenarioGeneratorTest {
         val prompt = generator().buildPrompt(issue, workspace)
         assertThat(prompt.contains("## PR Changes")).isEqualTo(true)
         assertThat(prompt.contains("feature change")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractRealSelectors pulls testid, id, name and aria-label from added lines only`() {
+        val diff = """
+            diff --git a/app/main.py b/app/main.py
+            +++ b/app/main.py
+            -<button data-testid="old-button">Old</button>
+            +<input id="email" name="email" data-testid="email-input" aria-label="Email address">
+            +<button data-testid="send-code-button">Send</button>
+             <p>unchanged context line</p>
+        """.trimIndent()
+        val selectors = generator().extractRealSelectors(diff)
+        assertThat(selectors.contains("[data-testid=\"email-input\"]")).isEqualTo(true)
+        assertThat(selectors.contains("[data-testid=\"send-code-button\"]")).isEqualTo(true)
+        assertThat(selectors.contains("[id=\"email\"]")).isEqualTo(true)
+        assertThat(selectors.contains("[name=\"email\"]")).isEqualTo(true)
+        assertThat(selectors.contains("[aria-label=\"Email address\"]")).isEqualTo(true)
+        assertThat(selectors.contains("[data-testid=\"old-button\"]")).isEqualTo(false)
+    }
+
+    @Test
+    fun `extractRealRoutes pulls FastAPI and Express style route registrations from added lines only`() {
+        val diff = """
+            diff --git a/app/main.py b/app/main.py
+            +++ b/app/main.py
+            -@app.get("/old-route")
+            +@app.get("/login")
+            +async def login_page():
+            +    pass
+            +
+            +router.post('/api/verify', handler)
+        """.trimIndent()
+        val routes = generator().extractRealRoutes(diff)
+        assertThat(routes.contains("/login")).isEqualTo(true)
+        assertThat(routes.contains("/api/verify")).isEqualTo(true)
+        assertThat(routes.contains("/old-route")).isEqualTo(false)
+    }
+
+    @Test
+    fun `ensureNavigatesToRealRoute injects a navigate step when the model's scenario never leaves the root`() {
+        // Regression test: a real free-tier scenario for FLE-52 used correct real selectors
+        // (data-testid=send-code-button etc.) but never included a navigate step to /login at
+        // all — it just asserted on #email-step from the landing page, which doesn't have it.
+        // Every subsequent click/type/assert then silently failed to find its target, and the
+        // recorded video never showed the feature despite the selectors being right.
+        val block = """
+            demo_scenario:
+              description: "Email code login"
+              steps:
+                - action: wait
+                  ms: 500
+                - action: click
+                  selector: "[data-testid='send-code-button']"
+        """.trimIndent()
+        val grounded = generator().ensureNavigatesToRealRoute(block, listOf("/login"))
+        assertThat(grounded.contains("action: navigate")).isEqualTo(true)
+        assertThat(grounded.contains("url: \"/login\"")).isEqualTo(true)
+        // The injected navigate must come before the pre-existing steps, not after.
+        assertThat(grounded.indexOf("action: navigate") < grounded.indexOf("action: wait")).isEqualTo(true)
+    }
+
+    @Test
+    fun `ensureNavigatesToRealRoute leaves the scenario untouched when it already navigates off-root`() {
+        val block = """
+            demo_scenario:
+              description: "Email code login"
+              steps:
+                - action: navigate
+                  url: "/login"
+                - action: click
+                  selector: "[data-testid='send-code-button']"
+        """.trimIndent()
+        val grounded = generator().ensureNavigatesToRealRoute(block, listOf("/login"))
+        assertThat(grounded).isEqualTo(block)
+    }
+
+    @Test
+    fun `ensureNavigatesToRealRoute is a no-op when no real routes were extracted`() {
+        val block = """
+            demo_scenario:
+              description: "Landing page only"
+              steps:
+                - action: scroll
+                  direction: down
+                  amount: 300
+        """.trimIndent()
+        val grounded = generator().ensureNavigatesToRealRoute(block, emptyList())
+        assertThat(grounded).isEqualTo(block)
+    }
+
+    @Test
+    fun `buildPrompt lists real selectors even when they fall past the truncated diff display`(@TempDir tmpDir: Path) {
+        // Regression test: a real ~87KB diff for FLE-52 had its login form's data-testid
+        // attributes starting at byte offset ~8171 — just past the old 8000-char display
+        // cutoff — so the model never saw them in the raw "## PR Changes" text and invented
+        // non-existent selectors instead. extractRealSelectors must run on the FULL diff so
+        // real attributes surface regardless of where they land in a large diff.
+        runProcess(listOf("git", "init"), tmpDir)
+        runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
+        runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial content")
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "initial"), tmpDir)
+        runProcess(listOf("git", "checkout", "-b", "feature"), tmpDir)
+        // Pad past the 8000-char display cutoff before the real markup, mirroring the real diff.
+        val padding = "// filler line to push real content past the truncation cutoff\n".repeat(200)
+        java.nio.file.Files.writeString(
+            tmpDir.resolve("README.md"),
+            padding + "<button data-testid=\"send-code-button\">Send</button>\n"
+        )
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "feature"), tmpDir)
+
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i1", identifier = "T-1", title = "Add login", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("## Real Selectors")).isEqualTo(true)
+        assertThat(prompt.contains("[data-testid=\"send-code-button\"]")).isEqualTo(true)
     }
 
     @Test

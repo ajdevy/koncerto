@@ -11,7 +11,11 @@ data class ProjectConfig(
     val rateLimits: RateLimitsConfig? = null,
     val notifications: NotificationsConfig = NotificationsConfig(onCompleted = false, onFailed = false, onStalled = false, onClarification = false),
     val tenant: TenantConfig? = null,
-    val quota: com.flexsentlabs.koncerto.core.quota.QuotaConfig? = null
+    val quota: com.flexsentlabs.koncerto.core.quota.QuotaConfig? = null,
+    // Path to a per-project secrets file (KEY=VALUE lines) whose entries are injected into the
+    // demo deploy container. Also the source of "provided" secrets for the missing-secret
+    // preflight. Null / absent file → no injected secrets and an empty provided set.
+    val demoSecretsFile: String? = null
 )
 
 @kotlinx.serialization.Serializable

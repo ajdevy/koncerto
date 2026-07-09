@@ -12,8 +12,10 @@ import com.flexsentlabs.koncerto.demo.model.DemoPlatform
 import com.flexsentlabs.koncerto.demo.model.DemoResult
 import com.flexsentlabs.koncerto.demo.model.RecordingConfig
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 
 class PlaywrightRecorderTest {
@@ -89,6 +91,138 @@ class PlaywrightRecorderTest {
         assertThat(script.contains("chromium.launch")).isTrue()
         assertThat(script.contains("networkidle")).isTrue()
         assertThat(script.contains("chrome-error://")).isTrue()
+    }
+
+    @Test
+    fun `companion PLAYWRIGHT_SCRIPT has a hard-exit watchdog that outlives the post-scenario sleep`() {
+        // Regression test for a real production incident: FLE-52's recording hit an actual
+        // browser/page crash mid-scenario, and process.exit(2) called from failValidation()
+        // afterward did not reliably terminate Node — the recorder hung until the JVM-side
+        // captureWaitSec (240s) forcibly destroyed the process. Four consecutive attempts hit
+        // the exact same 240s wall and the whole recording was abandoned. The script must
+        // carry its own bounded fallback so a hung cleanup fails fast instead of stalling
+        // every retry for the full outer timeout.
+        val field = PlaywrightRecorder::class.java.getDeclaredField("PLAYWRIGHT_SCRIPT")
+        field.isAccessible = true
+        val script = field.get(null) as String
+        assertThat(script.contains("hardExitTimer")).isTrue()
+        assertThat(script.contains(".unref()")).isTrue()
+        assertThat(script.contains("maxDurationSeconds + 90")).isTrue()
+    }
+
+    @Test
+    fun `parseSimpleYaml parses real indented scenario yaml produced by the model`() {
+        // Regression test for a bug where parseSimpleYaml only called trimEnd() on each
+        // line, never stripping leading indentation. Structural checks like `steps:` and
+        // `- action:` compare against the START of the trimmed line, so every real
+        // scenario (indented under demo_scenario: and steps:, exactly what
+        // demo-scenario.md's own example teaches and what every model produces) silently
+        // parsed to zero steps and was skipped without ever failing loudly.
+        val node = runCatching { ProcessBuilder("which", "node").start().also { it.waitFor(5, TimeUnit.SECONDS) } }
+            .getOrNull()
+        assumeTrue(node != null && node.exitValue() == 0, "node not available in this environment")
+
+        val field = PlaywrightRecorder::class.java.getDeclaredField("PLAYWRIGHT_SCRIPT")
+        field.isAccessible = true
+        val script = field.get(null) as String
+
+        val scenarioYaml = """
+            demo_scenario:
+              description: "Login flow"
+              steps:
+                - action: navigate
+                  url: "/"
+                - action: scroll
+                  direction: down
+                  amount: 500
+                - action: click
+                  selector: "[data-request-code]"
+        """.trimIndent()
+
+        val scenarioFile = File.createTempFile("pw-scenario-test-", ".yaml").apply {
+            writeText(scenarioYaml)
+            deleteOnExit()
+        }
+
+        // Extract just the two YAML-parsing functions (the last things the script
+        // defines, after the browser-launching IIFE) so the harness doesn't need a
+        // real playwright install to exercise them.
+        val marker = "function parseScenarioYaml"
+        check(script.contains(marker)) { "PLAYWRIGHT_SCRIPT no longer defines parseScenarioYaml" }
+        val parsingFunctions = marker + script.substringAfter(marker)
+        val harness = "const fs = require('fs');\n" + parsingFunctions + "\n" +
+            "const parsed = parseScenarioYaml(fs.readFileSync(process.argv[2], 'utf-8'));\n" +
+            "console.log(JSON.stringify(parsed));\n"
+        val harnessFile = File.createTempFile("pw-harness-", ".js").apply {
+            writeText(harness)
+            deleteOnExit()
+        }
+
+        val process = ProcessBuilder("node", harnessFile.absolutePath, scenarioFile.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        process.waitFor(15, TimeUnit.SECONDS)
+
+        assertThat(output.contains("\"action\":\"navigate\"")).isTrue()
+        assertThat(output.contains("\"action\":\"scroll\"")).isTrue()
+        assertThat(output.contains("\"action\":\"click\"")).isTrue()
+    }
+
+    @Test
+    fun `parseSimpleYaml unescapes double-quoted values and coerces numeric-looking ones`() {
+        // Regression test for a real FLE-52 recording: the model correctly used real
+        // selectors like [data-testid="email-input"], but YAML's double-quoted scalars
+        // treat \" as an escaped literal quote. Without unescaping, the parsed selector kept
+        // its literal backslashes ([data-testid=\"email-input\"]), which is not valid CSS and
+        // matches nothing — every click/type step silently failed even with a correct
+        // selector. Separately, Playwright's locator.type() validates `delay` strictly and
+        // throws "expected float, got string" if it isn't coerced from the YAML string to a
+        // real number.
+        val node = runCatching { ProcessBuilder("which", "node").start().also { it.waitFor(5, TimeUnit.SECONDS) } }
+            .getOrNull()
+        assumeTrue(node != null && node.exitValue() == 0, "node not available in this environment")
+
+        val field = PlaywrightRecorder::class.java.getDeclaredField("PLAYWRIGHT_SCRIPT")
+        field.isAccessible = true
+        val script = field.get(null) as String
+
+        val scenarioYaml = """
+            demo_scenario:
+              description: "Email login"
+              steps:
+                - action: type
+                  selector: "[data-testid=\"email-input\"]"
+                  value: "owner@promomesh.ru"
+                  delay: 50
+        """.trimIndent()
+
+        val scenarioFile = File.createTempFile("pw-scenario-test-", ".yaml").apply {
+            writeText(scenarioYaml)
+            deleteOnExit()
+        }
+
+        val marker = "function parseScenarioYaml"
+        check(script.contains(marker)) { "PLAYWRIGHT_SCRIPT no longer defines parseScenarioYaml" }
+        val parsingFunctions = marker + script.substringAfter(marker)
+        val harness = "const fs = require('fs');\n" + parsingFunctions + "\n" +
+            "const parsed = parseScenarioYaml(fs.readFileSync(process.argv[2], 'utf-8'));\n" +
+            "const step = parsed.steps[0];\n" +
+            "console.log(JSON.stringify({ selector: step.selector, delayType: typeof step.delay, delay: step.delay }));\n"
+        val harnessFile = File.createTempFile("pw-harness-", ".js").apply {
+            writeText(harness)
+            deleteOnExit()
+        }
+
+        val process = ProcessBuilder("node", harnessFile.absolutePath, scenarioFile.absolutePath)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText()
+        process.waitFor(15, TimeUnit.SECONDS)
+
+        assertThat(output.contains("\"selector\":\"[data-testid=\\\"email-input\\\"]\"")).isTrue()
+        assertThat(output.contains("\"delayType\":\"number\"")).isTrue()
+        assertThat(output.contains("\"delay\":50")).isTrue()
     }
 
     @Test

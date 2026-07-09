@@ -23,6 +23,8 @@ import com.flexsentlabs.koncerto.core.quota.QuotaEnforcer
 import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.core.tenant.TenantContext
 import com.flexsentlabs.koncerto.core.tenant.TenantResolver
+import com.flexsentlabs.koncerto.deploy.SecretRequirementDetector
+import com.flexsentlabs.koncerto.deploy.SecretsFile
 import com.flexsentlabs.koncerto.linear.LinearClient
 import com.flexsentlabs.koncerto.logging.RollingTraceFiles
 import com.flexsentlabs.koncerto.logging.StructuredLogger
@@ -585,6 +587,53 @@ class DispatchService(
         val agentKind: String
     )
 
+    /**
+     * Returns true if dispatch may proceed. Returns false (and blocks the ticket with a comment)
+     * when the target project declares required secrets that the operator's demo secrets file does
+     * not provide. Detection is best-effort: any failure to detect fails OPEN (proceeds), and a
+     * project that declares nothing detectable is never gated.
+     */
+    private suspend fun runSecretPreflight(issue: Issue): Boolean {
+        val ws = workspaces?.let { runCatching { it.ensureWorkspace(issue.identifier) }.getOrNull() } ?: return true
+        val required = runCatching { SecretRequirementDetector().detect(ws.path) }.getOrDefault(emptySet())
+        if (required.isEmpty()) {
+            logger.info("demo_secrets_none", mapOf("issue_id" to issue.id))
+            return true
+        }
+        val provided = SecretsFile.load(projectConfig.demoSecretsFile).keys
+        val missing = (required - provided).sorted()
+        if (missing.isEmpty()) return true
+
+        // Mark blocked locally so the candidate filter (isBlockedForTodo) skips this issue on the next
+        // poll. Without this, a tracker-side transition failure below would leave the issue in Todo and
+        // it would be re-preflighted and re-commented every poll cycle. addBlocked returns false if it
+        // was already marked, so we only comment/transition once per process run.
+        if (!state.addBlocked(issue.id)) return false
+
+        logger.warn("dispatch_blocked_missing_secrets", mapOf(
+            "issue_id" to issue.id, "missing" to missing.joinToString(",")))
+        // Comment BEFORE the state transition (best-effort), mirroring the blocked-state contract.
+        try {
+            linear.createComment(issue.id,
+                "Blocked: required secret(s) not configured before implementation: " +
+                    "${missing.joinToString(", ")}. Add them to this project's demo secrets file, then unblock.")
+        } catch (e: Exception) {
+            logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+        try {
+            val blockedId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
+            if (blockedId != null) {
+                linear.updateIssueState(issue.id, blockedId)
+                logger.info("state_transitioned", mapOf("issue_id" to issue.id, "to_state" to projectConfig.tracker.blockedState))
+            } else {
+                logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+            }
+        } catch (e: Exception) {
+            logger.warn("dispatch_secret_block_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+        return false
+    }
+
     private suspend fun prepareDispatch(issue: Issue, attempt: Int?, stageNameOverride: String? = null): DispatchExecutionData? {
         logger.info(
             "dispatch_start",
@@ -606,7 +655,14 @@ class DispatchService(
             stageConfig
         }
         val rawPrompt = effectiveStageConfig?.prompt ?: workflowCache.current().promptTemplate
-        val prompt = workflowCache.resolvePrompt(rawPrompt)
+        val basePrompt = workflowCache.resolvePrompt(rawPrompt)
+        // If a prior demo-recovery cycle escalated to a code fix, it left the failure detail in
+        // .demo-fix-request. Fold it into this dispatch's prompt so the re-run agent actually knows
+        // what to fix (otherwise it re-runs the identical prompt and the escalation is pointless),
+        // then consume the file so it applies once.
+        val prompt = consumeDemoFixRequest(issue)?.let { fixReq ->
+            basePrompt + "\n\n## Demo recording failed — fix this\n" + fixReq
+        } ?: basePrompt
         val resolved = resolveAgent(issue, effectiveStageConfig)
 
         if (AgentAuthChecker.needsAuth(resolved.kind) && !AgentAuthChecker.isAuthenticated(resolved.kind)) {
@@ -632,6 +688,13 @@ class DispatchService(
             contextMap["tenant_tier"] = tenantContext.tier
         }
         logger.info("dispatch_context", contextMap)
+
+        // Fail fast: if the target declares required secrets the operator hasn't provided, block the
+        // ticket now — before any coding agent runs — with a comment naming what is missing.
+        if (!runSecretPreflight(issue)) {
+            traceDispatchStep(issue, "dispatch", "blocked_missing_secrets")
+            return null
+        }
 
         if (!state.tryClaim(issue.id)) return null
         traceDispatchStep(issue, "dispatch", "claimed")
@@ -1055,6 +1118,20 @@ class DispatchService(
         val workspace = runCatching { ws.ensureWorkspace(identifier) }.getOrNull() ?: return@withContext null
         val path = workspace.path.resolve(".koncerto").resolve("clarification.md")
         if (Files.exists(path)) runCatching { Files.readString(path) }.getOrNull() else null
+    }
+
+    /**
+     * Reads and DELETES the `.demo-fix-request` note left by a demo-recovery code-fix escalation, so
+     * its failure detail is folded into the next coding prompt exactly once. Returns null when absent.
+     */
+    internal suspend fun consumeDemoFixRequest(issue: Issue): String? = withContext(Dispatchers.IO) {
+        val ws = workspaces ?: return@withContext null
+        val workspace = runCatching { ws.ensureWorkspace(issue.identifier) }.getOrNull() ?: return@withContext null
+        val path = workspace.path.resolve(".demo-fix-request")
+        if (!Files.exists(path)) return@withContext null
+        val content = runCatching { Files.readString(path) }.getOrNull()
+        runCatching { Files.deleteIfExists(path) }
+        content?.takeIf { it.isNotBlank() }
     }
 
     suspend fun handleClarification(issueId: String, clarificationContent: String) {

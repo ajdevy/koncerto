@@ -75,12 +75,12 @@ class ContainerLifecycleManager(
         }
     }
 
-    fun runContainer(image: String, hostPort: Int, containerPort: Int, network: String? = null): Result<ContainerInstance> {
+    fun runContainer(image: String, hostPort: Int, containerPort: Int, network: String? = null, envVars: Map<String, String> = emptyMap()): Result<ContainerInstance> {
         var currentPort = hostPort
         var lastError: String? = null
 
         for (attempt in 1..3) {
-            val result = tryRunContainer(image, currentPort, containerPort, network)
+            val result = tryRunContainer(image, currentPort, containerPort, network, envVars)
             if (result.isSuccess) {
                 return result
             }
@@ -104,18 +104,32 @@ class ContainerLifecycleManager(
         return Result.failure(RuntimeException("docker run failed after retries: $lastError"))
     }
 
-    private fun tryRunContainer(image: String, hostPort: Int, containerPort: Int, network: String?): Result<ContainerInstance> {
+    /** Builds the `docker run` argv, injecting one `-e KEY=VALUE` per env entry (order preserved). */
+    internal fun buildRunCommand(
+        containerName: String, network: String, hostPort: Int, containerPort: Int,
+        image: String, envVars: Map<String, String>
+    ): List<String> {
+        val envArgs = envVars.flatMap { (k, v) -> listOf("-e", "$k=$v") }
+        return listOf(
+            "docker", "run", "-d",
+            "--name", containerName,
+            "--label", "${KoncertoDockerLabels.MANAGED_BY}=${KoncertoDockerLabels.MANAGED_VALUE}",
+            "--network", network,
+            "-p", "$hostPort:$containerPort"
+        ) + envArgs + image
+    }
+
+    private fun tryRunContainer(image: String, hostPort: Int, containerPort: Int, network: String?, envVars: Map<String, String> = emptyMap()): Result<ContainerInstance> {
         return try {
             val containerName = "koncerto-demo-${System.currentTimeMillis()}"
             val netArg = network ?: networkName
-            val cmd = listOf(
-                "docker", "run", "-d",
-                "--name", containerName,
-                "--label", "${KoncertoDockerLabels.MANAGED_BY}=${KoncertoDockerLabels.MANAGED_VALUE}",
-                "--network", netArg,
-                "-p", "$hostPort:$containerPort",
-                image
-            )
+            val cmd = buildRunCommand(containerName, netArg, hostPort, containerPort, image, envVars)
+            if (envVars.isNotEmpty()) {
+                logger.info("docker_container_env", mapOf(
+                    // Never log values in full — mask so secrets don't leak into logs.
+                    "env" to (envVars.entries.joinToString(",") { "${it.key}=${SecretsFile.mask(it.value)}" } as Any?)
+                ))
+            }
             val pb = ProcessBuilder(cmd).redirectErrorStream(true)
             val p = pb.start()
             val output = p.inputStream.bufferedReader().readText().trim()

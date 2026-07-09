@@ -62,6 +62,9 @@ class RuntimeState {
     val retryAttempts = ConcurrentHashMap<String, RetryEntry>()
     val limitPauses = ConcurrentHashMap<String, LimitPauseEntry>()
     val reviewAttempts = ConcurrentHashMap<String, Int>()
+    // Counts demo→fix recovery cycles per issue id; capped so a repeatedly-failing demo blocks
+    // the ticket instead of looping forever.
+    val demoRecoveryAttempts = ConcurrentHashMap<String, Int>()
     val completed = ConcurrentHashMap<String, Boolean>()
     private val _blocked = ConcurrentHashMap<String, Boolean>()
     private val _tokenTotals = AtomicReference(TokenTotals())

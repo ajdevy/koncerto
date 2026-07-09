@@ -21,7 +21,42 @@ class DemoScenarioGenerator(
     fun generate(issue: Issue, workspace: Workspace): String? {
         val prompt = buildPrompt(issue, workspace)
         val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
-        return saveScenario(issue, block)
+        val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
+        val grounded = ensureNavigatesToRealRoute(block, routes)
+        return saveScenario(issue, grounded)
+    }
+
+    /**
+     * Regenerates a scenario after a failed recording, feeding the model the scenario that just
+     * failed plus why it failed so it can correct selectors/navigation/steps. This is the cheap,
+     * scenario-first recovery step — it does not touch target code and needs no re-review.
+     * Returns the saved scenario path, or null if the model could not produce a new scenario.
+     */
+    fun repair(issue: Issue, workspace: Workspace, priorScenario: String, failureReason: String): String? {
+        val prompt = buildRepairPrompt(issue, workspace, priorScenario, failureReason)
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
+        val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
+        val grounded = ensureNavigatesToRealRoute(block, routes)
+        logger.info("demo_scenario_repaired", mapOf("issue_id" to issue.id))
+        return saveScenario(issue, grounded)
+    }
+
+    internal fun buildRepairPrompt(issue: Issue, workspace: Workspace, priorScenario: String, failureReason: String): String {
+        return buildString {
+            appendLine("The previous demo scenario FAILED to record. Produce a corrected `demo_scenario` YAML block.")
+            appendLine()
+            appendLine("## Why it failed")
+            appendLine(failureReason.take(1500))
+            appendLine()
+            appendLine("## The scenario that failed")
+            appendLine(priorScenario.take(3000))
+            appendLine()
+            appendLine("Fix the cause: use only selectors/routes that exist in the diff below, reach the")
+            appendLine("feature's page with `navigate` if it isn't linked from the landing page, and keep")
+            appendLine("steps that clearly worked. Then re-emit the full corrected scenario.")
+            appendLine()
+            append(buildPrompt(issue, workspace))
+        }
     }
 
     private fun runWithFallback(prompt: String, workDir: File, issueId: String): String? {
@@ -95,7 +130,16 @@ class DemoScenarioGenerator(
         val readmeFile = workspace.path.resolve("README.md").toFile()
         val readme = if (readmeFile.exists()) readmeFile.readText().take(3000) else ""
 
-        val diff = runGitDiff(workspace.path.toFile())?.take(8000) ?: ""
+        // Extract selectors from the FULL diff before truncating the displayed copy — a real
+        // diff routinely exceeds the display budget, and the added markup's data-testid/id/name
+        // attributes (the only ground truth the model has for what actually exists in the DOM)
+        // can fall past that cutoff. Without this, the model invents plausible-looking selectors
+        // for anything it can't see, and every step referencing them silently fails at
+        // recording time.
+        val fullDiff = runGitDiff(workspace.path.toFile()) ?: ""
+        val realSelectors = extractRealSelectors(fullDiff)
+        val realRoutes = extractRealRoutes(fullDiff)
+        val diff = fullDiff.take(8000)
 
         return buildString {
             if (systemPrompt.isNotBlank()) {
@@ -116,6 +160,18 @@ class DemoScenarioGenerator(
                 appendLine(readme)
                 appendLine()
             }
+            if (realSelectors.isNotEmpty()) {
+                appendLine("## Real Selectors (extracted from the actual diff)")
+                appendLine("These are the ONLY selectors confirmed to exist in the new/changed markup. Use these exact selectors for click/type/assert/wait steps. Do not invent data-testid, id, name, or aria-label values that aren't listed here — a guessed selector matches nothing and the step silently fails.")
+                realSelectors.forEach { appendLine("- $it") }
+                appendLine()
+            }
+            if (realRoutes.isNotEmpty()) {
+                appendLine("## Real Routes (extracted from the actual diff)")
+                appendLine("These routes are confirmed to exist in the PR's changes. If the feature lives on one of these and it isn't reachable by clicking something on the landing page, use `navigate` with this exact relative URL as an early step — do not just click and hope, and do not silently stay on the landing page.")
+                realRoutes.forEach { appendLine("- $it") }
+                appendLine()
+            }
             if (diff.isNotBlank()) {
                 appendLine("## PR Changes")
                 appendLine(diff)
@@ -123,6 +179,57 @@ class DemoScenarioGenerator(
             }
             append("Generate the demo_scenario YAML now. The scenario must include scrolling and button pressing, with at least one scroll action and at least one button click.")
         }
+    }
+
+    internal fun extractRealSelectors(diff: String): List<String> {
+        val attrPattern = Regex("""(data-testid|data-[a-z-]+|id|name|aria-label)=["']([^"']+)["']""")
+        val selectors = linkedSetOf<String>()
+        for (line in diff.lineSequence()) {
+            if (!line.startsWith("+") || line.startsWith("+++")) continue
+            for (match in attrPattern.findAll(line)) {
+                val (attr, value) = match.destructured
+                if (value.isBlank()) continue
+                selectors.add("[$attr=\"$value\"]")
+            }
+        }
+        return selectors.toList()
+    }
+
+    internal fun extractRealRoutes(diff: String): List<String> {
+        // Matches route registrations across the common backend frameworks (FastAPI/Flask
+        // decorators, Express/Koa-style app.get/router.get calls). Only added lines count —
+        // this is meant to find NEW routes this PR introduces, not pre-existing ones.
+        val routePattern = Regex(
+            """(?:@\w+\.(?:get|post|put|delete|patch|route)|(?:app|router)\.(?:get|post|put|delete|patch|use))\s*\(\s*["']([^"']+)["']"""
+        )
+        val routes = linkedSetOf<String>()
+        for (line in diff.lineSequence()) {
+            if (!line.startsWith("+") || line.startsWith("+++")) continue
+            for (match in routePattern.findAll(line)) {
+                val path = match.groupValues[1]
+                if (path.startsWith("/") && path != "/") routes.add(path)
+            }
+        }
+        return routes.toList()
+    }
+
+    internal fun ensureNavigatesToRealRoute(block: String, routes: List<String>): String {
+        if (routes.isEmpty()) return block
+        // If the model already navigates somewhere other than the root, trust it — it may have
+        // picked a different (also valid) route, or reached the target page via an in-page
+        // click the recorder will actually perform.
+        val hasNonRootNavigate = Regex("""action:\s*navigate[\s\S]*?url:\s*["']?([^"'\n]+)""")
+            .findAll(block)
+            .any { it.groupValues[1].trim().trim('"', '\'').let { u -> u.isNotBlank() && u != "/" } }
+        if (hasNonRootNavigate) return block
+
+        val stepsMatch = Regex("""steps:\s*\n""").find(block) ?: return block
+        val stepIndent = Regex("""\n(\s*)- action:""").find(block)?.groupValues?.get(1) ?: "    "
+        val injected = "$stepIndent- action: navigate\n" +
+            "$stepIndent  url: \"${routes.first()}\"\n" +
+            "$stepIndent  waitUntil: networkidle\n"
+        val insertAt = stepsMatch.range.last + 1
+        return block.substring(0, insertAt) + injected + block.substring(insertAt)
     }
 
     private fun runGitDiff(workDir: File): String? = try {

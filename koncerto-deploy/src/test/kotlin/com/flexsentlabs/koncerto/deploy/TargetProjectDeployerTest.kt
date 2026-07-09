@@ -6,6 +6,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isNotNull
 import assertk.assertions.isTrue
+import com.flexsentlabs.koncerto.logging.LogSink
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import io.mockk.every
 import io.mockk.mockk
@@ -37,7 +38,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32768
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -68,7 +69,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32769
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.failure(RuntimeException("port in use"))
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.failure(RuntimeException("port in use"))
         every { containerManager.releasePort(32769) } returns Unit
 
         val deployer = createDeployer(containerManager)
@@ -86,7 +87,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32770
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.failure(RuntimeException("unhealthy"))
         every { containerManager.captureLogs(any()) } returns "container logs"
         every { containerManager.stopAndRemove(any()) } returns Unit
@@ -107,7 +108,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32771
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -161,7 +162,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32780
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         FakeDockerPath.withFakeDockerSuspend(FakeDockerPath.composeInfraOnlyScript()) {
@@ -208,6 +209,51 @@ class TargetProjectDeployerTest {
     }
 
     @Test
+    fun `cleanupOrphans skips the sweep while a deployment is in flight`(@TempDir tmpDir: Path) = runTest {
+        // Regression test for a real production incident: the periodic orphan sweep (every
+        // 5 min) force-removes ANY container/image named koncerto-demo-* — the same pattern
+        // every active deployment uses. A sweep landing between deploy success and the demo
+        // recording finishing killed the live container out from under the recording
+        // (observed: deploy_success at 12:34:44, container force-removed by the sweep at
+        // 12:37:47, recording failed with ERR_CONNECTION_REFUSED at 12:39:38). The sweep must
+        // stay hands-off for the whole deploy -> record -> cleanup window.
+        val captured = mutableListOf<String>()
+        val capturingLogger = StructuredLogger(listOf(object : LogSink {
+            override fun write(line: String) {
+                captured += line
+            }
+        }))
+        Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
+        val container = ContainerInstance("cid-inflight", 32768, "http://localhost:32768")
+        val containerManager = mockk<ContainerLifecycleManager>()
+        every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
+        every { containerManager.allocatePort() } returns 32768
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
+
+        val deployer = TargetProjectDeployer(
+            configDetector = DockerConfigDetector(),
+            frameworkDetector = FrameworkDetector(),
+            dockerfileGenerator = DockerfileGenerator(),
+            containerManager = containerManager,
+            logger = capturingLogger
+        )
+
+        val deployResult = deployer.deploy(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        assertThat(deployResult.success).isTrue()
+
+        // cleanup() hasn't run yet -- exactly the in-flight window the real incident hit.
+        deployer.cleanupOrphans()
+        assertThat(captured.any { it.contains("deploy_orphan_cleanup_skipped") }).isTrue()
+        assertThat(captured.any { it.contains("deploy_orphan_cleanup_start") }).isFalse()
+
+        deployer.cleanup(DeployConfig("owner/repo", "feature", projectPath = tmpDir))
+        captured.clear()
+        deployer.cleanupOrphans()
+        assertThat(captured.any { it.contains("deploy_orphan_cleanup_start") }).isTrue()
+    }
+
+    @Test
     fun `buildAndRun wraps unexpected exceptions`(@TempDir tmpDir: Path) {
         val deployer = createDeployer(mockk(relaxed = true))
         val badConfig = DetectedDockerConfig(DockerConfigType.DOCKER_COMPOSE, composeFile = null)
@@ -236,7 +282,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32790
-        every { containerManager.runContainer(any(), any(), any(), match { it == "koncerto-demo_default" }) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), match { it == "koncerto-demo_default" }, any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -254,7 +300,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32791
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -294,7 +340,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32797
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -312,7 +358,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32798
-        every { containerManager.runContainer(any(), any(), any(), eq("koncerto-demo_default")) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), eq("koncerto-demo_default"), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -328,7 +374,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32799
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.failure(RuntimeException("unhealthy"))
         every { containerManager.captureLogs(any()) } returns "health fail logs"
         every { containerManager.stopAndRemove(any()) } returns Unit
@@ -360,7 +406,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32800
-        every { containerManager.runContainer(any(), any(), any(), eq("koncerto-demo_default")) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), eq("koncerto-demo_default"), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -391,7 +437,7 @@ class TargetProjectDeployerTest {
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32801
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.failure(RuntimeException("run failed"))
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.failure(RuntimeException("run failed"))
         every { containerManager.releasePort(32801) } returns Unit
 
         val deployer = createDeployer(containerManager)
@@ -450,7 +496,7 @@ exit 0
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32801
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
         val deployer = createDeployer(containerManager)
         val result = deployer.deploy(DeployConfig("owner/repo", "node-feature", projectPath = tmpDir))
@@ -466,7 +512,7 @@ exit 0
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32802
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
         val deployer = createDeployer(containerManager)
         val result = deployer.deploy(DeployConfig("owner/repo", "py-feature", projectPath = tmpDir))
@@ -482,7 +528,7 @@ exit 0
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32803
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
         val deployer = createDeployer(containerManager)
         val result = deployer.deploy(DeployConfig("owner/repo", "go-feature", projectPath = tmpDir))
@@ -505,7 +551,7 @@ exit 0
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32795
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
 
         val deployer = createDeployer(containerManager)
@@ -580,7 +626,7 @@ exit 0
         val containerManager = mockk<ContainerLifecycleManager>()
         every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
         every { containerManager.allocatePort() } returns 32810
-        every { containerManager.runContainer(any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
         every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
         val script = """#!/usr/bin/env bash
 case "${'$'}1" in
@@ -934,10 +980,10 @@ exit 0
         network: String?
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployWithDockerfile", Path::class.java, Path::class.java, String::class.java, String::class.java
+            "deployWithDockerfile", Path::class.java, Path::class.java, String::class.java, String::class.java, Map::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, dockerfile, projectPath, tag, network) as DeployResult
+        return method.invoke(deployer, dockerfile, projectPath, tag, network, emptyMap<String, String>()) as DeployResult
     }
 
     private fun invokeDeployWithCompose(
@@ -947,10 +993,10 @@ exit 0
         tag: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployWithCompose", Path::class.java, Path::class.java, String::class.java
+            "deployWithCompose", Path::class.java, Path::class.java, String::class.java, Map::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, composeFile, projectPath, tag) as DeployResult
+        return method.invoke(deployer, composeFile, projectPath, tag, emptyMap<String, String>()) as DeployResult
     }
 
     private fun invokeResolveComposeNetwork(
@@ -972,10 +1018,10 @@ exit 0
         network: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployAppOnNetwork", Path::class.java, String::class.java, String::class.java
+            "deployAppOnNetwork", Path::class.java, String::class.java, String::class.java, Map::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, projectPath, tag, network) as DeployResult
+        return method.invoke(deployer, projectPath, tag, network, emptyMap<String, String>()) as DeployResult
     }
 
     private fun invokeBuildAndRun(
@@ -985,10 +1031,10 @@ exit 0
         tag: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "buildAndRun", DetectedDockerConfig::class.java, Path::class.java, String::class.java
+            "buildAndRun", DetectedDockerConfig::class.java, Path::class.java, String::class.java, Map::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, config, projectPath, tag) as DeployResult
+        return method.invoke(deployer, config, projectPath, tag, emptyMap<String, String>()) as DeployResult
     }
 
     private fun createDeployer(containerManager: ContainerLifecycleManager): TargetProjectDeployer {

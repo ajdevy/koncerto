@@ -166,6 +166,7 @@ Take a screenshot (saved as a verification artifact, not included in video).
 4. **Responsiveness**: If the feature has mobile/responsive behavior, include viewport resizing.
 5. **Error states**: If the PR adds validation, trigger errors by submitting invalid data.
 6. **Loading states**: If the feature fetches data, wait for loading to complete.
+7. **Reaching the new page**: If the PR's route (e.g. `/login`, `/settings`) isn't linked from the landing page by a button or link you can see in the diff/README, don't guess a click path to reach it — use `navigate` with that route's relative URL directly. A failed click on a non-existent link strands the whole rest of the scenario on the wrong page.
 
 ### Pacing
 - Space actions naturally — add `wait` steps between interactions (500-2000ms) to feel human.
