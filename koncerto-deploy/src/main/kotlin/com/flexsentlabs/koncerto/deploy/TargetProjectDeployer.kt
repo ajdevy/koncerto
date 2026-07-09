@@ -15,11 +15,16 @@ data class DeployResult(
     val error: String?,
     val logs: String?,
     val isCompose: Boolean = false,
-    val tag: String? = null
+    val tag: String? = null,
+    // The target container's address on its own Docker network (http://<containerName>:<port>),
+    // reachable from other containers (e.g. the demo recorder) but not from the host. Null when
+    // the deploy path never ran its own `docker run` (e.g. the compose-direct-webport success
+    // path), in which case recording has no internal address to use.
+    val internalUrl: String? = null
 ) {
     companion object {
-        fun success(url: String, isCompose: Boolean = false, tag: String? = null) =
-            DeployResult(url, true, null, null, isCompose, tag)
+        fun success(url: String, isCompose: Boolean = false, tag: String? = null, internalUrl: String? = null) =
+            DeployResult(url, true, null, null, isCompose, tag, internalUrl)
         fun failure(error: String, logs: String? = null) =
             DeployResult(null, false, error, logs, false, null)
     }
@@ -188,7 +193,7 @@ class TargetProjectDeployer(
             "tag" to tag,
             "url" to container.baseUrl
         ))
-        return DeployResult.success(container.baseUrl, tag = tag)
+        return DeployResult.success(container.baseUrl, tag = tag, internalUrl = container.internalUrl)
     }
 
     private fun deployWithCompose(
