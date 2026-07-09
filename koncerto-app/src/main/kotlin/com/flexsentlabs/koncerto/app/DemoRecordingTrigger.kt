@@ -73,9 +73,10 @@ object DemoRecordingTrigger {
         }
 
         println("Deploying target project for $issueIdentifier...")
-        val deployResult = runBlocking { deployProject(config, projectPath, issueIdentifier, logger) }
-        if (deployResult == null) {
-            println("Deployment failed, aborting")
+        val deployResult = runBlocking { deployProject(config, projectPath, issueIdentifier, projectSlug, logger) }
+        if (deployResult == null || !deployResult.success) {
+            println("Deployment failed: ${deployResult?.error ?: "unknown"}")
+            if (deployResult?.logs != null) println(deployResult.logs)
             kotlin.system.exitProcess(1)
         }
         val targetUrl = deployResult.url ?: error("Deploy succeeded but no URL returned")
@@ -132,7 +133,7 @@ object DemoRecordingTrigger {
     }
 
     private suspend fun deployProject(
-        config: ServiceConfig, workspacePath: Path, prBranch: String, logger: StructuredLogger
+        config: ServiceConfig, workspacePath: Path, prBranch: String, projectSlug: String, logger: StructuredLogger
     ): com.flexsentlabs.koncerto.deploy.DeployResult? {
         val deployer = createDeployer(logger)
         val repoFullName = resolveRepoFullName(workspacePath, config)
@@ -140,11 +141,15 @@ object DemoRecordingTrigger {
             logger.warn("deploy_no_repo", emptyMap())
             return null
         }
+        val projectConfig = config.projects[projectSlug]
+        val secrets = com.flexsentlabs.koncerto.deploy.SecretsFile.load(projectConfig?.demoSecretsFile)
         val deployConfig = DeployConfig(
             repoFullName = repoFullName,
             prBranch = prBranch,
             baseBranch = "main",
-            projectPath = workspacePath
+            projectPath = workspacePath,
+            envVars = secrets,
+            postDeployCommand = projectConfig?.demoPostDeployCommand
         )
         val result = deployer.deploy(deployConfig)
         if (result.success) {
