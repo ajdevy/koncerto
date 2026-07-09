@@ -474,7 +474,7 @@ class AutoReviewOrchestrator(
         if (content.isBlank() && demoUrl.isNullOrBlank()) return
 
         val modelName = reviewStage?.model ?: "claude"
-        val header = "### Claude Review #$sequence ($modelName)\n"
+        val header = "### 🤖 Claude Review #$sequence · $modelName\n"
         val demoLink = if (!demoUrl.isNullOrBlank()) "\n---\n🎥 [Watch Demo Recording]($demoUrl)" else ""
         val body = if (content.isBlank()) header + demoLink.trimStart('\n') else header + content + demoLink
 
