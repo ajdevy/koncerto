@@ -558,7 +558,10 @@ class DemoScenarioGeneratorTest {
     }
 
     private fun initGitRepoWithDiff(tmpDir: Path, changeContent: String) {
-        runProcess(listOf("git", "init"), tmpDir)
+        // runGitDiff() hard-codes a diff against "main" — pin the initial branch explicitly so
+        // this doesn't depend on the ambient git client's init.defaultBranch config, which
+        // differs between environments (observed: passes locally, fails on the CI runner).
+        runProcess(listOf("git", "init", "-b", "main"), tmpDir)
         runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
         runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
         java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial content")
