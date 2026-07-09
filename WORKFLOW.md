@@ -28,6 +28,7 @@ projects:
       kind: human
     git_remote_url: $GIT_REMOTE_URL
     demo_secrets_file: $KONCERTO_PROMOMESH_SECRETS
+    demo_post_deploy_command: "alembic upgrade head"
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT
     agent:
