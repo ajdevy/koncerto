@@ -50,6 +50,68 @@ class TargetProjectDeployerTest {
     }
 
     @Test
+    fun `deploy runs the post deploy command after health check succeeds`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
+        val container = ContainerInstance("cid123", 32768, "http://host.docker.internal:32768")
+        val containerManager = mockk<ContainerLifecycleManager>()
+        every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
+        every { containerManager.allocatePort() } returns 32768
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
+        every { containerManager.execCommand(any(), any()) } returns Result.success("migration output")
+
+        val deployer = createDeployer(containerManager)
+        val result = deployer.deploy(
+            DeployConfig("owner/repo", "feature/branch", projectPath = tmpDir, postDeployCommand = "alembic upgrade head")
+        )
+
+        assertThat(result.success).isTrue()
+        verify(exactly = 1) { containerManager.execCommand("cid123", "alembic upgrade head") }
+    }
+
+    @Test
+    fun `deploy fails when the post deploy command fails`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
+        val container = ContainerInstance("cid123", 32768, "http://host.docker.internal:32768")
+        val containerManager = mockk<ContainerLifecycleManager>()
+        every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
+        every { containerManager.allocatePort() } returns 32768
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
+        every { containerManager.execCommand(any(), any()) } returns
+            Result.failure(RuntimeException("post-deploy command failed (exit 1):\nno such table"))
+        every { containerManager.stopAndRemove(any()) } returns Unit
+        every { containerManager.releasePort(any()) } returns Unit
+
+        val deployer = createDeployer(containerManager)
+        val result = deployer.deploy(
+            DeployConfig("owner/repo", "feature/branch", projectPath = tmpDir, postDeployCommand = "alembic upgrade head")
+        )
+
+        assertThat(result.success).isFalse()
+        assertThat(result.error).isEqualTo("Post-deploy command failed")
+        assertThat(result.logs!!).contains("no such table")
+        verify(exactly = 1) { containerManager.stopAndRemove("cid123") }
+    }
+
+    @Test
+    fun `deploy does not call execCommand when no post deploy command is configured`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
+        val container = ContainerInstance("cid123", 32768, "http://host.docker.internal:32768")
+        val containerManager = mockk<ContainerLifecycleManager>()
+        every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
+        every { containerManager.allocatePort() } returns 32768
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
+
+        val deployer = createDeployer(containerManager)
+        val result = deployer.deploy(DeployConfig("owner/repo", "feature/branch", projectPath = tmpDir))
+
+        assertThat(result.success).isTrue()
+        verify(exactly = 0) { containerManager.execCommand(any(), any()) }
+    }
+
+    @Test
     fun `deploy returns failure when docker build fails`(@TempDir tmpDir: Path) = runTest {
         Files.writeString(tmpDir.resolve("go.mod"), "module example.com/app\ngo 1.22\n")
         val containerManager = mockk<ContainerLifecycleManager>()
@@ -980,10 +1042,10 @@ exit 0
         network: String?
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployWithDockerfile", Path::class.java, Path::class.java, String::class.java, String::class.java, Map::class.java
+            "deployWithDockerfile", Path::class.java, Path::class.java, String::class.java, String::class.java, Map::class.java, String::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, dockerfile, projectPath, tag, network, emptyMap<String, String>()) as DeployResult
+        return method.invoke(deployer, dockerfile, projectPath, tag, network, emptyMap<String, String>(), null) as DeployResult
     }
 
     private fun invokeDeployWithCompose(
@@ -993,10 +1055,10 @@ exit 0
         tag: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployWithCompose", Path::class.java, Path::class.java, String::class.java, Map::class.java
+            "deployWithCompose", Path::class.java, Path::class.java, String::class.java, Map::class.java, String::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, composeFile, projectPath, tag, emptyMap<String, String>()) as DeployResult
+        return method.invoke(deployer, composeFile, projectPath, tag, emptyMap<String, String>(), null) as DeployResult
     }
 
     private fun invokeResolveComposeNetwork(
@@ -1018,10 +1080,10 @@ exit 0
         network: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "deployAppOnNetwork", Path::class.java, String::class.java, String::class.java, Map::class.java
+            "deployAppOnNetwork", Path::class.java, String::class.java, String::class.java, Map::class.java, String::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, projectPath, tag, network, emptyMap<String, String>()) as DeployResult
+        return method.invoke(deployer, projectPath, tag, network, emptyMap<String, String>(), null) as DeployResult
     }
 
     private fun invokeBuildAndRun(
@@ -1031,10 +1093,10 @@ exit 0
         tag: String
     ): DeployResult {
         val method = TargetProjectDeployer::class.java.getDeclaredMethod(
-            "buildAndRun", DetectedDockerConfig::class.java, Path::class.java, String::class.java, Map::class.java
+            "buildAndRun", DetectedDockerConfig::class.java, Path::class.java, String::class.java, Map::class.java, String::class.java
         )
         method.isAccessible = true
-        return method.invoke(deployer, config, projectPath, tag, emptyMap<String, String>()) as DeployResult
+        return method.invoke(deployer, config, projectPath, tag, emptyMap<String, String>(), null) as DeployResult
     }
 
     private fun createDeployer(containerManager: ContainerLifecycleManager): TargetProjectDeployer {
