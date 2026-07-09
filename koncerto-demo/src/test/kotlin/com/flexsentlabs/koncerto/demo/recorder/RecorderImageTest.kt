@@ -45,7 +45,8 @@ class RecorderImageTest {
     @Test
     fun `ensureBuilt skips the build when the image already exists`() {
         val image = RecorderImage()
-        image.ensureBuilt(tag = testTag, dockerfileContent = "FROM alpine:3.20\n")
+        val firstBuild = image.ensureBuilt(tag = testTag, dockerfileContent = "FROM alpine:3.20\n")
+        check(firstBuild.isSuccess) { "precondition failed: first build did not succeed: ${firstBuild.exceptionOrNull()}" }
 
         // A deliberately broken Dockerfile — if ensureBuilt tried to rebuild, this would fail.
         val result = image.ensureBuilt(tag = testTag, dockerfileContent = "NOT A VALID DOCKERFILE")
