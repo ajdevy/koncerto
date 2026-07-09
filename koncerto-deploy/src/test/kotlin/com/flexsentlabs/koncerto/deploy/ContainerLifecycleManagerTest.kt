@@ -52,6 +52,18 @@ class ContainerLifecycleManagerTest {
     }
 
     @Test
+    fun `buildExecCommand wraps the command in sh -c`() {
+        val cmd = manager.buildExecCommand("abc123", "alembic upgrade head")
+        assertThat(cmd).isEqualTo(listOf("docker", "exec", "abc123", "sh", "-c", "alembic upgrade head"))
+    }
+
+    @Test
+    fun `execCommand fails for a missing container`() {
+        val result = manager.execCommand("nonexistent-container-id", "echo hi")
+        assertThat(result.isFailure).isTrue()
+    }
+
+    @Test
     fun `releasePort allows reallocation`() {
         val port = manager.allocatePort()
         manager.releasePort(port)

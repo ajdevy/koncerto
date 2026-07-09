@@ -74,7 +74,8 @@ class AutoReviewOrchestratorTest {
     private fun projectConfig(
         stages: Map<String, StageAgentConfig> = emptyMap(),
         workspaceRoot: String = "/tmp",
-        demoSecretsFile: String? = null
+        demoSecretsFile: String? = null,
+        demoPostDeployCommand: String? = null
     ) = ProjectConfig(
         tracker = TrackerConfig(
             kind = "linear", endpoint = "x", apiKey = "k", projectSlug = "p",
@@ -89,7 +90,8 @@ class AutoReviewOrchestratorTest {
             turnTimeoutMs = 60000, readTimeoutMs = 5000, stallTimeoutMs = 30000,
             stages = stages
         ),
-        demoSecretsFile = demoSecretsFile
+        demoSecretsFile = demoSecretsFile,
+        demoPostDeployCommand = demoPostDeployCommand
     )
 
     private fun issue(id: String = "issue-1", identifier: String = "T-1") = Issue(
@@ -894,6 +896,42 @@ class AutoReviewOrchestratorTest {
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat(deployer.deployCalls.size).isEqualTo(1)
         assertThat(deployer.deployCalls[0].envVars["BREVO_API_KEY"]).isEqualTo("xkeysib-provided")
+    }
+
+    @Test
+    fun `configured post deploy command is threaded into the deploy config`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output"), "PASS")
+
+        val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(
+                stages = mapOf("in review" to reviewStage()),
+                workspaceRoot = workspaceDir.toString(),
+                demoPostDeployCommand = "alembic upgrade head"
+            ),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = { command, _ ->
+                if (command.contains("comment")) GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                else GhProcessResult(0, """{"number":7}""")
+            },
+            targetProjectDeployer = deployer,
+            deployRepoFullName = "acme/widget",
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(deployer.deployCalls.size).isEqualTo(1)
+        assertThat(deployer.deployCalls[0].postDeployCommand).isEqualTo("alembic upgrade head")
     }
 
     @Test

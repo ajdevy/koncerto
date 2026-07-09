@@ -15,7 +15,12 @@ data class ProjectConfig(
     // Path to a per-project secrets file (KEY=VALUE lines) whose entries are injected into the
     // demo deploy container. Also the source of "provided" secrets for the missing-secret
     // preflight. Null / absent file → no injected secrets and an empty provided set.
-    val demoSecretsFile: String? = null
+    val demoSecretsFile: String? = null,
+    // Optional shell command run via `docker exec` against the demo container once its health
+    // check passes, before the deploy is considered ready for recording (e.g. "alembic upgrade
+    // head"). Koncerto has no knowledge of what it does, only whether it exits zero. Null →
+    // no command runs, zero behavior change.
+    val demoPostDeployCommand: String? = null
 )
 
 @kotlinx.serialization.Serializable

@@ -31,7 +31,10 @@ data class DeployConfig(
     val baseBranch: String = "main",
     val projectPath: Path,
     // Secrets/env injected into the demo container (KEY=VALUE). Values are masked in all logs.
-    val envVars: Map<String, String> = emptyMap()
+    val envVars: Map<String, String> = emptyMap(),
+    // Optional command run via `docker exec` once the container passes its health check, before
+    // the deploy is considered ready for recording (e.g. running database migrations).
+    val postDeployCommand: String? = null
 )
 
 class TargetProjectDeployer(
@@ -66,7 +69,7 @@ class TargetProjectDeployer(
         if (existingConfig != null) {
             logger.info("deploy_docker_config_found", mapOf("type" to existingConfig.type.name))
             traceDeployStep(projectPath, "deploy", "docker_config_found", mapOf("type" to existingConfig.type.name))
-            return buildAndRun(existingConfig, projectPath, tag, config.envVars)
+            return buildAndRun(existingConfig, projectPath, tag, config.envVars, config.postDeployCommand)
         }
 
         // Phase 2: Check for framework and generate Dockerfile
@@ -84,7 +87,7 @@ class TargetProjectDeployer(
             tempDockerfile.toFile().writeText(dockerfileContent)
             traceDeployStep(projectPath, "deploy", "temp_dockerfile_written")
             val detected = DetectedDockerConfig(DockerConfigType.DOCKERFILE, dockerfile = tempDockerfile)
-            return buildAndRun(detected, projectPath, tag, config.envVars)
+            return buildAndRun(detected, projectPath, tag, config.envVars, config.postDeployCommand)
         } finally {
             tempDockerfile.toFile().delete()
         }
@@ -92,18 +95,21 @@ class TargetProjectDeployer(
 
     private val webPorts = setOf(80, 3000, 5000, 8000, 8080, 8443, 3001, 5173, 4200, 8001, 9090, 17349)
 
-    private fun buildAndRun(config: DetectedDockerConfig, projectPath: Path, tag: String, envVars: Map<String, String> = emptyMap()): DeployResult {
+    private fun buildAndRun(
+        config: DetectedDockerConfig, projectPath: Path, tag: String,
+        envVars: Map<String, String> = emptyMap(), postDeployCommand: String? = null
+    ): DeployResult {
         return try {
             when (config.type) {
                 DockerConfigType.DOCKER_COMPOSE -> {
                     val composeFile = requireNotNull(config.composeFile) { "DOCKER_COMPOSE config missing composeFile" }
                     traceDeployStep(projectPath, "build_and_run", "compose")
-                    deployWithCompose(composeFile, projectPath, tag, envVars)
+                    deployWithCompose(composeFile, projectPath, tag, envVars, postDeployCommand)
                 }
                 DockerConfigType.DOCKERFILE -> {
                     val dockerfile = requireNotNull(config.dockerfile) { "DOCKERFILE config missing dockerfile" }
                     traceDeployStep(projectPath, "build_and_run", "dockerfile")
-                    deployWithDockerfile(dockerfile, projectPath, tag, envVars = envVars)
+                    deployWithDockerfile(dockerfile, projectPath, tag, envVars = envVars, postDeployCommand = postDeployCommand)
                 }
             }
         } catch (e: Exception) {
@@ -112,7 +118,10 @@ class TargetProjectDeployer(
         }
     }
 
-    private fun deployWithDockerfile(dockerfile: Path, projectPath: Path, tag: String, network: String? = null, envVars: Map<String, String> = emptyMap()): DeployResult {
+    private fun deployWithDockerfile(
+        dockerfile: Path, projectPath: Path, tag: String, network: String? = null,
+        envVars: Map<String, String> = emptyMap(), postDeployCommand: String? = null
+    ): DeployResult {
         val buildResult = containerManager.buildImage(projectPath, dockerfile, tag)
         if (buildResult.isFailure) {
             traceDeployStep(projectPath, "deploy_dockerfile", "build_failed", mapOf(
@@ -157,6 +166,23 @@ class TargetProjectDeployer(
             return DeployResult.failure("Health check failed", logs)
         }
 
+        if (postDeployCommand != null) {
+            val execResult = containerManager.execCommand(container.containerId, postDeployCommand)
+            if (execResult.isFailure) {
+                containerManager.stopAndRemove(container.containerId)
+                containerManager.releasePort(hostPort)
+                traceDeployStep(projectPath, "deploy_dockerfile", "post_deploy_command_failed", mapOf(
+                    "tag" to tag,
+                    "port" to hostPort.toString()
+                ))
+                return DeployResult.failure(
+                    "Post-deploy command failed",
+                    execResult.exceptionOrNull()?.message
+                )
+            }
+            logger.info("deploy_post_deploy_command_ok", mapOf("tag" to tag))
+        }
+
         logger.info("deploy_success", mapOf("url" to container.baseUrl))
         traceDeployStep(projectPath, "deploy_dockerfile", "success", mapOf(
             "tag" to tag,
@@ -165,7 +191,10 @@ class TargetProjectDeployer(
         return DeployResult.success(container.baseUrl, tag = tag)
     }
 
-    private fun deployWithCompose(composeFile: Path, projectPath: Path, tag: String, envVars: Map<String, String> = emptyMap()): DeployResult {
+    private fun deployWithCompose(
+        composeFile: Path, projectPath: Path, tag: String,
+        envVars: Map<String, String> = emptyMap(), postDeployCommand: String? = null
+    ): DeployResult {
         val projectName = "koncerto-demo"
         try {
             // Clean up any previous compose instance
@@ -237,7 +266,7 @@ class TargetProjectDeployer(
                 "port" to hostPort.toString()
             ))
             val composeNetwork = resolveComposeNetwork(projectPath, composeFile)
-            return deployAppOnNetwork(projectPath, tag, composeNetwork, envVars)
+            return deployAppOnNetwork(projectPath, tag, composeNetwork, envVars, postDeployCommand)
         } catch (e: Exception) {
             traceDeployStep(projectPath, "deploy_compose", "failed", mapOf("error" to (e.message ?: "unknown")))
             return DeployResult.failure("docker compose error: ${e.message}")
@@ -272,14 +301,17 @@ class TargetProjectDeployer(
         }
     }
 
-    private fun deployAppOnNetwork(projectPath: Path, tag: String, network: String, envVars: Map<String, String> = emptyMap()): DeployResult {
+    private fun deployAppOnNetwork(
+        projectPath: Path, tag: String, network: String,
+        envVars: Map<String, String> = emptyMap(), postDeployCommand: String? = null
+    ): DeployResult {
         val framework = frameworkDetector.detectFramework(projectPath)
             ?: return DeployResult.failure("Could not detect framework for app build")
         val dockerfileContent = dockerfileGenerator.generate(framework)
         val tempDockerfile = projectPath.resolve("Dockerfile.koncerto")
         try {
             tempDockerfile.toFile().writeText(dockerfileContent)
-            return deployWithDockerfile(tempDockerfile, projectPath, tag, network, envVars)
+            return deployWithDockerfile(tempDockerfile, projectPath, tag, network, envVars, postDeployCommand)
         } finally {
             tempDockerfile.toFile().delete()
         }

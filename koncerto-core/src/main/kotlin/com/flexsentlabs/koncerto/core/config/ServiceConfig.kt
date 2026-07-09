@@ -87,12 +87,15 @@ data class ServiceConfig(
                 ?: ""
             val demoSecretsFile = resolveEnvRef(map["demo_secrets_file"] as? String)
                 ?: resolveEnvRef(map["demoSecretsFile"] as? String)
+            val demoPostDeployCommand = resolveEnvRef(map["demo_post_deploy_command"] as? String)
+                ?: resolveEnvRef(map["demoPostDeployCommand"] as? String)
             return ProjectConfig(
                 tracker = tracker, workspace = workspace, agent = agent,
                 gitRemoteUrl = gitRemoteUrl,
                 rateLimiter = rateLimiter, circuitBreaker = circuitBreaker,
                 notifications = notifications,
-                demoSecretsFile = demoSecretsFile
+                demoSecretsFile = demoSecretsFile,
+                demoPostDeployCommand = demoPostDeployCommand
             )
         }
 

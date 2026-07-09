@@ -93,6 +93,37 @@ class ServiceConfigTest {
     }
 
     @Test
+    fun `demo_post_deploy_command is parsed onto the project config`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf<String, Any?>(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf<String, Any?>(),
+                    "demo_post_deploy_command" to "alembic upgrade head"
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().demoPostDeployCommand).isEqualTo("alembic upgrade head")
+    }
+
+    @Test
+    fun `demo_post_deploy_command defaults to null when absent`() {
+        val config = ServiceConfig.fromMap(
+            mapOf("projects" to mapOf(
+                "default" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp/test"),
+                    "agent" to mapOf()
+                )
+            )),
+            workflowFileDir = "/tmp"
+        )
+        assertThat(config.project().demoPostDeployCommand).isNull()
+    }
+
+    @Test
     fun `agent kind codex is accepted`() {
         val config = ServiceConfig.fromMap(
             mapOf("projects" to mapOf(
