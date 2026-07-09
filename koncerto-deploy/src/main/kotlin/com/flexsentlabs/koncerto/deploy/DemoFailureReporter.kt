@@ -8,9 +8,13 @@ class DemoFailureReporter(
 ) {
     fun postFailure(prNumber: Int, repoFullName: String, error: String, logs: String?) {
         val body = buildString {
-            appendLine("## Demo Recording Failed")
+            appendLine("### 🎥 Demo Failed — ❌")
             appendLine()
-            appendLine("**Reason:** $error")
+            if (error.isBlank()) {
+                appendLine("> _no details provided_")
+            } else {
+                error.trimEnd('\n').lineSequence().forEach { appendLine("> $it") }
+            }
             if (logs != null) {
                 appendLine()
                 appendLine("<details>")

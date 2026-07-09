@@ -41,38 +41,43 @@ class LinearReportPublisher(
 
     private fun buildCommentBody(task: DemoTask, recordingUrl: String): String {
         return """
-            |## Demo Recording — ${task.platform.name}
+            |### 🎥 Demo Recorded — ✅ ${task.platform.name}
             |
-            |**Issue:** ${task.issueIdentifier}
-            |**Platform:** ${task.platform.name}
-            |**Duration:** ${formatDuration(task.durationMs)}
-            |**File Size:** ${formatFileSize(task.fileSizeBytes)}
+            |> ${formatDuration(task.durationMs)} · ${formatFileSize(task.fileSizeBytes)} · [▶ Watch recording]($recordingUrl)
             |
-            |**Recording URL:** [View Recording]($recordingUrl)
+            |`${task.issueIdentifier}` · recorded ${task.completedAt}
             |
-            |_Recorded at ${task.completedAt}_
+            |_Recorded by koncerto_
         """.trimMargin()
     }
 
     private fun buildSkippedBody(issueIdentifier: String, reason: String): String {
         return """
-            |## Demo Recording Skipped
+            |### 🎥 Demo Skipped — ⏭️
             |
-            |**Issue:** $issueIdentifier
-            |**Reason:** $reason
+            |${blockquote(reason)}
+            |
+            |`$issueIdentifier`
+            |
+            |_Recorded by koncerto_
         """.trimMargin()
     }
 
     private fun buildFailureBody(task: DemoTask, errorMessage: String): String {
         return """
-            |## Demo Recording Failed — ${task.platform.name}
+            |### 🎥 Demo Failed — ❌ ${task.platform.name}
             |
-            |**Issue:** ${task.issueIdentifier}
-            |**Error:** $errorMessage
-            |**Retry Count:** ${task.retryCount}
+            |${blockquote(errorMessage)}
             |
-            |_Failed at ${task.updatedAt}_
+            |`${task.issueIdentifier}` · retry ${task.retryCount} · failed ${task.updatedAt}
+            |
+            |_Recorded by koncerto_
         """.trimMargin()
+    }
+
+    private fun blockquote(text: String): String {
+        if (text.isBlank()) return "> _no details provided_"
+        return text.trimEnd('\n').lineSequence().joinToString("\n") { "> $it" }
     }
 
     private fun formatDuration(ms: Long?): String {

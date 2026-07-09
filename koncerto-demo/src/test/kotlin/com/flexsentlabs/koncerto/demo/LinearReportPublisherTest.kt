@@ -44,9 +44,90 @@ class LinearReportPublisherTest {
         assert(result is DemoResult.Success)
         assert(client.lastIssueId == "issue-1")
         assert(client.lastBody != null)
-        assert(client.lastBody!!.contains("Demo Recording"))
+        assert(client.lastBody!!.contains("Demo Recorded"))
         assert(client.lastBody!!.contains("https://example.com/recording.webm"))
         assert(client.lastBody!!.contains("KONC-123"))
+    }
+
+    @Test
+    fun `report renders not-available for null duration only`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask(durationMs = null, fileSizeBytes = 2048L)
+        val result = publisher.report(task, "https://example.com/recording.webm")
+        assert(result is DemoResult.Success)
+        val metadataLine = client.lastBody!!.lines().first { it.startsWith(">") }
+        assert(metadataLine.contains("N/A"))
+        assert(metadataLine.contains("2 KB"))
+    }
+
+    @Test
+    fun `report renders not-available for null file size only`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask(durationMs = 5000L, fileSizeBytes = null)
+        val result = publisher.report(task, "https://example.com/recording.webm")
+        assert(result is DemoResult.Success)
+        val metadataLine = client.lastBody!!.lines().first { it.startsWith(">") }
+        assert(metadataLine.contains("0m 5s"))
+        assert(metadataLine.contains("N/A"))
+    }
+
+    @Test
+    fun `report renders not-available for both null duration and null file size`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask(durationMs = null, fileSizeBytes = null)
+        val result = publisher.report(task, "https://example.com/recording.webm")
+        assert(result is DemoResult.Success)
+        val metadataLine = client.lastBody!!.lines().first { it.startsWith(">") }
+        assert(metadataLine == "> N/A · N/A · [▶ Watch recording](https://example.com/recording.webm)")
+    }
+
+    @Test
+    fun `report body includes footer`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask()
+        publisher.report(task, "https://example.com/recording.webm")
+        assert(client.lastBody!!.contains("_Recorded by koncerto_"))
+    }
+
+    @Test
+    fun `reportFailure with blank error renders fallback text`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask()
+        publisher.reportFailure(task, "")
+        assert(client.lastBody!!.contains("> _no details provided_"))
+    }
+
+    @Test
+    fun `reportFailure quoting does not emit a trailing empty blockquote line`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask()
+        publisher.reportFailure(task, "error message\n")
+        val quotedLines = client.lastBody!!.lines().filter { it.startsWith(">") }
+        assert(quotedLines == listOf("> error message"))
+    }
+
+    @Test
+    fun `report formats sub-kilobyte file size in bytes`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask(fileSizeBytes = 512L)
+        publisher.report(task, "https://example.com/recording.webm")
+        assert(client.lastBody!!.contains("512 B"))
+    }
+
+    @Test
+    fun `report formats multi-megabyte file size in MB`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask(fileSizeBytes = 5 * 1024 * 1024L)
+        publisher.report(task, "https://example.com/recording.webm")
+        assert(client.lastBody!!.contains("5.0 MB"))
     }
 
     @Test
@@ -58,7 +139,7 @@ class LinearReportPublisherTest {
         assert(result is DemoResult.Success)
         assert(client.lastIssueId == "issue-1")
         assert(client.lastBody != null)
-        assert(client.lastBody!!.contains("Demo Recording Failed"))
+        assert(client.lastBody!!.contains("Demo Failed"))
         assert(client.lastBody!!.contains("recording_failed: timeout"))
     }
 
@@ -83,13 +164,24 @@ class LinearReportPublisherTest {
     }
 
     @Test
+    fun `reportFailure quotes every line of a multi-line error message`() = runTest {
+        val client = FakeLinearClient()
+        val publisher = LinearReportPublisher(client)
+        val task = createTask()
+        publisher.reportFailure(task, "line one\nline two")
+        val quotedLines = client.lastBody!!.lines().filter { it.startsWith("> ") }
+        assert(quotedLines.contains("> line one"))
+        assert(quotedLines.contains("> line two"))
+    }
+
+    @Test
     fun `reportSkipped calls createComment with skipped body`() = runTest {
         val client = FakeLinearClient()
         val publisher = LinearReportPublisher(client)
         val result = publisher.reportSkipped("issue-1", "KONC-123", "deployment failed and no fallback URL configured")
         assert(result is DemoResult.Success)
         assert(client.lastIssueId == "issue-1")
-        assert(client.lastBody!!.contains("Demo Recording Skipped"))
+        assert(client.lastBody!!.contains("Demo Skipped"))
         assert(client.lastBody!!.contains("KONC-123"))
         assert(client.lastBody!!.contains("deployment failed"))
     }
