@@ -17,87 +17,144 @@ class PlaywrightRecorder : DemoRecorder {
     override suspend fun isAvailable(): Boolean = withContext(Dispatchers.IO) {
         testDependenciesAvailable?.let { return@withContext it }
         try {
-            val node = ProcessBuilder("which", "node").start()
-            if (!(node.waitFor(5, TimeUnit.SECONDS) && node.exitValue() == 0)) return@withContext false
-            val playwright = ProcessBuilder("node", "-e", "require('playwright')").start()
-            if (!(playwright.waitFor(15, TimeUnit.SECONDS) && playwright.exitValue() == 0)) return@withContext false
-            if (resolveChromiumExecutablePath().isNullOrBlank()) return@withContext false
-            if (useNativeVideoMode()) return@withContext true
-            val xvfb = ProcessBuilder("which", "Xvfb").start()
-            if (!(xvfb.waitFor(5, TimeUnit.SECONDS) && xvfb.exitValue() == 0)) return@withContext false
-            val ffmpeg = ProcessBuilder("which", "ffmpeg").start()
-            ffmpeg.waitFor(5, TimeUnit.SECONDS) && ffmpeg.exitValue() == 0
+            val docker = ProcessBuilder("docker", "info").redirectErrorStream(true).start()
+            docker.waitFor(10, TimeUnit.SECONDS) && docker.exitValue() == 0
         } catch (_: Exception) {
             false
         }
     }
 
+    /** Extracts the container name from an internal-network URL (http://<name>:<port>). Returns
+     *  null for anything that isn't that shape, including host-facing localhost URLs — recording
+     *  runs in its own container and can't reach localhost:hostPort from there, so treating a
+     *  host URL as a container name would just fail confusingly later instead of failing here
+     *  with a clear message. */
+    private fun parseContainerName(targetUrl: String): String? {
+        return try {
+            val uri = java.net.URI(targetUrl)
+            uri.host?.takeIf { it.isNotBlank() && it != "localhost" }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /** Resolves the Docker network the target container is on, so the recorder container can
+     *  join the same one and reach it by name. Mirrors TargetProjectDeployer.resolveComposeNetwork
+     *  exactly (same docker inspect format string). */
+    private fun resolveNetwork(containerName: String): Result<String> {
+        return try {
+            val pb = ProcessBuilder("docker", "inspect", containerName, "--format", "{{.HostConfig.NetworkMode}}")
+                .redirectErrorStream(true)
+            val p = pb.start()
+            val output = p.inputStream.bufferedReader().readText().trim()
+            val ok = p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0
+            if (!ok || output.isBlank()) {
+                Result.failure(RuntimeException("docker inspect failed for $containerName: $output"))
+            } else {
+                Result.success(output)
+            }
+        } catch (e: Exception) {
+            Result.failure(RuntimeException("docker inspect error: ${e.message}"))
+        }
+    }
+
+    private fun createRunDir(): File {
+        val dir = File(File(System.getProperty("user.home"), ".koncerto/demo-recorder-tmp"), java.util.UUID.randomUUID().toString())
+        dir.mkdirs()
+        return dir
+    }
+
     override suspend fun record(config: RecordingConfig, outputFile: File): DemoResult<DemoRecorder.RecordingResult> =
         withContext(Dispatchers.IO) {
+            var runDir: File? = null
             var pwScript: File? = null
             var shellScript: File? = null
             var startedMarker: File? = null
             val traceDir = File("/tmp/koncerto-demo").toPath()
+            val recorderContainerName = "koncerto-demo-recorder-${java.util.UUID.randomUUID()}"
             try {
                 if (!isAvailable()) {
-                    return@withContext DemoResult.Failure(DemoError.RecorderNotAvailable("playwright"))
+                    return@withContext DemoResult.Failure(DemoError.RecorderNotAvailable("docker"))
+                }
+
+                val useRealContainer = testRecordProcessBuilder == null
+                val containerName = if (useRealContainer) parseContainerName(config.targetUrl) else "test"
+                if (useRealContainer && containerName == null) {
+                    traceRecordingStep(traceDir, "recording_attempt", "missing_internal_url", mapOf(
+                        "target_url" to config.targetUrl
+                    ))
+                    return@withContext DemoResult.Failure(
+                        DemoError.RecordingFailed(RuntimeException(
+                            "targetUrl '${config.targetUrl}' is not an internal container URL " +
+                                "(expected http://<containerName>:<port>) — recording runs in Docker " +
+                                "and needs the target's internal-network address, not a host-facing one"
+                        ))
+                    )
                 }
 
                 val startTime = System.currentTimeMillis()
                 traceRecordingStep(traceDir, "recording_attempt", "start", mapOf(
                     "target_url" to config.targetUrl,
                     "scenario_path" to config.scenarioPath,
-                    "output_path" to outputFile.absolutePath,
-                    "chromium_path" to (resolveChromiumExecutablePath() ?: ""),
+                    "output_path" to outputFile.absolutePath
                 ))
 
-                pwScript = File.createTempFile("pw-recorder-", ".js")
-                val scenarioArg = if (config.scenarioPath.isNotBlank() && File(config.scenarioPath).exists()) config.scenarioPath else ""
+                runDir = if (useRealContainer) createRunDir() else null
+                pwScript = if (useRealContainer) File(runDir, "pw-recorder.js") else File.createTempFile("pw-recorder-", ".js")
                 pwScript.writeText(PLAYWRIGHT_SCRIPT)
-                pwScript.deleteOnExit()
+                if (!useRealContainer) pwScript.deleteOnExit()
 
-                shellScript = File.createTempFile("pw-record-", ".sh")
-                startedMarker = File.createTempFile("pw-recording-started-", ".flag").apply {
-                    delete()
-                    deleteOnExit()
+                val scenarioArg = if (config.scenarioPath.isNotBlank() && File(config.scenarioPath).exists()) config.scenarioPath else ""
+                val scenarioForScript = if (useRealContainer && scenarioArg.isNotBlank()) {
+                    File(scenarioArg).copyTo(File(runDir, "scenario.yaml"), overwrite = true)
+                    "/work/scenario.yaml"
+                } else {
+                    scenarioArg
                 }
+
+                val containerOutputPath = "/work/output.${config.outputFormat}"
+                shellScript = if (useRealContainer) File(runDir, "record.sh") else File.createTempFile("pw-record-", ".sh")
                 shellScript.writeText(
-                    if (useNativeVideoMode()) {
-                        buildNativeShellScript(config, outputFile.absolutePath, scenarioArg)
-                    } else {
-                        buildShellScript(config, outputFile.absolutePath, scenarioArg)
-                    }
+                    buildShellScript(config, if (useRealContainer) containerOutputPath else outputFile.absolutePath, scenarioForScript)
                 )
                 shellScript.setExecutable(true)
-                shellScript.deleteOnExit()
+                if (!useRealContainer) shellScript.deleteOnExit()
 
-                val chromiumPath = resolveChromiumExecutablePath()
-                val startedMarkerFile = requireNotNull(startedMarker) { "Recording started marker was not created" }
-                val pb = testRecordProcessBuilder?.invoke(config, outputFile)
-                    ?: ProcessBuilder("bash", shellScript.absolutePath)
-                    .redirectErrorStream(true)
-                val env = pb.environment()
-                // node <file> resolves require() from the SCRIPT's own directory, not the
-                // process's cwd (unlike `node -e`, which isAvailable() uses above and which
-                // does resolve from cwd). Since pwScript lives in the OS temp dir, it has no
-                // node_modules in its ancestry — point NODE_PATH at ours so it's found anyway.
-                val nodeModulesPath = File(System.getProperty("user.dir"), "node_modules").absolutePath
-                val existingNodePath = System.getenv("NODE_PATH")
-                env["NODE_PATH"] = if (existingNodePath.isNullOrBlank()) {
-                    nodeModulesPath
+                startedMarker = if (useRealContainer) {
+                    File(runDir, "started.flag")
                 } else {
-                    "$existingNodePath:$nodeModulesPath"
+                    File.createTempFile("pw-recording-started-", ".flag").apply { delete(); deleteOnExit() }
                 }
+                val startedMarkerFile = requireNotNull(startedMarker) { "Recording started marker was not created" }
+
+                val pb = testRecordProcessBuilder?.invoke(config, outputFile) ?: run {
+                    val imageResult = RecorderImage().ensureBuilt()
+                    val image = imageResult.getOrElse { e ->
+                        return@withContext DemoResult.Failure(
+                            DemoError.RecordingFailed(RuntimeException("recorder image unavailable: ${e.message}"))
+                        )
+                    }
+                    val networkResult = resolveNetwork(requireNotNull(containerName))
+                    val network = networkResult.getOrElse { e ->
+                        return@withContext DemoResult.Failure(
+                            DemoError.RecordingFailed(RuntimeException("could not resolve docker network for $containerName: ${e.message}"))
+                        )
+                    }
+                    ProcessBuilder(
+                        "docker", "run", "--rm",
+                        "--name", recorderContainerName,
+                        "--network", network,
+                        "-v", "${requireNotNull(runDir).absolutePath}:/work",
+                        image, "bash", "/work/record.sh"
+                    ).redirectErrorStream(true)
+                }
+                val env = pb.environment()
                 env["TARGET_URL"] = config.targetUrl
-                env["SCENARIO_PATH"] = scenarioArg
-                env["PW_SCRIPT_PATH"] = pwScript.absolutePath
-                env["PW_FFMPEG_STARTED_FILE"] = startedMarkerFile.absolutePath
-                env["PW_OUTPUT_PATH"] = outputFile.absolutePath
+                env["SCENARIO_PATH"] = if (useRealContainer) scenarioForScript else scenarioArg
+                env["PW_SCRIPT_PATH"] = if (useRealContainer) "/work/pw-recorder.js" else pwScript.absolutePath
+                env["PW_FFMPEG_STARTED_FILE"] = if (useRealContainer) "/work/started.flag" else startedMarkerFile.absolutePath
+                env["PW_OUTPUT_PATH"] = if (useRealContainer) containerOutputPath else outputFile.absolutePath
                 env["PW_MAX_DURATION_SECONDS"] = config.maxDurationSeconds.toString()
-                env["PW_USE_NATIVE_VIDEO"] = useNativeVideoMode().toString()
-                if (!chromiumPath.isNullOrBlank()) {
-                    env["PW_CHROMIUM_PATH"] = chromiumPath
-                }
                 val process = pb.start()
 
                 val startupWaitSec = testStartupWaitSeconds ?: 90L
@@ -111,7 +168,7 @@ class PlaywrightRecorder : DemoRecorder {
                         process.destroyForcibly()
                         ""
                     }
-                    runCleanup()
+                    runCleanup(recorderContainerName)
                     if (exitedEarly && earlyExitCode == 2) {
                         traceRecordingStep(traceDir, "recording_attempt", "content_validation_failed", mapOf(
                             "target_url" to config.targetUrl,
@@ -156,7 +213,7 @@ class PlaywrightRecorder : DemoRecorder {
 
                 if (!completed) {
                     process.destroyForcibly()
-                    runCleanup()
+                    runCleanup(recorderContainerName)
                     traceRecordingStep(traceDir, "recording_attempt", "timeout", mapOf(
                         "target_url" to config.targetUrl,
                         "scenario_path" to scenarioArg,
@@ -172,7 +229,7 @@ class PlaywrightRecorder : DemoRecorder {
                 val output = process.inputStream.bufferedReader().use { it.readText() }
 
                 if (exitCode == 2) {
-                    runCleanup()
+                    runCleanup(recorderContainerName)
                     traceRecordingStep(traceDir, "recording_attempt", "content_validation_failed", mapOf(
                         "target_url" to config.targetUrl,
                         "scenario_path" to scenarioArg,
@@ -184,7 +241,7 @@ class PlaywrightRecorder : DemoRecorder {
                 }
 
                 if (exitCode != 0) {
-                    runCleanup()
+                    runCleanup(recorderContainerName)
                     traceRecordingStep(traceDir, "recording_attempt", "failed", mapOf(
                         "target_url" to config.targetUrl,
                         "scenario_path" to scenarioArg,
@@ -197,8 +254,18 @@ class PlaywrightRecorder : DemoRecorder {
                     )
                 }
 
+                // In real-container mode the script wrote its output inside the bind-mounted run
+                // dir, not directly to outputFile (which the container filesystem can't see) —
+                // copy it out to the path the caller actually expects.
+                if (useRealContainer) {
+                    val produced = File(runDir, "output.${config.outputFormat}")
+                    if (produced.exists() && produced.length() > 0L) {
+                        produced.copyTo(outputFile, overwrite = true)
+                    }
+                }
+
                 if (!outputFile.exists() || outputFile.length() == 0L) {
-                    runCleanup()
+                    runCleanup(recorderContainerName)
                     traceRecordingStep(traceDir, "recording_attempt", "empty_output", mapOf(
                         "target_url" to config.targetUrl,
                         "scenario_path" to scenarioArg,
@@ -223,7 +290,7 @@ class PlaywrightRecorder : DemoRecorder {
                     format = "webm"
                 ))
             } catch (e: Exception) {
-                runCleanup()
+                runCleanup(recorderContainerName)
                 traceRecordingStep(traceDir, "recording_attempt", "error", mapOf(
                     "target_url" to config.targetUrl,
                     "scenario_path" to config.scenarioPath,
@@ -235,6 +302,7 @@ class PlaywrightRecorder : DemoRecorder {
                 pwScript?.delete()
                 shellScript?.delete()
                 startedMarker?.delete()
+                runDir?.deleteRecursively()
             }
         }
 
@@ -294,25 +362,9 @@ ffmpeg -y -f x11grab -draw_mouse 0 -r ${config.frameRate} -s ${config.width}x${c
 exit ${'$'}?
 """
 
-    private fun buildNativeShellScript(config: RecordingConfig, outputPath: String, scenarioPath: String = ""): String = """#!/bin/bash
-set -e
-
-SCENARIO_ARGS=""
-if [ -n "${'$'}{SCENARIO_PATH}" ] && [ -f "${'$'}{SCENARIO_PATH}" ]; then
-  SCENARIO_ARGS="${'$'}{SCENARIO_PATH}"
-fi
-
-node "${'$'}{PW_SCRIPT_PATH}" "${'$'}{TARGET_URL}" "${'$'}{PW_FFMPEG_STARTED_FILE}" ${'$'}{SCENARIO_ARGS}
-
-test -s "${outputPath}"
-"""
-
-    private fun runCleanup() {
+    private fun runCleanup(recorderContainerName: String) {
         try {
-            val rt = Runtime.getRuntime()
-            rt.exec(arrayOf("pkill", "-f", "pw-recorder"))
-            rt.exec(arrayOf("pkill", "-f", "chrome.*--no-sandbox"))
-            rt.exec(arrayOf("pkill", "-f", "Xvfb :99"))
+            ProcessBuilder("docker", "rm", "-f", recorderContainerName).start().waitFor(10, TimeUnit.SECONDS)
         } catch (_: Exception) {}
     }
 
@@ -326,38 +378,6 @@ test -s "${outputPath}"
         }
         return file.exists()
     }
-
-    private fun resolveChromiumExecutablePath(): String? {
-        val envOverride = System.getenv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")?.trim()
-        if (!envOverride.isNullOrBlank()) return envOverride
-        val candidates = listOf(
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            "chromium-browser",
-            "chromium",
-            "/usr/bin/chromium-browser",
-            "/usr/lib/chromium/chromium"
-        )
-        for (candidate in candidates) {
-            if (candidate.startsWith("/")) {
-                if (File(candidate).canExecute()) return candidate
-                continue
-            }
-            val proc = ProcessBuilder("sh", "-lc", "command -v ${candidate}").start()
-            if (proc.waitFor(5, TimeUnit.SECONDS) && proc.exitValue() == 0) {
-                val output = proc.inputStream.bufferedReader().readText().trim()
-                if (output.isNotBlank()) return output
-            }
-        }
-        return null
-    }
-
-    private fun useNativeVideoMode(): Boolean {
-        testUseNativeVideoMode?.let { return it }
-        return currentOsName().contains("mac", ignoreCase = true)
-    }
-
-    private fun currentOsName(): String = System.getProperty("os.name").orEmpty()
 
     companion object {
         /** Test seam: when set, bypasses dependency probing in [isAvailable]. */
@@ -375,10 +395,6 @@ test -s "${outputPath}"
         /** Test seam: overrides startup wait timeout seconds in [record]. */
         @JvmStatic
         var testStartupWaitSeconds: Long? = null
-
-        /** Test seam: forces native video mode selection. */
-        @JvmStatic
-        var testUseNativeVideoMode: Boolean? = null
 
         private val PLAYWRIGHT_SCRIPT = """#!/usr/bin/env node
 const { chromium } = require('playwright');

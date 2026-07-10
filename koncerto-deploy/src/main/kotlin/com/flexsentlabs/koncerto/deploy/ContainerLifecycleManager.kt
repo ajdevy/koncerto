@@ -9,8 +9,18 @@ import java.util.concurrent.TimeUnit
 data class ContainerInstance(
     val containerId: String,
     val hostPort: Int,
-    val baseUrl: String
-)
+    val baseUrl: String,
+    // The following three are additive/default-valued so every existing call site (20+ in
+    // TargetProjectDeployerTest alone) keeps compiling unchanged. Populated by tryRunContainer,
+    // which already knows all three; they let the demo recorder reach the target by container
+    // name on the shared Docker network instead of localhost:hostPort (which only resolves on
+    // the host, not from inside another container).
+    val containerName: String = "",
+    val containerPort: Int = 0,
+    val network: String = ""
+) {
+    val internalUrl: String get() = "http://$containerName:$containerPort"
+}
 
 class ContainerLifecycleManager(
     private val logger: StructuredLogger,
@@ -145,7 +155,7 @@ class ContainerLifecycleManager(
             // embedded DNS) — the demo recorder (Playwright/xcrun/adb) always runs natively on this
             // same host, where that hostname doesn't resolve at all. The container's port is
             // published to the host, so localhost reaches it correctly either way.
-            Result.success(ContainerInstance(cid, hostPort, "http://localhost:$hostPort"))
+            Result.success(ContainerInstance(cid, hostPort, "http://localhost:$hostPort", containerName, containerPort, netArg))
         } catch (e: Exception) {
             Result.failure(RuntimeException("docker run error: ${e.message}"))
         }

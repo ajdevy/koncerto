@@ -50,6 +50,26 @@ class TargetProjectDeployerTest {
     }
 
     @Test
+    fun `deploy surfaces the container's internal network URL on success`(@TempDir tmpDir: Path) = runTest {
+        Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
+        val container = ContainerInstance(
+            containerId = "cid123", hostPort = 32768, baseUrl = "http://host.docker.internal:32768",
+            containerName = "koncerto-demo-1783600000000", containerPort = 8080, network = "koncerto-network"
+        )
+        val containerManager = mockk<ContainerLifecycleManager>()
+        every { containerManager.buildImage(any(), any(), any()) } returns Result.success(Unit)
+        every { containerManager.allocatePort() } returns 32768
+        every { containerManager.runContainer(any(), any(), any(), any(), any()) } returns Result.success(container)
+        every { containerManager.waitForHealthy(any()) } returns Result.success(Unit)
+
+        val deployer = createDeployer(containerManager)
+        val result = deployer.deploy(DeployConfig("owner/repo", "feature/branch", projectPath = tmpDir))
+
+        assertThat(result.success).isTrue()
+        assertThat(result.internalUrl).isEqualTo("http://koncerto-demo-1783600000000:8080")
+    }
+
+    @Test
     fun `deploy runs the post deploy command after health check succeeds`(@TempDir tmpDir: Path) = runTest {
         Files.writeString(tmpDir.resolve("package.json"), """{"scripts":{"start":"node server.js"}}""")
         val container = ContainerInstance("cid123", 32768, "http://host.docker.internal:32768")

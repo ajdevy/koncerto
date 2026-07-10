@@ -6,6 +6,7 @@ import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
+import assertk.assertions.isNull
 import assertk.assertions.isTrue
 import com.flexsentlabs.koncerto.demo.model.DemoError
 import com.flexsentlabs.koncerto.demo.model.DemoPlatform
@@ -26,12 +27,11 @@ class PlaywrightRecorderTest {
         PlaywrightRecorder.testRecordProcessBuilder = null
         PlaywrightRecorder.testMaxWaitSeconds = null
         PlaywrightRecorder.testStartupWaitSeconds = null
-        PlaywrightRecorder.testUseNativeVideoMode = null
     }
 
     private val config = RecordingConfig(
         platform = DemoPlatform.PLAYWRIGHT,
-        targetUrl = "http://localhost:3000",
+        targetUrl = "http://koncerto-demo-test-container:8080",
         maxDurationSeconds = 5
     )
 
@@ -78,9 +78,9 @@ class PlaywrightRecorderTest {
     @Test
     fun `runCleanup does not throw`() {
         val recorder = PlaywrightRecorder()
-        val method = PlaywrightRecorder::class.java.getDeclaredMethod("runCleanup")
+        val method = PlaywrightRecorder::class.java.getDeclaredMethod("runCleanup", String::class.java)
         method.isAccessible = true
-        method.invoke(recorder)
+        method.invoke(recorder, "koncerto-demo-recorder-nonexistent")
     }
 
     @Test
@@ -410,40 +410,39 @@ class PlaywrightRecorderTest {
     }
 
     @Test
-    fun `buildNativeShellScript omits Xvfb and ffmpeg`() {
-        val method = PlaywrightRecorder::class.java.getDeclaredMethod(
-            "buildNativeShellScript",
-            com.flexsentlabs.koncerto.demo.model.RecordingConfig::class.java,
-            String::class.java,
-            String::class.java
-        )
+    fun `parseContainerName extracts host from an internal container URL`() {
+        val recorder = PlaywrightRecorder()
+        val method = PlaywrightRecorder::class.java.getDeclaredMethod("parseContainerName", String::class.java)
         method.isAccessible = true
-        val output = java.io.File.createTempFile("pw-native-", ".webm")
-        val script = method.invoke(PlaywrightRecorder(), config, output.absolutePath, "") as String
-        assertThat(script.contains("node")).isTrue()
-        assertThat(script.contains("Xvfb")).isFalse()
-        assertThat(script.contains("ffmpeg")).isFalse()
+        val name = method.invoke(recorder, "http://koncerto-demo-1783600000000:8080") as String?
+        assertThat(name).isEqualTo("koncerto-demo-1783600000000")
     }
 
     @Test
-    fun `record succeeds in native video mode with test process`() = runTest {
-        val output = File.createTempFile("pw-native-success-", ".webm")
+    fun `parseContainerName rejects localhost rather than silently using it as a container name`() {
+        val recorder = PlaywrightRecorder()
+        val method = PlaywrightRecorder::class.java.getDeclaredMethod("parseContainerName", String::class.java)
+        method.isAccessible = true
+        val name = method.invoke(recorder, "http://localhost:32768") as String?
+        assertThat(name).isNull()
+    }
+
+    @Test
+    fun `parseContainerName returns null for unparseable urls`() {
+        val recorder = PlaywrightRecorder()
+        val method = PlaywrightRecorder::class.java.getDeclaredMethod("parseContainerName", String::class.java)
+        method.isAccessible = true
+        val name = method.invoke(recorder, "not a url") as String?
+        assertThat(name).isNull()
+    }
+
+    @Test
+    fun `record fails fast with a descriptive error when targetUrl has no container name`() = runTest {
+        val output = File.createTempFile("pw-no-container-", ".webm")
         PlaywrightRecorder.testDependenciesAvailable = true
-        PlaywrightRecorder.testUseNativeVideoMode = true
-        PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
-            ProcessBuilder(
-                "bash",
-                "-c",
-                """
-                set -e
-                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
-                echo native > "${out.absolutePath}"
-                exit 0
-                """.trimIndent()
-            )
-        }
-        val result = PlaywrightRecorder().record(config, output)
-        assertThat(result).isInstanceOf(DemoResult.Success::class)
-        assertThat(output.exists() && output.length() > 0).isTrue()
+        val result = PlaywrightRecorder().record(config.copy(targetUrl = "http://localhost:32768"), output)
+        assertThat(result).isInstanceOf(DemoResult.Failure::class)
+        val error = (result as DemoResult.Failure).error as DemoError.RecordingFailed
+        assertThat(error.message ?: "").contains("internal")
     }
 }
