@@ -3,13 +3,14 @@ package com.flexsentlabs.koncerto.demo.recorder
 import java.util.concurrent.TimeUnit
 
 /**
- * Ensures the demo recorder's container image is available locally. The recorder runs on the
- * official Playwright image, which ships node, the playwright package, chromium (plus all its
- * system dependencies), and xvfb prebaked — so nothing is installed at recorder build time.
+ * Ensures the demo recorder's container image is available locally. The recorder runs on a lean
+ * image (node + chromium + ffmpeg + xvfb + the playwright package) that is built once in CI and
+ * published to ghcr by .github/workflows/recorder-image.yml.
  *
- * This deliberately avoids a custom `docker build`: fetching package indexes (apk/apt) from
- * inside a build proved unreliable in practice (TLS/connection failures reaching the Alpine and
- * Debian mirrors), whereas pulling a prebaked image only needs registry access to the image itself.
+ * This deliberately avoids a local `docker build`: fetching package indexes (apk/apt) from inside
+ * a build proved unreliable on constrained local Docker VMs (TLS/connection failures reaching the
+ * Alpine and Debian mirrors). Building in CI (clean networking) and pulling a small prebaked image
+ * sidesteps that entirely, and keeps the image small enough to pull reliably.
  */
 class RecorderImage {
 
@@ -26,9 +27,8 @@ class RecorderImage {
     }
 
     /**
-     * Pulls [tag] if it isn't already present locally. The Playwright image is large (~2GB), so
-     * the first pull is slow, but it's a one-time cost — every subsequent recording reuses the
-     * cached image. Returns the tag on success.
+     * Pulls [tag] if it isn't already present locally. The first pull is a one-time cost — every
+     * subsequent recording reuses the cached image. Returns the tag on success.
      */
     fun ensureAvailable(tag: String = IMAGE_TAG, pullTimeoutSec: Long = 900): Result<String> {
         if (imageExists(tag)) return Result.success(tag)
@@ -44,8 +44,9 @@ class RecorderImage {
     }
 
     companion object {
-        // The official Playwright image: node + playwright + chromium + browser deps + xvfb,
-        // all prebaked. Pinned to a specific version so recordings are reproducible.
-        const val IMAGE_TAG = "mcr.microsoft.com/playwright:v1.55.0-jammy"
+        // The lean recorder image published by .github/workflows/recorder-image.yml. Pulling a
+        // prebaked ghcr image (not building locally, not pulling the ~2GB upstream Playwright
+        // image) is what keeps recording reliable on constrained local Docker VMs.
+        const val IMAGE_TAG = "ghcr.io/ajdevy/koncerto-recorder:latest"
     }
 }

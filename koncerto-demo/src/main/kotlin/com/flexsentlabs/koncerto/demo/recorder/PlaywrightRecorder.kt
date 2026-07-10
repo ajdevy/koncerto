@@ -114,9 +114,12 @@ class PlaywrightRecorder : DemoRecorder {
 
                 val containerOutputPath = "/work/output.${config.outputFormat}"
                 shellScript = if (useRealContainer) File(runDir, "record.sh") else File.createTempFile("pw-record-", ".sh")
+                // Same Xvfb + ffmpeg x11grab script in both modes; only the output path differs
+                // (a /work path inside the recorder container vs a host path locally). The
+                // recorder image ships Xvfb, ffmpeg, and a system chromium, so this proven path
+                // runs unchanged there.
                 shellScript.writeText(
-                    if (useRealContainer) buildContainerRecordScript()
-                    else buildShellScript(config, outputFile.absolutePath, scenarioForScript)
+                    buildShellScript(config, if (useRealContainer) containerOutputPath else outputFile.absolutePath, scenarioForScript)
                 )
                 shellScript.setExecutable(true)
                 if (!useRealContainer) shellScript.deleteOnExit()
@@ -139,11 +142,14 @@ class PlaywrightRecorder : DemoRecorder {
                     "PW_SCRIPT_PATH" to (if (useRealContainer) "/work/pw-recorder.js" else pwScript.absolutePath),
                     "PW_FFMPEG_STARTED_FILE" to (if (useRealContainer) "/work/started.flag" else startedMarkerFile.absolutePath),
                     "PW_OUTPUT_PATH" to (if (useRealContainer) containerOutputPath else outputFile.absolutePath),
-                    "PW_MAX_DURATION_SECONDS" to config.maxDurationSeconds.toString(),
-                    // The container records via Playwright's own recordVideo (headed under Xvfb),
-                    // so no ffmpeg/x11grab is needed there. The local/test path leaves this false.
-                    "PW_USE_NATIVE_VIDEO" to useRealContainer.toString()
+                    "PW_MAX_DURATION_SECONDS" to config.maxDurationSeconds.toString()
                 )
+                // Inside the recorder container, launch the image's system chromium. Locally (test
+                // path) leave it unset so Playwright picks its own browser — the fake test process
+                // ignores it anyway.
+                if (useRealContainer) {
+                    containerEnv["PW_CHROMIUM_PATH"] = "/usr/bin/chromium-browser"
+                }
 
                 val pb = testRecordProcessBuilder?.invoke(config, outputFile) ?: run {
                     val imageResult = RecorderImage().ensureAvailable()
@@ -324,27 +330,6 @@ class PlaywrightRecorder : DemoRecorder {
                 runDir?.deleteRecursively()
             }
         }
-
-    /**
-     * The script the recorder container runs. It records via Playwright's own recordVideo
-     * (native video mode) under Xvfb, so it needs neither system ffmpeg nor an x11grab pipeline —
-     * only node + playwright + chromium + xvfb, all of which the Playwright base image ships.
-     * NODE_PATH is resolved inside the container (`npm root -g`) so require('playwright') resolves
-     * regardless of where the base image installs it. All inputs arrive via env vars (docker -e).
-     */
-    private fun buildContainerRecordScript(): String = """#!/bin/bash
-set -e
-export NODE_PATH="${'$'}(npm root -g):${'$'}{NODE_PATH}"
-
-SCENARIO_ARGS=""
-if [ -n "${'$'}{SCENARIO_PATH}" ] && [ -f "${'$'}{SCENARIO_PATH}" ]; then
-  SCENARIO_ARGS="${'$'}{SCENARIO_PATH}"
-fi
-
-xvfb-run --auto-servernum node "${'$'}{PW_SCRIPT_PATH}" "${'$'}{TARGET_URL}" "${'$'}{PW_FFMPEG_STARTED_FILE}" ${'$'}{SCENARIO_ARGS}
-
-test -s "${'$'}{PW_OUTPUT_PATH}"
-"""
 
     private fun buildShellScript(config: RecordingConfig, outputPath: String, scenarioPath: String = ""): String = """#!/bin/bash
 set -e

@@ -1,0 +1,29 @@
+# Lean image the demo recorder runs in: node + chromium + ffmpeg + xvfb + the playwright npm
+# package. Built and published to ghcr by .github/workflows/recorder-image.yml so Koncerto only
+# ever pulls a small prebaked image — it never builds one locally (package-index fetches from
+# inside a local Docker build proved unreliable) and never pulls the ~2GB upstream Playwright image.
+#
+# The recorder uses the SYSTEM chromium (via PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH), so we skip
+# Playwright's own browser download entirely — smaller image, faster build.
+FROM node:20-alpine
+
+RUN apk add --no-cache \
+    bash \
+    chromium \
+    nss \
+    freetype \
+    harfbuzz \
+    ca-certificates \
+    ttf-freefont \
+    ffmpeg \
+    xvfb
+
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN npm install -g playwright
+
+# The recorder script reads these: chromium is the system binary, and require('playwright')
+# resolves from the global node_modules where `npm install -g` placed it.
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+WORKDIR /work

@@ -10,8 +10,9 @@ import java.util.concurrent.TimeUnit
 class RecorderImageTest {
 
     @Test
-    fun `IMAGE_TAG points at the playwright base image`() {
-        assertThat(RecorderImage.IMAGE_TAG).contains("playwright")
+    fun `IMAGE_TAG points at the published ghcr recorder image`() {
+        assertThat(RecorderImage.IMAGE_TAG).contains("ghcr.io")
+        assertThat(RecorderImage.IMAGE_TAG).contains("koncerto-recorder")
     }
 
     @Test
