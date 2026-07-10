@@ -115,7 +115,8 @@ class PlaywrightRecorder : DemoRecorder {
                 val containerOutputPath = "/work/output.${config.outputFormat}"
                 shellScript = if (useRealContainer) File(runDir, "record.sh") else File.createTempFile("pw-record-", ".sh")
                 shellScript.writeText(
-                    buildShellScript(config, if (useRealContainer) containerOutputPath else outputFile.absolutePath, scenarioForScript)
+                    if (useRealContainer) buildContainerRecordScript()
+                    else buildShellScript(config, outputFile.absolutePath, scenarioForScript)
                 )
                 shellScript.setExecutable(true)
                 if (!useRealContainer) shellScript.deleteOnExit()
@@ -127,8 +128,25 @@ class PlaywrightRecorder : DemoRecorder {
                 }
                 val startedMarkerFile = requireNotNull(startedMarker) { "Recording started marker was not created" }
 
+                // Values the recording script reads. In real-container mode every path is a
+                // /work path (the bind-mounted run dir); in the local/test mode they are host
+                // paths. These reach the recorder by `docker run -e KEY=VALUE`; setting them only
+                // on the ProcessBuilder environment would NOT reach the container, since docker
+                // doesn't forward the client's environment into the container.
+                val containerEnv = linkedMapOf(
+                    "TARGET_URL" to config.targetUrl,
+                    "SCENARIO_PATH" to (if (useRealContainer) scenarioForScript else scenarioArg),
+                    "PW_SCRIPT_PATH" to (if (useRealContainer) "/work/pw-recorder.js" else pwScript.absolutePath),
+                    "PW_FFMPEG_STARTED_FILE" to (if (useRealContainer) "/work/started.flag" else startedMarkerFile.absolutePath),
+                    "PW_OUTPUT_PATH" to (if (useRealContainer) containerOutputPath else outputFile.absolutePath),
+                    "PW_MAX_DURATION_SECONDS" to config.maxDurationSeconds.toString(),
+                    // The container records via Playwright's own recordVideo (headed under Xvfb),
+                    // so no ffmpeg/x11grab is needed there. The local/test path leaves this false.
+                    "PW_USE_NATIVE_VIDEO" to useRealContainer.toString()
+                )
+
                 val pb = testRecordProcessBuilder?.invoke(config, outputFile) ?: run {
-                    val imageResult = RecorderImage().ensureBuilt()
+                    val imageResult = RecorderImage().ensureAvailable()
                     val image = imageResult.getOrElse { e ->
                         return@withContext DemoResult.Failure(
                             DemoError.RecordingFailed(RuntimeException("recorder image unavailable: ${e.message}"))
@@ -140,21 +158,22 @@ class PlaywrightRecorder : DemoRecorder {
                             DemoError.RecordingFailed(RuntimeException("could not resolve docker network for $containerName: ${e.message}"))
                         )
                     }
+                    val envArgs = containerEnv.flatMap { (k, v) -> listOf("-e", "$k=$v") }
                     ProcessBuilder(
-                        "docker", "run", "--rm",
-                        "--name", recorderContainerName,
-                        "--network", network,
-                        "-v", "${requireNotNull(runDir).absolutePath}:/work",
-                        image, "bash", "/work/record.sh"
+                        listOf(
+                            "docker", "run", "--rm",
+                            "--name", recorderContainerName,
+                            "--network", network,
+                            "-v", "${requireNotNull(runDir).absolutePath}:/work"
+                        ) + envArgs + listOf(image, "bash", "/work/record.sh")
                     ).redirectErrorStream(true)
                 }
+                // Also apply to the ProcessBuilder environment — this is what the local/test path
+                // (a fake ProcessBuilder running bash directly on the host) actually reads. The
+                // real container already received them via `-e` above; setting them here too is
+                // harmless for it.
                 val env = pb.environment()
-                env["TARGET_URL"] = config.targetUrl
-                env["SCENARIO_PATH"] = if (useRealContainer) scenarioForScript else scenarioArg
-                env["PW_SCRIPT_PATH"] = if (useRealContainer) "/work/pw-recorder.js" else pwScript.absolutePath
-                env["PW_FFMPEG_STARTED_FILE"] = if (useRealContainer) "/work/started.flag" else startedMarkerFile.absolutePath
-                env["PW_OUTPUT_PATH"] = if (useRealContainer) containerOutputPath else outputFile.absolutePath
-                env["PW_MAX_DURATION_SECONDS"] = config.maxDurationSeconds.toString()
+                containerEnv.forEach { (k, v) -> env[k] = v }
                 val process = pb.start()
 
                 val startupWaitSec = testStartupWaitSeconds ?: 90L
@@ -305,6 +324,27 @@ class PlaywrightRecorder : DemoRecorder {
                 runDir?.deleteRecursively()
             }
         }
+
+    /**
+     * The script the recorder container runs. It records via Playwright's own recordVideo
+     * (native video mode) under Xvfb, so it needs neither system ffmpeg nor an x11grab pipeline —
+     * only node + playwright + chromium + xvfb, all of which the Playwright base image ships.
+     * NODE_PATH is resolved inside the container (`npm root -g`) so require('playwright') resolves
+     * regardless of where the base image installs it. All inputs arrive via env vars (docker -e).
+     */
+    private fun buildContainerRecordScript(): String = """#!/bin/bash
+set -e
+export NODE_PATH="${'$'}(npm root -g):${'$'}{NODE_PATH}"
+
+SCENARIO_ARGS=""
+if [ -n "${'$'}{SCENARIO_PATH}" ] && [ -f "${'$'}{SCENARIO_PATH}" ]; then
+  SCENARIO_ARGS="${'$'}{SCENARIO_PATH}"
+fi
+
+xvfb-run --auto-servernum node "${'$'}{PW_SCRIPT_PATH}" "${'$'}{TARGET_URL}" "${'$'}{PW_FFMPEG_STARTED_FILE}" ${'$'}{SCENARIO_ARGS}
+
+test -s "${'$'}{PW_OUTPUT_PATH}"
+"""
 
     private fun buildShellScript(config: RecordingConfig, outputPath: String, scenarioPath: String = ""): String = """#!/bin/bash
 set -e
@@ -685,10 +725,13 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
 }
 
 (async () => {
-  const chromiumPath = process.env.PW_CHROMIUM_PATH || '/usr/bin/chromium-browser';
-  const browser = await chromium.launch({
+  // Only pin an executable when one is explicitly provided. Left unset, Playwright launches its
+  // own bundled Chromium — which is what the recorder container's Playwright image ships and
+  // keeps under /ms-playwright, NOT at /usr/bin/chromium-browser. Defaulting to a hardcoded path
+  // would make launch fail on that image.
+  const chromiumPath = process.env.PW_CHROMIUM_PATH;
+  const launchOptions = {
     headless: false,
-    executablePath: chromiumPath,
     args: [
       '--no-sandbox',
       '--disable-gpu',
@@ -702,7 +745,11 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
       '--no-zygote',
       '--disable-dev-shm-usage'
     ]
-  });
+  };
+  if (chromiumPath) {
+    launchOptions.executablePath = chromiumPath;
+  }
+  const browser = await chromium.launch(launchOptions);
 
   const contextOptions = {
     viewport: { width: 1280, height: 720 },
