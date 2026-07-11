@@ -168,9 +168,16 @@ open class GitWorkflow(
         if (config.autoCommit) {
             KoncertoArtifactIgnore.ensureGitignore(workspacePath)
             KoncertoArtifactIgnore.untrackArtifacts(workspacePath, ::runGitSafe)
-            val prefix = commitPrefix(labels)
             runGitSafe(workspacePath, "add", "-A")
-            runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "$prefix: $issueIdentifier: $title")
+            // Only commit when something is actually staged. This previously used
+            // `git commit --allow-empty`, which produced an empty commit on EVERY agent dispatch
+            // — including no-op review cycles that change nothing — piling hundreds of identical
+            // commits onto the PR. `git status --porcelain` is blank when there's nothing to commit.
+            val hasChanges = !runGitSafe(workspacePath, "status", "--porcelain").isNullOrBlank()
+            if (hasChanges) {
+                val prefix = commitPrefix(labels)
+                runGitSafe(workspacePath, "commit", "-m", "$prefix: $issueIdentifier: $title")
+            }
         }
         if (config.autoPush) {
             val pushResult = runGitSafe(workspacePath, "push", "-u", "origin", branch)
