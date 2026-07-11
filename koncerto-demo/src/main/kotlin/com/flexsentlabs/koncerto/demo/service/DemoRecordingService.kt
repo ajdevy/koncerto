@@ -375,7 +375,16 @@ class DemoRecordingService(
 
         val updatedTask = taskRepository.findById(task.id)
             ?: return DemoResult.Failure(DemoError.TaskNotFound(task.id))
-        reporter.report(updatedTask, storageResult.url)
+        when (val reportResult = reporter.report(updatedTask, storageResult.url)) {
+            is DemoResult.Success -> auditLogger.logReportPosted(updatedTask, storageResult.url)
+            is DemoResult.Failure -> {
+                auditLogger.logReportFailed(updatedTask, storageResult.url, reportResult.error.message ?: "unknown")
+                traceDemoStep(task, "partial_recovery", "report_failed", mapOf(
+                    "url" to storageResult.url,
+                    "error" to (reportResult.error.message ?: "unknown")
+                ))
+            }
+        }
         traceDemoStep(task, "partial_recovery", "completed", mapOf("url" to storageResult.url))
         return DemoResult.Success(updatedTask)
     }
@@ -471,8 +480,19 @@ class DemoRecordingService(
         val updatedTask = taskRepository.findById(task.id)
             ?: return DemoResult.Failure(DemoError.TaskNotFound(task.id))
 
-        reporter.report(updatedTask, storageResult.url)
-        auditLogger.logReportPosted(updatedTask, storageResult.url)
+        // The recording itself succeeded; posting the report is best-effort and must not fail the
+        // task. But a failed post was previously swallowed silently, so a demo could "succeed" with
+        // nobody ever notified — surface it in the audit log and trace instead of dropping it.
+        when (val reportResult = reporter.report(updatedTask, storageResult.url)) {
+            is DemoResult.Success -> auditLogger.logReportPosted(updatedTask, storageResult.url)
+            is DemoResult.Failure -> {
+                auditLogger.logReportFailed(updatedTask, storageResult.url, reportResult.error.message ?: "unknown")
+                traceDemoStep(task, "perform_recording", "report_failed", mapOf(
+                    "url" to storageResult.url,
+                    "error" to (reportResult.error.message ?: "unknown")
+                ))
+            }
+        }
         traceDemoStep(task, "perform_recording", "completed", mapOf(
             "url" to storageResult.url,
             "platform" to task.platform.name

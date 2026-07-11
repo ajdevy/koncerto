@@ -98,6 +98,17 @@ class DemoAuditLoggerTest {
     }
 
     @Test
+    fun `logReportFailed writes proper format`() {
+        val task = createTask()
+        logger.logReportFailed(task, "https://example.com/recording.webm", "report_failed: 500 boom")
+        val line = datedLogFile().readLines().last()
+        assert(line.contains("REPORT_FAILED"))
+        assert(line.contains("task_id=${task.id}"))
+        assert(line.contains("url=https://example.com/recording.webm"))
+        assert(line.contains("error=report_failed: 500 boom"))
+    }
+
+    @Test
     fun `logTaskFailed writes proper format`() {
         val task = createTask(retryCount = 3)
         logger.logTaskFailed(task, "recording_failed: timeout")

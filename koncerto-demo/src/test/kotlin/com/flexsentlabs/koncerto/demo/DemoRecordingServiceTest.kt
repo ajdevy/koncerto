@@ -108,6 +108,41 @@ class DemoRecordingServiceTest {
     }
 
     @Test
+    fun `a failed report is surfaced in the audit log and does not fail the recording`() = runTest {
+        // Isolate the audit log so we can read exactly what this recording wrote.
+        val auditDir = createTempDir(prefix = "demo-report-fail-audit-")
+        val isolatedAudit = DemoAuditLogger(File(auditDir, "audit.log").absolutePath)
+        reporter.reportShouldFail = true
+        val svc = DemoRecordingService(
+            config = config,
+            taskRepository = taskRepository,
+            recorderFactory = recorderFactory,
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = isolatedAudit,
+            aiTimelineGenerator = aiTimelineGenerator
+        )
+
+        val result = svc.requestRecording(
+            issueId = "issue-report-fail", issueIdentifier = "KONC-RF",
+            projectSlug = "test", platform = DemoPlatform.PLAYWRIGHT, trigger = DemoTrigger.MANUAL
+        )
+
+        // The recording itself still succeeds — a failed post is best-effort, not fatal.
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.status == DemoStatus.COMPLETED)
+
+        // ...but the failure is no longer swallowed: it lands in the audit log.
+        val loggedFailure = auditDir.listFiles()
+            ?.any { it.readText().let { t -> t.contains("REPORT_FAILED") && !t.contains("REPORT_POSTED") } }
+            ?: false
+        assert(loggedFailure) { "expected REPORT_FAILED (and no REPORT_POSTED) in the audit log" }
+        auditDir.deleteRecursively()
+    }
+
+    @Test
     fun `getTask returns task by id`() = runTest {
         val createResult = service.createTask(
             issueId = "issue-3", issueIdentifier = "KONC-789",
@@ -1720,9 +1755,14 @@ class FakeDemoReporter2 : DemoReporter {
     var lastReportedUrl: String? = null
     var lastSkippedIssueId: String? = null
     var lastSkippedReason: String? = null
+    var reportShouldFail: Boolean = false
     override suspend fun report(task: DemoTask, recordingUrl: String): DemoResult<Unit> {
         lastReportedTask = task; lastReportedUrl = recordingUrl
-        return DemoResult.Success(Unit)
+        return if (reportShouldFail) {
+            DemoResult.Failure(com.flexsentlabs.koncerto.demo.model.DemoError.ReportFailed(RuntimeException("post rejected")))
+        } else {
+            DemoResult.Success(Unit)
+        }
     }
     override suspend fun reportFailure(task: DemoTask, errorMessage: String): DemoResult<Unit> {
         lastReportedTask = task
