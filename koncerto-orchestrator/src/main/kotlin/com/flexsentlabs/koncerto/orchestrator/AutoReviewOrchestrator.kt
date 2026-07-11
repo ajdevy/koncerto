@@ -313,6 +313,11 @@ class AutoReviewOrchestrator(
                     "error" to (e.message ?: "unknown")))
             }.getOrNull()
         val deployUrl = deployResult?.url
+        // The recorder runs in its own Docker container, so it must address the target by its
+        // internal-network URL (http://<containerName>:<port>) — localhost:hostPort only
+        // resolves on the host, not from inside another container. deployUrl (host-facing) stays
+        // as-is for tracing and the scenario-repair "did a deploy happen at all" gate below.
+        val recordingUrl = deployResult?.internalUrl
         if (deployResult != null) {
             traceReviewStep(workspace, issue, "deploy_target_project", if (deployResult.success) "ok" else "failed", mapOf(
                 "url" to (deployUrl ?: ""), "error" to (deployResult.error ?: "")))
@@ -320,7 +325,7 @@ class AutoReviewOrchestrator(
 
         while (true) {
             var demoRecordingError: String? = null
-            val demoUrl = runCatching { onReviewPassed?.invoke(issue, deployUrl) }
+            val demoUrl = runCatching { onReviewPassed?.invoke(issue, recordingUrl) }
                 .onFailure { e ->
                     demoRecordingError = e.message ?: "unknown"
                     logger.warn("demo_recording_callback_failed", mapOf(
