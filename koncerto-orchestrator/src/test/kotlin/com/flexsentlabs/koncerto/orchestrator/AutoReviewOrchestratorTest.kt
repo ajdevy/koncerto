@@ -4,6 +4,7 @@ import assertk.assertThat
 import assertk.assertions.contains
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
+import assertk.assertions.isGreaterThan
 import assertk.assertions.isInstanceOf
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
@@ -247,7 +248,7 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `returns RetryWithCoding(null) when subscription limit reached and posts one Linear comment`(@TempDir tmpDir: Path) = runTest {
+    fun `subscription limit registers a limit pause and blocks instead of re-dispatching`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-output"), "You've hit your org's monthly usage limit")
@@ -268,27 +269,34 @@ class AutoReviewOrchestratorTest {
             onCompleteState = "Done", onFailureState = null,
             maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
         )
+        val runtimeState = RuntimeState()
         val orchestrator = AutoReviewOrchestrator(
             agentRunner = fakeRunner(),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = tracker,
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
             projectSlug = "p",
-            runtimeState = RuntimeState(),
+            runtimeState = runtimeState,
             notifier = noopNotifier(),
             logger = noopLogger()
         )
 
         val firstDecision = orchestrator.onReviewStageComplete(issue())
-        assertThat(firstDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
-        assertThat((firstDecision as AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).rerouteToState).isNull()
+        // Blocked (a no-op in the dispatcher), NOT RetryWithCoding — the latter left the issue in
+        // the review state and re-dispatched it every poll, re-hitting the limit forever.
+        assertThat(firstDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
         assertThat(commentCount).isEqualTo(1)
         assertThat(lastComment).contains("subscription limit")
+        // The issue is now in limitPauses, so DispatchService.getCandidates excludes it until the
+        // resume window passes — breaking the tight loop.
+        assertThat(runtimeState.limitPauses.containsKey(issue().id)).isTrue()
+        val pause = runtimeState.limitPauses[issue().id]!!
+        assertThat(pause.provider).isEqualTo("claude")
+        assertThat(pause.resumeAtMs).isGreaterThan(System.currentTimeMillis())
 
         val secondDecision = orchestrator.onReviewStageComplete(issue())
-        assertThat(secondDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
-        assertThat((secondDecision as AutoReviewOrchestrator.ReviewDecision.RetryWithCoding).rerouteToState).isNull()
-        assertThat(commentCount).isEqualTo(1)
+        assertThat(secondDecision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(commentCount).isEqualTo(1)  // comment still posted only once
     }
 
     @Test
