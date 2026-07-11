@@ -160,6 +160,25 @@ class GitWorkflowTest {
     }
 
     @Test
+    fun `commitAndPush does not create an empty commit when there are no changes`() {
+        val config = GitConfig(enabled = true, autoCommit = true, autoPush = false)
+        val workflow = GitWorkflow(config, noopLogger())
+
+        // First call may legitimately commit the koncerto .gitignore / artifact-untracking on a
+        // fresh repo — let that settle so the next call has genuinely nothing to commit.
+        workflow.commitAndPush(repoDir, "ABC-1", "Setup")
+        val before = runGit("rev-list", "--count", "HEAD").trim()
+
+        // No file changes — a no-op dispatch (e.g. a review cycle that changed nothing).
+        // Previously `--allow-empty` produced a new empty commit here every time.
+        workflow.commitAndPush(repoDir, "ABC-1", "No-op review")
+        val after = runGit("rev-list", "--count", "HEAD").trim()
+
+        assertThat(after).isEqualTo(before)
+        assertThat(runGit("log", "--oneline").contains("ABC-1: No-op review")).isFalse()
+    }
+
+    @Test
     fun `createPullRequest returns null when disabled`() {
         val config = GitConfig(enabled = true, createPr = false)
         val workflow = GitWorkflow(config, noopLogger())
