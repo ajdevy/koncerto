@@ -48,7 +48,7 @@ projects:
         coding:
           prompt: prompts/implement.md
           agent_kind: "codex"
-          model: "codex"
+          model: "codex-5.6-luna"
           max_concurrent: 2
           on_complete_state: "In Review"
         review:
@@ -81,8 +81,8 @@ projects:
       agents:
         codex:
           kind: "codex"
-          command: "codex"
-          model: "codex"
+          command: "codex --model 5.6-luna"
+          model: "codex-5.6-luna"
           max_concurrent: 2
         claude:
           kind: "claude"
@@ -106,14 +106,14 @@ Body: {{ issue.description }}
 
 | Condition | Agent | Model |
 |-----------|-------|-------|
-| Label starts with `feat/` | codex | codex |
+| Label starts with `feat/` | codex | codex-5.6-luna |
 | Label is `review` | claude | claude-opus-4-8 |
-| Label starts with `bug/` | codex | codex |
+| Label starts with `bug/` | codex | codex-5.6-luna |
 | State is `Todo` | opencode-free | free (cycles) |
 
 ## Stages
 
-- **coding**: Codex implements the feature → moves to "In Review"
+- **coding**: Codex 5.6 Luna implements the feature → moves to "In Review"
 - **review**: Claude Opus 4.8 reviews code → "Done" on pass, "Needs Fix" on fail
 - **simple**: OpenCode free tier handles simple tasks → "In Review"
 
