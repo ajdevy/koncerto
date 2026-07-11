@@ -84,6 +84,8 @@ import com.flexsentlabs.koncerto.deploy.DockerLaunchCleaner
 import com.flexsentlabs.koncerto.deploy.OrphanedContainerCleanupScheduler
 import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.orchestrator.DemoScenarioGenerator
+import com.flexsentlabs.koncerto.orchestrator.ScenarioCoverageClassifier
+import com.flexsentlabs.koncerto.orchestrator.TestResourceRequirementDetector
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
@@ -416,10 +418,12 @@ class Beans {
                         targetProjectDeployer = targetProjectDeployer,
                         deployRepoFullName = parseRepoFullName(config),
                         demoFailureReporter = DemoFailureReporter(logger),
-                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache)
+                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache),
+                        scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger)
                     )
                 }
-            } else null
+            } else null,
+            testResourceDetector = TestResourceRequirementDetector("opencode", logger)
         )
     }
 

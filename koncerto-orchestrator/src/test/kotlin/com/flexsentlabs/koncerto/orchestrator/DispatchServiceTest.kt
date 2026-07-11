@@ -52,6 +52,7 @@ import com.flexsentlabs.koncerto.workspace.GitWorkflow
 import com.flexsentlabs.koncerto.workspace.HookExecutor
 import com.flexsentlabs.koncerto.workspace.WorkspaceManager
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
+import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicInteger
@@ -81,9 +82,10 @@ class DispatchServiceTest {
         fun issue(
             id: String, identifier: String, state: String,
             priority: Int = 5, labels: List<String> = emptyList(),
-            blockers: List<BlockerRef> = emptyList()
+            blockers: List<BlockerRef> = emptyList(),
+            description: String? = null
         ) = Issue(
-            id = id, identifier = identifier, title = "t", description = null,
+            id = id, identifier = identifier, title = "t", description = description,
             priority = priority, state = state, branchName = null, url = null,
             labels = labels, blockedBy = blockers,
             createdAt = null, updatedAt = null
@@ -915,6 +917,158 @@ class DispatchServiceTest {
         }
     }
 
+    // A detector wired to a fake model that always returns [outputs], one per model call.
+    private fun fakeResourceDetector(vararg outputs: String?): TestResourceRequirementDetector {
+        val queue = ArrayDeque(outputs.toList())
+        val runner = DemoScenarioGenerator.ProcessRunner { _: List<String>, _: File, _: Long -> queue.removeFirstOrNull() }
+        return TestResourceRequirementDetector("opencode", StructuredLogger(emptyList()), runner, listOf("m1"))
+    }
+
+    @Test
+    fun `dispatch blocks and comments when a required test resource is missing, without running the agent`() {
+        val root = Files.createTempDirectory("testres-preflight-block-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo", description = "Register with an emailed login code")
+            trackingLinear.addIssue(testIssue)
+            workspaces.ensureWorkspace(testIssue.identifier)
+
+            val state = RuntimeState()
+            val runner = CollectingAgentRunner()
+            val detector = fakeResourceDetector("""[{"name":"test email inbox","why":"read the emailed code"}]""")
+            val svc = createService(
+                projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked")),
+                state = state, linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner,
+                testResourceDetector = detector
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(0)
+            assertThat(trackingLinear.commentedIssueId).isEqualTo("1")
+            assertThat(trackingLinear.commentedBody!!.contains("test email inbox")).isTrue()
+            assertThat(trackingLinear.transitionedIssueId).isEqualTo("1")
+            assertThat(state.isBlocked("1")).isTrue()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dispatch proceeds when the required test resource is named in the ticket description`() {
+        val root = Files.createTempDirectory("testres-preflight-desc-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue(
+                "1", "A-1", "Todo",
+                description = "Use the shared test email inbox qa@promomesh.test to read the code."
+            )
+            trackingLinear.addIssue(testIssue)
+            workspaces.ensureWorkspace(testIssue.identifier)
+
+            val runner = CollectingAgentRunner()
+            val detector = fakeResourceDetector("""[{"name":"test email inbox","why":"read the code"}]""")
+            val svc = createService(
+                projectConfig = config(), state = RuntimeState(), linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner,
+                testResourceDetector = detector
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+            assertThat(trackingLinear.commentedBody?.contains("needs test resource") ?: false).isFalse()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dispatch proceeds when the required test resource is provided by the secrets file`() {
+        val root = Files.createTempDirectory("testres-preflight-secrets-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo", description = "Register with an emailed login code")
+            trackingLinear.addIssue(testIssue)
+            workspaces.ensureWorkspace(testIssue.identifier)
+            val secretsFile = root.resolve("secrets.env")
+            Files.writeString(secretsFile, "TEST_EMAIL_INBOX=qa@promomesh.test\n")
+
+            val runner = CollectingAgentRunner()
+            // Natural-language name ("test email inbox") must satisfy an ENV-style key (TEST_EMAIL_INBOX).
+            val detector = fakeResourceDetector("""[{"name":"test email inbox","why":"read the code"}]""")
+            val svc = createService(
+                projectConfig = config().copy(demoSecretsFile = secretsFile.toString()),
+                state = RuntimeState(), linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner,
+                testResourceDetector = detector
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+            assertThat(trackingLinear.commentedBody?.contains("needs test resource") ?: false).isFalse()
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `dispatch proceeds when the detector finds no required test resources`() {
+        val root = Files.createTempDirectory("testres-preflight-empty-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo", description = "Internal refactor, no external deps")
+            trackingLinear.addIssue(testIssue)
+            workspaces.ensureWorkspace(testIssue.identifier)
+
+            val runner = CollectingAgentRunner()
+            val detector = fakeResourceDetector("[]")
+            val svc = createService(
+                projectConfig = config(), state = RuntimeState(), linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = runner,
+                testResourceDetector = detector
+            )
+            runDispatchAwait(svc)
+
+            assertThat(runner.dispatched.size).isEqualTo(1)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `test-resource preflight comments only once even across repeated polls`() {
+        val root = Files.createTempDirectory("testres-preflight-once-")
+        try {
+            val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+            val trackingLinear = TrackingLinearClient()
+            val testIssue = issue("1", "A-1", "Todo", description = "Register with an emailed login code")
+            trackingLinear.addIssue(testIssue)
+            workspaces.ensureWorkspace(testIssue.identifier)
+
+            val state = RuntimeState()
+            // The issue is already marked blocked, so addBlocked() returns false and the gate must not
+            // comment or transition a second time.
+            state.addBlocked("1")
+            val detector = fakeResourceDetector("""[{"name":"test email inbox","why":"read the code"}]""")
+            val svc = createService(
+                projectConfig = config().copy(tracker = config().tracker.copy(blockedState = "Blocked")),
+                state = state, linear = trackingLinear,
+                workspaces = workspaces, candidates = listOf(testIssue), runner = CollectingAgentRunner(),
+                testResourceDetector = detector
+            )
+            runDispatchAwait(svc)
+
+            assertThat(trackingLinear.commentedIssueId).isEqualTo(null as String?)
+            assertThat(trackingLinear.transitionedIssueId).isEqualTo(null as String?)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
     @Test
     fun `consumeDemoFixRequest returns and deletes the fix request, then null on second read`() {
         val root = Files.createTempDirectory("demo-fix-req-")
@@ -956,7 +1110,8 @@ class DispatchServiceTest {
         notificationsConfig: NotificationsConfig? = null,
         crossProjectChainer: CrossProjectChainer? = null,
         metricsRepository: MetricsRepository? = null,
-        tenantResolver: TenantResolver? = null
+        tenantResolver: TenantResolver? = null,
+        testResourceDetector: TestResourceRequirementDetector? = null
     ): DispatchService {
         val cfg = projectConfig ?: DispatchServiceTest.config()
         val wc = cache ?: WorkflowCache().also { it.set(WorkflowDefinition(emptyMap(), "Hi")) }
@@ -975,7 +1130,8 @@ class DispatchServiceTest {
             auditLogger = auditLogger,
             autoReviewOrchestrator = autoReviewOrchestrator,
             gitWorkflow = gitWorkflow,
-            tenantResolver = tenantResolver
+            tenantResolver = tenantResolver,
+            testResourceDetector = testResourceDetector
         )
     }
 

@@ -299,6 +299,112 @@ class AutoReviewOrchestratorTest {
         assertThat(capturedBody!!).contains("</details>\n\n---\n\n🎥 [Watch Demo Recording](https://demo.example/rec.webm)")
     }
 
+    // A classifier wired to a fake model that returns [output] once.
+    private fun fakeCoverageClassifier(output: String?): ScenarioCoverageClassifier {
+        val queue = ArrayDeque(listOf(output))
+        val runner = DemoScenarioGenerator.ProcessRunner { _: List<String>, _: java.io.File, _: Long -> queue.removeFirstOrNull() }
+        return ScenarioCoverageClassifier("opencode", noopLogger(), runner, listOf("m1"))
+    }
+
+    @Test
+    fun `demo comment appends a coverage note for scenarios the recorder cannot verify`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ Approved")
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> {
+                    val i = command.indexOf("--body-file")
+                    if (i >= 0) capturedBody = Files.readString(Path.of(command[i + 1]))
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            scenarioCoverageClassifier = fakeCoverageClassifier(
+                """[{"scenario":"log in via emailed code","why":"needs reading the inbox"}]"""),
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        )
+
+        orchestrator.onReviewStageComplete(issue())
+
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!).contains("Demo coverage note")
+        assertThat(capturedBody!!).contains("log in via emailed code")
+        // The note follows the demo link, not replaces it.
+        assertThat(capturedBody!!).contains("Watch Demo Recording")
+    }
+
+    @Test
+    fun `demo comment has no coverage note when every scenario is automatable`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ Approved")
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> {
+                    val i = command.indexOf("--body-file")
+                    if (i >= 0) capturedBody = Files.readString(Path.of(command[i + 1]))
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            scenarioCoverageClassifier = fakeCoverageClassifier("[]"),
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        )
+
+        orchestrator.onReviewStageComplete(issue())
+
+        assertThat(capturedBody).isNotNull()
+        assertThat(capturedBody!!).contains("Watch Demo Recording")
+        assertThat(capturedBody!!.contains("Demo coverage note")).isFalse()
+    }
+
     @Test
     fun `subscription limit registers a limit pause and blocks instead of re-dispatching`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
@@ -1500,10 +1606,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 2, "https://demo.example.com/vid")
+        method.invoke(orchestrator, issue(), ws, 2, "https://demo.example.com/vid", null)
         assertThat(capturedBody).isNotNull()
         assertThat(capturedBody!!).contains("Watch Demo Recording")
         assertThat(capturedBody!!).contains("https://demo.example.com/vid")
@@ -1688,10 +1795,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, null)
+        method.invoke(orchestrator, issue(), ws, 1, null, null)
     }
 
     @Test
@@ -1706,10 +1814,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, null)
+        method.invoke(orchestrator, issue(), ws, 1, null, null)
     }
 
     @Test
@@ -1725,10 +1834,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, null)
+        method.invoke(orchestrator, issue(), ws, 1, null, null)
     }
 
     @Test
@@ -1825,10 +1935,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, null)
+        method.invoke(orchestrator, issue(), ws, 1, null, null)
     }
 
     @Test
@@ -2357,10 +2468,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, "https://demo.example.com/vid")
+        method.invoke(orchestrator, issue(), ws, 1, "https://demo.example.com/vid", null)
 
         assertThat(capturedBody).isNotNull()
         assertThat(capturedBody!!.contains("Watch Demo Recording")).isTrue()
@@ -2387,10 +2499,11 @@ class AutoReviewOrchestratorTest {
             Issue::class.java,
             com.flexsentlabs.koncerto.workspace.Workspace::class.java,
             Int::class.javaPrimitiveType,
+            String::class.java,
             String::class.java
         )
         method.isAccessible = true
-        method.invoke(orchestrator, issue(), ws, 1, null)
+        method.invoke(orchestrator, issue(), ws, 1, null, null)
 
         assertThat(commentCalled).isFalse()
     }
