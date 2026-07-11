@@ -614,8 +614,30 @@ class AutoReviewOrchestrator(
                 logger.warn("subscription_limit_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
             }
         }
-        traceReviewStep(workspace, issue, "review_subscription_limit", "retry", mapOf("posted" to Files.exists(postedFile).toString()))
-        return ReviewDecision.RetryWithCoding(null)
+        // Register a limit pause so the dispatcher excludes this issue from candidates until the
+        // resume window passes, then re-dispatches it once — the same mechanism the agent-run
+        // limit path uses. Previously this returned RetryWithCoding(null), which left the issue
+        // in the review state with no reroute, so it was re-dispatched (and re-hit the same limit)
+        // on every poll cycle — a tight loop that burned the agent against an exhausted quota.
+        val resumeAtMs = System.currentTimeMillis() + projectConfig.agent.limitPause.claudeDefaultResumeMs
+        runtimeState.limitPauses[issue.id] = LimitPauseEntry(
+            issueId = issue.id,
+            identifier = issue.identifier,
+            stageName = "in review",
+            agentKind = "claude",
+            provider = "claude",
+            error = "review_subscription_limit",
+            resumeAtMs = resumeAtMs
+        )
+        logger.info("review_subscription_limit_paused", mapOf(
+            "issue_id" to issue.id,
+            "resume_at_ms" to resumeAtMs.toString()
+        ))
+        traceReviewStep(workspace, issue, "review_subscription_limit", "paused", mapOf(
+            "posted" to Files.exists(postedFile).toString(),
+            "resume_at_ms" to resumeAtMs.toString()
+        ))
+        return ReviewDecision.Blocked
     }
 
     private suspend fun readReviewStatus(workspacePath: Path): Boolean {
