@@ -87,7 +87,8 @@ class DispatchService(
     private val crossProjectChainer: CrossProjectChainer? = null,
     private val auditLogger: AuditLogger? = null,
     private val autoReviewOrchestrator: AutoReviewOrchestrator? = null,
-    private val gitWorkflow: GitWorkflow? = null
+    private val gitWorkflow: GitWorkflow? = null,
+    private val testResourceDetector: TestResourceRequirementDetector? = null
 ) {
     val messageStore = AgentMessageStore(logger)
 
@@ -634,6 +635,58 @@ class DispatchService(
         return false
     }
 
+    /**
+     * Returns true if dispatch may proceed. Returns false (and blocks the ticket with one comment)
+     * when the ticket describes a feature that needs an external TEST resource the operator hasn't
+     * provided — neither named in the ticket description nor present as a key in the demo secrets
+     * file. The requirements are LLM-inferred from the ticket text. Fails OPEN: no detector, or any
+     * detection failure (which yields an empty list), never blocks.
+     */
+    private suspend fun runTestResourcePreflight(issue: Issue): Boolean {
+        val detector = testResourceDetector ?: return true
+        val required = runCatching { detector.detect(issue) }.getOrDefault(emptyList())
+        if (required.isEmpty()) return true
+
+        val descriptionLc = issue.description.orEmpty().lowercase()
+        val providedKeys = SecretsFile.load(projectConfig.demoSecretsFile).keys.map { it.lowercase() }.toSet()
+        val missing = required.filter { r ->
+            val nameLc = r.name.lowercase()
+            // Secrets keys are ENV-style (TEST_EMAIL_INBOX); the LLM name is a noun phrase
+            // ("test email inbox"). Compare both raw and underscore-normalized so operators can
+            // satisfy the gate by adding the resource to the demo secrets file, as the block comment
+            // instructs — otherwise a spaced name could never match an underscore key.
+            val nameKey = nameLc.replace(' ', '_')
+            !descriptionLc.contains(nameLc) && nameLc !in providedKeys && nameKey !in providedKeys
+        }
+        if (missing.isEmpty()) return true
+
+        // Block + comment once per process run (see the secret preflight for the same guard rationale).
+        if (!state.addBlocked(issue.id)) return false
+
+        logger.warn("dispatch_blocked_missing_test_resources", mapOf(
+            "issue_id" to issue.id, "missing" to missing.joinToString(",") { it.name }))
+        try {
+            linear.createComment(issue.id,
+                "Blocked: this feature needs test resource(s) that aren't provided yet:\n" +
+                    missing.joinToString("\n") { "- ${it.name}${if (it.why.isNotBlank()) " — ${it.why}" else ""}" } +
+                    "\n\nProvide these in the ticket description or the project's demo secrets file, then unblock.")
+        } catch (e: Exception) {
+            logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+        try {
+            val blockedId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
+            if (blockedId != null) {
+                linear.updateIssueState(issue.id, blockedId)
+                logger.info("state_transitioned", mapOf("issue_id" to issue.id, "to_state" to projectConfig.tracker.blockedState))
+            } else {
+                logger.warn("blocked_state_not_found", mapOf("blocked_state" to projectConfig.tracker.blockedState))
+            }
+        } catch (e: Exception) {
+            logger.warn("dispatch_test_resource_block_failed", mapOf("issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+        }
+        return false
+    }
+
     private suspend fun prepareDispatch(issue: Issue, attempt: Int?, stageNameOverride: String? = null): DispatchExecutionData? {
         logger.info(
             "dispatch_start",
@@ -693,6 +746,11 @@ class DispatchService(
         // ticket now — before any coding agent runs — with a comment naming what is missing.
         if (!runSecretPreflight(issue)) {
             traceDispatchStep(issue, "dispatch", "blocked_missing_secrets")
+            return null
+        }
+        // Then: block if the feature needs an external test resource the operator hasn't provided.
+        if (!runTestResourcePreflight(issue)) {
+            traceDispatchStep(issue, "dispatch", "blocked_missing_test_resources")
             return null
         }
 

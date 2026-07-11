@@ -52,6 +52,7 @@ class AutoReviewOrchestrator(
     private val deployRepoFullName: String? = null,
     private val demoFailureReporter: DemoFailureReporter? = null,
     private val demoScenarioGenerator: DemoScenarioGenerator? = null,
+    private val scenarioCoverageClassifier: ScenarioCoverageClassifier? = null,
     private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner
 ) {
     private val reviewStage: StageAgentConfig?
@@ -338,7 +339,12 @@ class AutoReviewOrchestrator(
             if (demoUrl != null || demoRecordingError == null) {
                 if (demoUrl != null) traceReviewStep(workspace, issue, "demo_recording", "ok", mapOf("url" to demoUrl))
                 else traceReviewStep(workspace, issue, "demo_recording", "skipped")
-                runCatching { postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl) }
+                // If a recording was produced, flag any positive scenario the browser recorder can't
+                // exercise end-to-end (e.g. reading an emailed login code) so a partial recording is
+                // not mistaken for a fully-verified scenario. Never changes the Pass outcome.
+                val coverageNote = if (demoUrl != null) buildCoverageNote(issue) else null
+                if (coverageNote != null) traceReviewStep(workspace, issue, "demo_coverage", "flagged")
+                runCatching { postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl, coverageNote) }
                     .onFailure { e ->
                         logger.warn("review_comment_pipeline_failed", mapOf(
                             "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
@@ -453,7 +459,28 @@ class AutoReviewOrchestrator(
         }
     }
 
-    private fun postDetailedReviewAsPrComment(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?, sequence: Int, demoUrl: String? = null) {
+    /**
+     * Builds a coverage note listing the ticket's positive scenarios that an automated browser
+     * recorder cannot exercise end-to-end, so reviewers know the recording only reached an
+     * intermediate screen for those. Returns null when there is no classifier, nothing un-automatable,
+     * or classification fails (fail-open — a missing note never blocks or fails the demo).
+     */
+    private fun buildCoverageNote(issue: Issue): String? {
+        val classifier = scenarioCoverageClassifier ?: return null
+        val unverifiable = runCatching { classifier.classify(issue) }.getOrDefault(emptyList())
+        if (unverifiable.isEmpty()) return null
+        return "⚠️ **Demo coverage note** — the recording could not verify these positive scenario(s) " +
+            "end-to-end (they need a step the automated browser can't perform):\n" +
+            unverifiable.joinToString("\n") { "- ${it.scenario}${if (it.why.isNotBlank()) " — ${it.why}" else ""}" }
+    }
+
+    private fun postDetailedReviewAsPrComment(
+        issue: Issue,
+        workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
+        sequence: Int,
+        demoUrl: String? = null,
+        coverageNote: String? = null
+    ) {
         val ws = workspace ?: return
 
         val detailedPath = ws.path.resolve(".review-output-detailed")
@@ -489,7 +516,7 @@ class AutoReviewOrchestrator(
             demoLink.isBlank() -> header + content
             content.isBlank() -> header + "\n" + demoLink
             else -> header + content + "\n\n---\n\n" + demoLink
-        }
+        }.let { if (coverageNote.isNullOrBlank()) it else it + "\n\n" + coverageNote }
 
         logger.info("pr_comment_debug", mapOf(
             "issue_id" to issue.id,

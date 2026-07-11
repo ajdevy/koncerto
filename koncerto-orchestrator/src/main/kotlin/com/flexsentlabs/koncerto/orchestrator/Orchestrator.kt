@@ -40,7 +40,10 @@ class Orchestrator(
     private val subtaskOrchestrator: SubtaskOrchestrator? = null,
     private val workplanParser: WorkplanParser? = null,
     private val auditLogger: AuditLogger? = null,
-    private val autoReviewOrchestratorFactory: ((ProjectConfig, RuntimeState) -> AutoReviewOrchestrator)? = null
+    private val autoReviewOrchestratorFactory: ((ProjectConfig, RuntimeState) -> AutoReviewOrchestrator)? = null,
+    // Pre-implementation gate detector. Nullable + injected (like autoReviewOrchestratorFactory) so
+    // core Orchestrator tests never trigger a real LLM call; production wires the real one in Beans.
+    private val testResourceDetector: TestResourceRequirementDetector? = null
 ) {
     internal val issueProjectMap = ConcurrentHashMap<String, String>()
 
@@ -84,7 +87,8 @@ class Orchestrator(
                 workplanParser = workplanParser,
                 auditLogger = auditLogger,
                 autoReviewOrchestrator = autoReview,
-                gitWorkflow = projectGitWorkflow
+                gitWorkflow = projectGitWorkflow,
+                testResourceDetector = testResourceDetector
             )
             ProjectRuntime(pc, linear, ws, state, dispatch)
         }
