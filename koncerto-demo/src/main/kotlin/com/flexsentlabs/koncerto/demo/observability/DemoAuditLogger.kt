@@ -58,6 +58,14 @@ class DemoAuditLogger(
         ))
     }
 
+    fun logReportFailed(task: DemoTask, recordingUrl: String, errorMessage: String) {
+        write("REPORT_FAILED", mapOf(
+            "task_id" to task.id,
+            "url" to recordingUrl,
+            "error" to errorMessage
+        ))
+    }
+
     fun logTaskFailed(task: DemoTask, errorMessage: String) {
         write("TASK_FAILED", mapOf(
             "task_id" to task.id,
