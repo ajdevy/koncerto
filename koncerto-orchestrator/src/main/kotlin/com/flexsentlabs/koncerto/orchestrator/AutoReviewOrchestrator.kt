@@ -480,8 +480,16 @@ class AutoReviewOrchestrator(
 
         val modelName = reviewStage?.model ?: "claude"
         val header = "### 🤖 Claude Review #$sequence · $modelName\n"
-        val demoLink = if (!demoUrl.isNullOrBlank()) "\n---\n🎥 [Watch Demo Recording]($demoUrl)" else ""
-        val body = if (content.isBlank()) header + demoLink.trimStart('\n') else header + content + demoLink
+        val demoLink = if (!demoUrl.isNullOrBlank()) "🎥 [Watch Demo Recording]($demoUrl)" else ""
+        // The review content ends with a raw-HTML <details> block. GitHub only parses markdown
+        // that FOLLOWS a raw-HTML block when a BLANK line separates them — otherwise the `---`
+        // rule and the link render as literal text (e.g. "--- 🎥 [Watch Demo Recording](url)").
+        // So pad the separator with blank lines on both sides.
+        val body = when {
+            demoLink.isBlank() -> header + content
+            content.isBlank() -> header + "\n" + demoLink
+            else -> header + content + "\n\n---\n\n" + demoLink
+        }
 
         logger.info("pr_comment_debug", mapOf(
             "issue_id" to issue.id,

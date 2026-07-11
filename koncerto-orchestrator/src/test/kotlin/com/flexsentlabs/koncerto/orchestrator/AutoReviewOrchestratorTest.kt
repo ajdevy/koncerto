@@ -248,6 +248,58 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `demo link is separated from the review HTML block by a blank line so it renders`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        initGitOrigin(issueDir, "acme/widget")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        // Review content ending in a raw-HTML <details> block — the real shape that broke rendering.
+        Files.writeString(
+            issueDir.resolve(".review-output-detailed"),
+            "✅ Approved\n<details><summary>Warnings</summary>\n- something\n</details>"
+        )
+
+        var capturedBody: String? = null
+        val ghRunner: GhProcessRunner = { command, _ ->
+            when {
+                command.contains("view") -> GhProcessResult(0, """{"number":7}""")
+                command.contains("comment") -> {
+                    val i = command.indexOf("--body-file")
+                    if (i >= 0) capturedBody = Files.readString(Path.of(command[i + 1]))
+                    GhProcessResult(0, "https://github.com/acme/widget/pull/7#issuecomment-1")
+                }
+                else -> GhProcessResult(1, "unknown command")
+            }
+        }
+
+        val reviewStage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "claude", command = "claude",
+            onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = failingRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            ghProcessRunner = ghRunner,
+            onReviewPassed = { _, _ -> "https://demo.example/rec.webm" }
+        )
+
+        orchestrator.onReviewStageComplete(issue())
+
+        assertThat(capturedBody).isNotNull()
+        // The <details> block must be followed by a BLANK line before the rule + link, or GitHub
+        // renders "--- 🎥 [Watch Demo Recording](url)" as literal text instead of a clickable link.
+        assertThat(capturedBody!!).contains("</details>\n\n---\n\n🎥 [Watch Demo Recording](https://demo.example/rec.webm)")
+    }
+
+    @Test
     fun `subscription limit registers a limit pause and blocks instead of re-dispatching`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
