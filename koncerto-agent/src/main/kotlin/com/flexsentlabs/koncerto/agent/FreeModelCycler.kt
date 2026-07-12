@@ -104,11 +104,16 @@ class FreeModelCycler(
         // These must be real opencode model IDs (see `opencode models`) — they're passed
         // directly as `--model <id>` to the opencode CLI. Placeholder names like
         // "opencode-free-1" aren't resolvable and fail every call with a server error.
+        // Ordered by observed reliability, most-reliable first. The list is tried in order and each
+        // model gets a long per-attempt timeout, so leading with a flaky model made every free-model
+        // task (demo scenario generation, ticket credential extraction, fallbacks) burn ~5 min per
+        // dead model before reaching a live one — north-mini-code-free answered promptly and produced
+        // valid JSON/YAML while deepseek/mimo hung to timeout. The rest stay as fallbacks.
         val DEFAULT_FREE_MODELS = listOf(
+            "opencode/north-mini-code-free",
             "opencode/deepseek-v4-flash-free",
             "opencode/mimo-v2.5-free",
-            "opencode/nemotron-3-ultra-free",
-            "opencode/north-mini-code-free"
+            "opencode/nemotron-3-ultra-free"
         )
 
         fun createDefault(logger: StructuredLogger, maxRetriesPerModel: Int = 3): FreeModelCycler {
