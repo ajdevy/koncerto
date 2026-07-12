@@ -52,4 +52,32 @@ class ScenarioCoverageClassifierTest {
         val result = classifier(runnerReturning(null)).classify(issue())
         assertThat(result).isEmpty()
     }
+
+    @Test
+    fun `swallows a runner exception and yields empty`() {
+        val throwing = DemoScenarioGenerator.ProcessRunner { _: List<String>, _: File, _: Long ->
+            throw RuntimeException("opencode blew up")
+        }
+        val result = classifier(throwing).classify(issue())
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `uses the default free-model list when none is supplied`() {
+        val c = ScenarioCoverageClassifier("opencode", noopLogger(), runnerReturning("[]"))
+        assertThat(c.classify(issue())).isEmpty()
+    }
+
+    @Test
+    fun `skips array items whose scenario is blank`() {
+        val out = """[{"scenario":"","why":"empty"},{"scenario":"log in via emailed code","why":"ok"}]"""
+        val result = classifier(runnerReturning(out)).classify(issue())
+        assertThat(result.map { it.scenario }).containsExactly("log in via emailed code")
+    }
+
+    @Test
+    fun `balanced brackets with invalid JSON inside yield empty`() {
+        val result = classifier(runnerReturning("[oops not json]")).classify(issue())
+        assertThat(result).isEmpty()
+    }
 }

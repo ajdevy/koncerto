@@ -27,13 +27,17 @@ object GitRemoteResolver {
         return GITHUB_REPO_IN_CONFIG.find(content, originIdx)?.groupValues?.get(1)
     }
 
-    fun resolveGitConfigPath(workspacePath: Path): Path? {
+    fun resolveGitConfigPath(workspacePath: Path): Path? =
+        resolveGitConfigPath(workspacePath) { Files.readString(it) }
+
+    // Read seam so the "unreadable .git pointer" branch can be exercised without a real IO fault.
+    internal fun resolveGitConfigPath(workspacePath: Path, readGitFile: (Path) -> String): Path? {
         val directConfig = workspacePath.resolve(".git/config")
         if (Files.exists(directConfig)) return directConfig
         val gitFile = workspacePath.resolve(".git")
         if (!Files.exists(gitFile) || !Files.isRegularFile(gitFile)) return null
         return try {
-            val gitDirLine = Files.readString(gitFile).trim()
+            val gitDirLine = readGitFile(gitFile).trim()
             val prefix = "gitdir: "
             if (!gitDirLine.startsWith(prefix)) return null
             Path.of(gitDirLine.removePrefix(prefix).trim()).resolve("config")

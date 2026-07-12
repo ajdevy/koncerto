@@ -356,6 +356,20 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `buildPrompt lists real routes extracted from the diff`(@TempDir tmpDir: Path) {
+        initGitRepoWithDiff(tmpDir, "@app.get(\"/dashboard\")\nasync def dashboard():\n    pass\n")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "i-routes", identifier = "T-9", title = "Add dashboard", description = null,
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("## Real Routes (extracted from the actual diff)")).isEqualTo(true)
+        assertThat(prompt.contains("/dashboard")).isEqualTo(true)
+    }
+
+    @Test
     fun `extractRealSelectors pulls testid, id, name and aria-label from added lines only`() {
         val diff = """
             diff --git a/app/main.py b/app/main.py

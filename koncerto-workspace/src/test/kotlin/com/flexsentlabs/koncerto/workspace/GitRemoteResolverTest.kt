@@ -38,6 +38,55 @@ class GitRemoteResolverTest {
     }
 
     @Test
+    fun `repoFullName follows a worktree dot-git file to the real config`(@TempDir tmpDir: Path) {
+        // A git worktree/submodule has `.git` as a FILE: "gitdir: <path>".
+        val realGitDir = tmpDir.resolve("actual-gitdir").also { Files.createDirectories(it) }
+        Files.writeString(
+            realGitDir.resolve("config"),
+            """
+            [remote "origin"]
+                url = git@github.com:acme/worktree-repo.git
+            """.trimIndent()
+        )
+        val workspace = tmpDir.resolve("ws").also { Files.createDirectories(it) }
+        Files.writeString(workspace.resolve(".git"), "gitdir: $realGitDir\n")
+
+        assertThat(GitRemoteResolver.repoFullName(workspace)).isEqualTo("acme/worktree-repo")
+    }
+
+    @Test
+    fun `repoFullName returns null when there is no git metadata`(@TempDir tmpDir: Path) {
+        assertThat(GitRemoteResolver.repoFullName(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `repoFullName returns null when the dot-git file is not a gitdir pointer`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve(".git"), "not a gitdir pointer\n")
+        assertThat(GitRemoteResolver.repoFullName(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `repoFullName returns null when the resolved config path is unreadable`(@TempDir tmpDir: Path) {
+        // gitdir points at a directory whose "config" entry is itself a directory, so readString throws.
+        val gitDir = tmpDir.resolve("gd").also { Files.createDirectories(it) }
+        Files.createDirectories(gitDir.resolve("config"))
+        Files.writeString(tmpDir.resolve(".git"), "gitdir: $gitDir\n")
+        assertThat(GitRemoteResolver.repoFullName(tmpDir)).isNull()
+    }
+
+    @Test
+    fun `resolveGitConfigPath returns null when reading the dot-git pointer throws`(@TempDir tmpDir: Path) {
+        Files.writeString(tmpDir.resolve(".git"), "gitdir: /somewhere\n")
+        val resolved = GitRemoteResolver.resolveGitConfigPath(tmpDir) { throw java.io.IOException("boom") }
+        assertThat(resolved).isNull()
+    }
+
+    @Test
+    fun `repoFullNameFromGitConfig returns null without an origin remote`() {
+        assertThat(GitRemoteResolver.repoFullNameFromGitConfig("[core]\n\tbare = false\n")).isNull()
+    }
+
+    @Test
     fun `sanitizeRemoteUrl strips embedded credentials`() {
         val sanitized = GitRemoteResolver.sanitizeRemoteUrl(
             "https://x-access-token:secret@github.com/acme/repo.git"

@@ -51,6 +51,20 @@ class DockerEntityPolicyTest {
     }
 
     @Test
+    fun `marks an exited container in an orphan demo compose project as an orphan`() {
+        // Name doesn't match orphan prefixes, but it belongs to a koncerto-demo compose project
+        // and is not running → orphan via the compose-project branch.
+        assertThat(
+            DockerEntityPolicy.isOrphanContainer(
+                name = "random_sidecar",
+                status = "Exited (0) 1 hour ago",
+                composeProject = "koncerto-demo-fle52",
+                image = "postgres:16"
+            )
+        ).isTrue()
+    }
+
+    @Test
     fun `marks labeled managed exited containers as orphans`() {
         assertThat(
             DockerEntityPolicy.isOrphanContainer(

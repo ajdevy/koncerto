@@ -79,4 +79,18 @@ class SecretRequirementDetectorTest {
         Files.writeString(dir.resolve(".env.sample"), "TOKEN=\"\"\n")
         assertThat(detector.detect(dir)).containsExactlyInAnyOrder("TOKEN")
     }
+
+    @Test
+    fun `compose bare list env entry passes the host var through and is required`(@TempDir dir: Path) {
+        // `environment:\n  - VAR` (no `=`) forwards the host env var, so it must be provided.
+        Files.writeString(dir.resolve("docker-compose.yml"), """
+            services:
+              app:
+                environment:
+                  - SENDGRID_API_KEY
+                  - PRESET_VALUE=already-set
+        """.trimIndent())
+
+        assertThat(detector.detect(dir)).containsExactlyInAnyOrder("SENDGRID_API_KEY")
+    }
 }
