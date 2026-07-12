@@ -1,6 +1,5 @@
 package com.flexsentlabs.koncerto.orchestrator
 
-import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.logging.StructuredLogger
 import kotlinx.serialization.json.Json
@@ -21,15 +20,20 @@ import java.io.File
  * map, so a detection failure never blocks or corrupts the demo run — the secrets file still applies.
  */
 class TicketCredentialExtractor(
-    private val command: String,
+    // Uses Claude Code (`claude -p …`), not the free opencode models: extraction is a tiny but
+    // critical-path task, and the free models proved intermittently unavailable, silently returning
+    // an empty map and breaking the demo. Haiku 4.5 does this trivial extraction reliably and is the
+    // cheapest/fastest Claude model; Sonnet is the fallback. No extended thinking — nothing to reason
+    // about, just find the values and emit JSON.
+    private val command: String = "claude",
     private val logger: StructuredLogger,
     private val processRunner: DemoScenarioGenerator.ProcessRunner = DemoScenarioGenerator.defaultProcessRunner(),
-    private val models: List<String> = FreeModelCycler.DEFAULT_FREE_MODELS
+    private val models: List<String> = listOf("haiku", "sonnet")
 ) {
     fun extract(issue: Issue): Map<String, String> {
         val prompt = buildPrompt(issue.title, issue.description.orEmpty())
         for (model in models) {
-            val cmd = command.split(" ") + listOf("run", "--model", model, "--dangerously-skip-permissions", prompt)
+            val cmd = command.split(" ") + listOf("-p", prompt, "--model", model, "--output-format", "text")
             val output = try {
                 processRunner.run(cmd, WORK_DIR, TIMEOUT_SECONDS)
             } catch (e: Exception) {
