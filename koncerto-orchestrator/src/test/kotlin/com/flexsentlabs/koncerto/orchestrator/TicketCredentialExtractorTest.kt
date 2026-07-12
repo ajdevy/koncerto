@@ -86,7 +86,7 @@ class TicketCredentialExtractorTest {
     }
 
     @Test
-    fun `uses the default free-model list when none is supplied`() {
+    fun `uses the default model list when none is supplied`() {
         val e = TicketCredentialExtractor("opencode", noopLogger(), runnerReturning("[]"))
         assertThat(e.extract(issue())).isEmpty()
     }

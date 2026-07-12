@@ -421,7 +421,7 @@ class Beans {
                         demoFailureReporter = DemoFailureReporter(logger),
                         demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache),
                         scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger),
-                        ticketCredentialExtractor = TicketCredentialExtractor("opencode", logger)
+                        ticketCredentialExtractor = TicketCredentialExtractor(logger = logger)
                     )
                 }
             } else null,
