@@ -623,6 +623,35 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `postDetailedReviewAsPrComment aborts when the branch cannot be resolved`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        Files.writeString(ws.path.resolve(".review-output-detailed"), "---\n✅ Approved\n")
+        // Repo resolves from origin, but HEAD is detached → resolveCurrentBranch returns null.
+        Files.createDirectories(ws.path.resolve(".git"))
+        Files.writeString(ws.path.resolve(".git/HEAD"), "0123456789abcdef0123456789abcdef01234567\n")
+        Files.writeString(
+            ws.path.resolve(".git/config"),
+            "[remote \"origin\"]\n\turl = git@github.com:acme/widget.git\n"
+        )
+
+        var commented = false
+        val ghRunner: GhProcessRunner = { _, _ -> commented = true; GhProcessResult(0, "") }
+        val orchestrator = passingReviewOrchestrator(workspaceDir, ghProcessRunner = ghRunner)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), ws, 1, "https://demo.example.com/vid", null)
+        assertThat(commented).isFalse() // aborted at the no-branch guard, never reached gh
+    }
+
+    @Test
     fun `postDetailedReviewAsPrComment returns early when there is no workspace`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val orchestrator = passingReviewOrchestrator(workspaceDir)
