@@ -94,6 +94,102 @@ class PlaywrightRecorderTest {
     }
 
     @Test
+    fun `companion PLAYWRIGHT_SCRIPT supports the generic resolve step and variable substitution`() {
+        val field = PlaywrightRecorder::class.java.getDeclaredField("PLAYWRIGHT_SCRIPT")
+        field.isAccessible = true
+        val script = field.get(null) as String
+        assertThat(script.contains("child_process")).isTrue()
+        assertThat(script.contains("case 'resolve'")).isTrue()
+        assertThat(script.contains("function substituteVars")).isTrue()
+        // Resolved values are never logged verbatim — only their length.
+        assertThat(script.contains("' chars)")).isTrue()
+    }
+
+    @Test
+    fun `PLAYWRIGHT_SCRIPT resolve step runs a snippet and substituteVars injects its output`() {
+        // Runs the actual embedded JS under node: the browser IIFE is stripped and a harness drives
+        // just the resolve/substituteVars logic — proving a snippet's stdout binds to a variable and
+        // is substituted into a later step, while an unresolved ${name} is left untouched.
+        val nodeOk = runCatching {
+            val p = ProcessBuilder("node", "--version").redirectErrorStream(true).start()
+            p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0
+        }.getOrDefault(false)
+        assumeTrue(nodeOk, "node not available")
+
+        val field = PlaywrightRecorder::class.java.getDeclaredField("PLAYWRIGHT_SCRIPT")
+        field.isAccessible = true
+        val script = field.get(null) as String
+        val prefix = script.substring(0, script.indexOf("(async () => {"))
+            // playwright isn't installed in the temp dir and isn't needed for the resolve/subst logic.
+            .replace("const { chromium } = require('playwright');", "const chromium = null;")
+        val dollar = "String.fromCharCode(36)"
+        val harness = prefix + """
+            (async () => {
+              const vars = {};
+              await executeScenarioStep(null, {action:'resolve', name:'code', run:'printf 12345'}, vars);
+              if (vars.code !== '12345') { console.error('FAIL resolve: ' + vars.code); process.exit(1); }
+              const typed = {action:'type', value: $dollar + '{code}'};
+              substituteVars(typed, vars);
+              if (typed.value !== '12345') { console.error('FAIL subst: ' + typed.value); process.exit(1); }
+              const unresolved = {value: $dollar + '{missing}'};
+              substituteVars(unresolved, vars);
+              if (unresolved.value !== ($dollar + '{missing}')) { console.error('FAIL unresolved'); process.exit(1); }
+              await executeScenarioStep(null, {action:'resolve', name:'bad'}, vars);
+              console.log('OK');
+              process.exit(0);
+            })();
+        """.trimIndent()
+
+        val js = File.createTempFile("pw-resolve-test-", ".js")
+        js.writeText(harness)
+        val proc = ProcessBuilder("node", js.absolutePath, "http://x", "/tmp/pw-ready-dummy")
+            .redirectErrorStream(true).start()
+        val out = proc.inputStream.bufferedReader().use { it.readText() }
+        proc.waitFor(30, TimeUnit.SECONDS)
+        js.delete()
+        assertThat(out.contains("OK")).isTrue()
+    }
+
+    @Test
+    fun `loadKeyValueFile parses KEY=VALUE lines, stripping quotes and skipping blanks or empties`() {
+        val f = File.createTempFile("kv-", ".env")
+        f.writeText("export A=1\n# comment\n\nB=\"two\"\nC='three'\nEMPTY=\nNOEQUALS\n=nokey\n")
+        val m = PlaywrightRecorder().loadKeyValueFile(f)
+        assertThat(m).isEqualTo(linkedMapOf("A" to "1", "B" to "two", "C" to "three"))
+    }
+
+    @Test
+    fun `loadKeyValueFile returns empty for a missing file`() {
+        assertThat(PlaywrightRecorder().loadKeyValueFile(File("/no/such/creds.env"))).isEqualTo(emptyMap())
+    }
+
+    @Test
+    fun `record injects credentials from the credentials file into the recording process env`() = runTest {
+        val output = File.createTempFile("pw-creds-", ".webm")
+        val creds = File.createTempFile("pw-creds-", ".env")
+        creds.writeText("TEST_EMAIL_INBOX=qa@example.com\nTEST_EMAIL_IMAP_PASSWORD=secretpw\nEMPTY=\n")
+        var captured: ProcessBuilder? = null
+        PlaywrightRecorder.testDependenciesAvailable = true
+        PlaywrightRecorder.testRecordProcessBuilder = { _, out ->
+            ProcessBuilder(
+                "bash", "-c",
+                """
+                set -e
+                printf STARTED > "${'$'}PW_FFMPEG_STARTED_FILE"
+                echo ok > '${out.absolutePath}'
+                exit 0
+                """.trimIndent()
+            ).also { captured = it }
+        }
+        val result = PlaywrightRecorder().record(config.copy(credentialsPath = creds.absolutePath), output)
+        assertThat(result).isInstanceOf(DemoResult.Success::class)
+        val env = captured!!.environment()
+        assertThat(env["TEST_EMAIL_INBOX"]).isEqualTo("qa@example.com")
+        assertThat(env["TEST_EMAIL_IMAP_PASSWORD"]).isEqualTo("secretpw")
+        assertThat(env.containsKey("EMPTY")).isFalse()
+    }
+
+    @Test
     fun `companion PLAYWRIGHT_SCRIPT has a hard-exit watchdog that outlives the post-scenario sleep`() {
         // Regression test for a real production incident: FLE-52's recording hit an actual
         // browser/page crash mid-scenario, and process.exit(2) called from failValidation()

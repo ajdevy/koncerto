@@ -16,7 +16,12 @@ RUN apk add --no-cache \
     ca-certificates \
     ttf-freefont \
     ffmpeg \
-    xvfb
+    xvfb \
+    python3
+
+# python3 (stdlib: imaplib, smtplib, urllib, json) backs generic scenario `resolve` steps, where the
+# demo agent authors a one-line snippet to fetch an out-of-band value (e.g. an emailed login code)
+# using credentials injected into the container env. No protocol is hardcoded — the agent decides.
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install -g playwright

@@ -182,6 +182,77 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `buildPrompt documents the resolve step and lists available credential keys`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "Register with email code", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace, listOf("TEST_EMAIL_INBOX", "TEST_EMAIL_IMAP_PASSWORD"))
+        assertThat(prompt.contains("Available test credentials")).isEqualTo(true)
+        assertThat(prompt.contains("- TEST_EMAIL_INBOX")).isEqualTo(true)
+        assertThat(prompt.contains("- TEST_EMAIL_IMAP_PASSWORD")).isEqualTo(true)
+        assertThat(prompt.contains("action: resolve")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt omits the credentials section when none are available`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Available test credentials")).isEqualTo(false)
+    }
+
+    @Test
+    fun `saveCredentials stages a KEY=VALUE file and deleteCredentials removes it`() {
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-creds-save", identifier = "T-CREDS", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val gen = generator()
+        val path = gen.saveCredentials(issue, linkedMapOf("A" to "1", "B" to "two"))
+        try {
+            assertThat(path).isNotNull()
+            val body = java.io.File(path!!).readText()
+            assertThat(body.contains("A=1")).isEqualTo(true)
+            assertThat(body.contains("B=two")).isEqualTo(true)
+            assertThat(java.io.File("/tmp/koncerto-demo/T-CREDS-credentials.env").exists()).isEqualTo(true)
+        } finally {
+            gen.deleteCredentials(issue)
+        }
+        assertThat(java.io.File("/tmp/koncerto-demo/issue-creds-save-credentials.env").exists()).isEqualTo(false)
+        assertThat(java.io.File("/tmp/koncerto-demo/T-CREDS-credentials.env").exists()).isEqualTo(false)
+    }
+
+    @Test
+    fun `saveCredentials returns null for an empty credential map`() {
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-empty-creds", identifier = "T-E", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        assertThat(generator().saveCredentials(issue, emptyMap())).isNull()
+    }
+
+    @Test
+    fun `saveCredentials returns null when the file cannot be written`() {
+        // An issue id containing a path separator points at a non-existent subdirectory, so the
+        // write throws and is swallowed to null.
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "nested/does-not-exist", identifier = "T-BAD", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        assertThat(generator().saveCredentials(issue, mapOf("A" to "1"))).isNull()
+    }
+
+    @Test
     fun `buildRepairPrompt includes the prior scenario, the failure reason and the base prompt`(@TempDir tmpDir: Path) {
         val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
         val issue = com.flexsentlabs.koncerto.core.model.Issue(

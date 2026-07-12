@@ -18,8 +18,8 @@ class DemoScenarioGenerator(
         fun run(command: List<String>, workDir: File, timeoutSeconds: Long): String?
     }
 
-    fun generate(issue: Issue, workspace: Workspace): String? {
-        val prompt = buildPrompt(issue, workspace)
+    fun generate(issue: Issue, workspace: Workspace, credentialKeys: List<String> = emptyList()): String? {
+        val prompt = buildPrompt(issue, workspace, credentialKeys)
         val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
         val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
         val grounded = ensureNavigatesToRealRoute(block, routes)
@@ -32,8 +32,14 @@ class DemoScenarioGenerator(
      * scenario-first recovery step — it does not touch target code and needs no re-review.
      * Returns the saved scenario path, or null if the model could not produce a new scenario.
      */
-    fun repair(issue: Issue, workspace: Workspace, priorScenario: String, failureReason: String): String? {
-        val prompt = buildRepairPrompt(issue, workspace, priorScenario, failureReason)
+    fun repair(
+        issue: Issue,
+        workspace: Workspace,
+        priorScenario: String,
+        failureReason: String,
+        credentialKeys: List<String> = emptyList()
+    ): String? {
+        val prompt = buildRepairPrompt(issue, workspace, priorScenario, failureReason, credentialKeys)
         val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
         val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
         val grounded = ensureNavigatesToRealRoute(block, routes)
@@ -41,7 +47,13 @@ class DemoScenarioGenerator(
         return saveScenario(issue, grounded)
     }
 
-    internal fun buildRepairPrompt(issue: Issue, workspace: Workspace, priorScenario: String, failureReason: String): String {
+    internal fun buildRepairPrompt(
+        issue: Issue,
+        workspace: Workspace,
+        priorScenario: String,
+        failureReason: String,
+        credentialKeys: List<String> = emptyList()
+    ): String {
         return buildString {
             appendLine("The previous demo scenario FAILED to record. Produce a corrected `demo_scenario` YAML block.")
             appendLine()
@@ -55,7 +67,7 @@ class DemoScenarioGenerator(
             appendLine("feature's page with `navigate` if it isn't linked from the landing page, and keep")
             appendLine("steps that clearly worked. Then re-emit the full corrected scenario.")
             appendLine()
-            append(buildPrompt(issue, workspace))
+            append(buildPrompt(issue, workspace, credentialKeys))
         }
     }
 
@@ -97,7 +109,7 @@ class DemoScenarioGenerator(
     }
 
     private fun saveScenario(issue: Issue, block: String): String? {
-        val scenarioDir = java.nio.file.Paths.get("/tmp/koncerto-demo")
+        val scenarioDir = java.nio.file.Paths.get(SCENARIO_DIR)
         return try {
             java.nio.file.Files.createDirectories(scenarioDir)
             val uuidPath = scenarioDir.resolve("${issue.id}-scenario.yaml")
@@ -118,7 +130,39 @@ class DemoScenarioGenerator(
         }
     }
 
-    internal fun buildPrompt(issue: Issue, workspace: Workspace): String {
+    /**
+     * Stages the effective demo credentials (secrets file merged with ticket-extracted values) as a
+     * `KEY=VALUE` file next to the scenario, keyed by issue, so the recorder can pick them up by the
+     * same file convention as the scenario and inject them into the recording container's env. Writes
+     * nothing (returns null) when there are no credentials. Values are secret — never logged here.
+     */
+    fun saveCredentials(issue: Issue, credentials: Map<String, String>): String? {
+        if (credentials.isEmpty()) return null
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        return try {
+            java.nio.file.Files.createDirectories(dir)
+            val body = credentials.entries.joinToString("\n") { (k, v) -> "$k=$v" } + "\n"
+            val uuidPath = dir.resolve("${issue.id}-credentials.env")
+            java.nio.file.Files.writeString(uuidPath, body)
+            java.nio.file.Files.writeString(dir.resolve("${issue.identifier}-credentials.env"), body)
+            logger.info("demo_credentials_staged", mapOf(
+                "issue_id" to issue.id, "keys" to credentials.keys.joinToString(",")))
+            uuidPath.toString()
+        } catch (e: Exception) {
+            logger.warn("demo_credentials_stage_failed", mapOf(
+                "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            null
+        }
+    }
+
+    /** Removes the staged credentials files for an issue (best-effort; called after the demo run). */
+    fun deleteCredentials(issue: Issue) {
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.id}-credentials.env")) }
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}-credentials.env")) }
+    }
+
+    internal fun buildPrompt(issue: Issue, workspace: Workspace, credentialKeys: List<String> = emptyList()): String {
         // The demo-scenario system prompt is a koncerto-provided template (like implement.md /
         // review.md), not something individual target projects ship — it must resolve relative
         // to koncerto's own workflow directory, not the target project's own workspace, or it's
@@ -175,6 +219,26 @@ class DemoScenarioGenerator(
             if (diff.isNotBlank()) {
                 appendLine("## PR Changes")
                 appendLine(diff)
+                appendLine()
+            }
+            if (credentialKeys.isNotEmpty()) {
+                appendLine("## Available test credentials & the `resolve` step")
+                appendLine("These credential KEYS are available to the recorder as environment variables (the")
+                appendLine("VALUES are injected at run time and are NOT shown here):")
+                credentialKeys.forEach { appendLine("- $it") }
+                appendLine()
+                appendLine("If completing the feature end-to-end needs a value obtainable only out-of-band (e.g. a")
+                appendLine("login code emailed to a test inbox, an SMS/OTP, or an API value), emit a `resolve` step.")
+                appendLine("It runs ONE single-line command inside the recorder container with those env vars set,")
+                appendLine("and binds the command's stdout (trimmed) to a variable you reference as \${name} in a")
+                appendLine("later step's value. YOU choose how to fetch it (IMAP via `python3 -c \"...\"`, an HTTP")
+                appendLine("API, etc.); nothing is hardcoded. Example:")
+                appendLine("    - action: resolve")
+                appendLine("      name: code")
+                appendLine("      run: python3 -c \"import imaplib,os; ...; print(code)\"")
+                appendLine("    - action: type")
+                appendLine("      selector: \"[data-testid=\\\"code-input\\\"]\"")
+                appendLine("      value: \${code}")
                 appendLine()
             }
             append("Generate the demo_scenario YAML now. The scenario must include scrolling and button pressing, with at least one scroll action and at least one button click.")
@@ -298,6 +362,9 @@ class DemoScenarioGenerator(
     }
 
     companion object {
+        /** Conventional staging dir the recorder resolves scenario + credentials from, keyed by issue. */
+        const val SCENARIO_DIR = "/tmp/koncerto-demo"
+
         // Measured 8-139s for successful runs against the real prompt; hangs (now much rarer
         // after fixing the stdin/permission/deadlock issues) still occasionally ride out the
         // full timeout. 300s per attempt plus several passes trades worst-case wall time for a

@@ -86,6 +86,7 @@ import com.flexsentlabs.koncerto.deploy.TargetProjectDeployer
 import com.flexsentlabs.koncerto.orchestrator.DemoScenarioGenerator
 import com.flexsentlabs.koncerto.orchestrator.ScenarioCoverageClassifier
 import com.flexsentlabs.koncerto.orchestrator.TestResourceRequirementDetector
+import com.flexsentlabs.koncerto.orchestrator.TicketCredentialExtractor
 import com.flexsentlabs.koncerto.workflow.WorkflowCache
 import com.flexsentlabs.koncerto.workflow.WorkflowLoader
 import java.nio.file.Files
@@ -419,7 +420,8 @@ class Beans {
                         deployRepoFullName = parseRepoFullName(config),
                         demoFailureReporter = DemoFailureReporter(logger),
                         demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache),
-                        scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger)
+                        scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger),
+                        ticketCredentialExtractor = TicketCredentialExtractor("opencode", logger)
                     )
                 }
             } else null,

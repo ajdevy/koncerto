@@ -151,6 +151,13 @@ class PlaywrightRecorder : DemoRecorder {
                     containerEnv["PW_CHROMIUM_PATH"] = "/usr/bin/chromium-browser"
                 }
 
+                // Effective demo credentials (staged by the orchestrator as a KEY=VALUE file) are
+                // injected into the recorder container's env so a scenario `resolve` step can use
+                // them. Values are secret — never trace them; only the container process reads them.
+                if (config.credentialsPath.isNotBlank()) {
+                    loadKeyValueFile(File(config.credentialsPath)).forEach { (k, v) -> containerEnv[k] = v }
+                }
+
                 val pb = testRecordProcessBuilder?.invoke(config, outputFile) ?: run {
                     val imageResult = RecorderImage().ensureAvailable()
                     val image = imageResult.getOrElse { e ->
@@ -387,6 +394,25 @@ ffmpeg -y -f x11grab -draw_mouse 0 -r ${config.frameRate} -s ${config.width}x${c
 exit ${'$'}?
 """
 
+    /** Parses a `KEY=VALUE` file (blank/`#` lines skipped, surrounding quotes stripped, empty values
+     *  dropped). Mirrors koncerto-deploy's SecretsFile format; kept local to avoid a module dependency. */
+    internal fun loadKeyValueFile(file: File): Map<String, String> {
+        if (!file.exists()) return emptyMap()
+        val out = linkedMapOf<String, String>()
+        val lines = runCatching { file.readLines() }.getOrDefault(emptyList())
+        for (raw in lines) {
+            val line = raw.trim().removePrefix("export ").trim()
+            if (line.isEmpty() || line.startsWith("#")) continue
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val key = line.substring(0, eq).trim()
+            if (key.isEmpty()) continue
+            val value = line.substring(eq + 1).trim().trim('"', '\'')
+            if (value.isNotEmpty()) out[key] = value
+        }
+        return out
+    }
+
     private fun runCleanup(recorderContainerName: String) {
         try {
             ProcessBuilder("docker", "rm", "-f", recorderContainerName).start().waitFor(10, TimeUnit.SECONDS)
@@ -423,6 +449,7 @@ exit ${'$'}?
 
         private val PLAYWRIGHT_SCRIPT = """#!/usr/bin/env node
 const { chromium } = require('playwright');
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -509,12 +536,50 @@ async function findElement(page, selector, timeout) {
   }
 }
 
-async function executeScenarioStep(page, step) {
+// Replaces ${'$'}{name} references in a step's string fields with previously-resolved variables.
+// Uses fromCharCode(36) so no literal '$' appears in this Kotlin-embedded script. An unresolved
+// name is left in place (the step then no-ops or warns rather than typing a wrong value).
+function substituteVars(step, vars) {
+  const open = String.fromCharCode(36) + '{';
+  for (const k of Object.keys(step)) {
+    let v = step[k];
+    if (typeof v !== 'string') continue;
+    const idx = v.indexOf(open);
+    if (idx === -1) continue;
+    const end = v.indexOf('}', idx);
+    if (end === -1) continue;
+    const name = v.slice(idx + 2, end);
+    if (Object.prototype.hasOwnProperty.call(vars, name)) {
+      step[k] = v.slice(0, idx) + vars[name] + v.slice(end + 1);
+    }
+  }
+}
+
+async function executeScenarioStep(page, step, vars) {
   const action = step.action;
   const selector = step.selector || null;
   const timeout = step.timeout || 3000;
   try {
     switch (action) {
+      case 'resolve': {
+        // Runs one agent-authored single-line command inside this container with the injected
+        // credentials in env, binding its stdout to a variable for later steps. The command's
+        // OUTPUT is never logged (only its length) — it is typically a secret code.
+        const name = step.name;
+        const cmd = step.run;
+        if (!name || !cmd) {
+          console.error('  [warn] resolve step missing name/run');
+          break;
+        }
+        try {
+          const out = execSync(cmd, { encoding: 'utf-8', timeout: step.timeout || 30000, env: process.env });
+          vars[name] = (out || '').replace(/\s+$/, '');
+          console.error('  [resolve] ' + name + ' resolved (' + vars[name].length + ' chars)');
+        } catch (e) {
+          console.error('  [warn] resolve failed for ' + name + ': ' + (e.message || 'error'));
+        }
+        break;
+      }
       case 'scroll': {
         if (step.direction === 'to' && selector) {
           try {
@@ -787,11 +852,13 @@ function rewriteLocalhostUrl(rawUrl, currentPageUrl) {
       const scenario = parseScenarioYaml(raw);
       if (scenario && scenario.steps && scenario.steps.length > 0) {
         console.error('[scenario] executing ' + scenario.steps.length + ' steps: ' + (scenario.description || ''));
+        const vars = {};
         for (let i = 0; i < scenario.steps.length; i++) {
           const step = scenario.steps[i];
+          substituteVars(step, vars);
           const label = step.action + (step.selector ? ' (' + step.selector + ')' : '');
           console.error('[scenario] step ' + (i + 1) + '/' + scenario.steps.length + ': ' + label);
-          await executeScenarioStep(page, step);
+          await executeScenarioStep(page, step, vars);
         }
         console.error('[scenario] all steps completed');
       } else {

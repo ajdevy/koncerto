@@ -404,7 +404,8 @@ class DemoRecordingService(
         val recordingConfig = RecordingConfig(
             platform = task.platform,
             targetUrl = effectiveTargetUrl,
-            scenarioPath = scenarioPath
+            scenarioPath = scenarioPath,
+            credentialsPath = resolveCredentialsPath(task)
         )
         val tempFile = File(config.tempDir, "${task.id}.${recordingConfig.outputFormat}")
 
@@ -506,6 +507,17 @@ class DemoRecordingService(
         if (scenarioFile.exists()) return scenarioFile.absolutePath
         // Also check for issue-identifier based scenario (for backward compatibility)
         val identFile = File(config.tempDir, "${task.issueIdentifier}-scenario.yaml")
+        if (identFile.exists()) return identFile.absolutePath
+        return ""
+    }
+
+    // Mirrors resolveScenarioPath: the orchestrator stages the effective demo credentials as a
+    // KEY=VALUE file keyed by issue id (fallback identifier); the recorder injects them into the
+    // recording container's env so a scenario `resolve` step can use them.
+    private fun resolveCredentialsPath(task: DemoTask): String {
+        val credFile = File(config.tempDir, "${task.issueId}-credentials.env")
+        if (credFile.exists()) return credFile.absolutePath
+        val identFile = File(config.tempDir, "${task.issueIdentifier}-credentials.env")
         if (identFile.exists()) return identFile.absolutePath
         return ""
     }
