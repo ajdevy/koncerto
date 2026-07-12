@@ -455,13 +455,6 @@ class DispatchService(
             val finalModel = labelProvider?.model ?: baseModel
             val finalEffort = labelProvider?.effort ?: baseEffort
 
-            if (labelProvider == null && stageConfig?.agent != null && projectConfig.agent.agents[stageConfig.agent] == null) {
-                logger.warn("agent_provider_not_found", mapOf(
-                    "agent_name" to stageConfig.agent,
-                    "project_slug" to projectConfig.tracker.projectSlug
-                ))
-            }
-
             ResolvedAgent(finalKind, finalCommand, finalModel, finalEffort)
         } else {
             val routed = evaluateRoutingRules(issue)

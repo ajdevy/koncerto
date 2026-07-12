@@ -1287,7 +1287,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `resolveAgent warns when stage references non-existent provider`() {
+    fun `resolveAgent falls back to project default when stage references a non-existent provider`() {
         val (svc, _) = createServiceWithState(DispatchServiceTest.config(
             agents = emptyMap(),
             stages = mapOf("in progress" to StageAgentConfig(

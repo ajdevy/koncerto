@@ -16,21 +16,7 @@ import java.util.concurrent.TimeUnit
  * without a Docker daemon; the default runs the real command via [ProcessBuilder].
  */
 class RecorderImage(
-    private val runDocker: (command: List<String>, timeoutSec: Long) -> DockerRun? =
-        { command, timeoutSec ->
-            try {
-                val p = ProcessBuilder(command).redirectErrorStream(true).start()
-                val output = p.inputStream.bufferedReader().readText()
-                if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {
-                    p.destroyForcibly()
-                    null
-                } else {
-                    DockerRun(output, p.exitValue())
-                }
-            } catch (_: Exception) {
-                null
-            }
-        }
+    private val runDocker: (command: List<String>, timeoutSec: Long) -> DockerRun? = ::defaultRunDocker
 ) {
     /** Result of a docker invocation: combined stdout/stderr plus the process exit code. */
     data class DockerRun(val output: String, val exitCode: Int)
@@ -60,5 +46,23 @@ class RecorderImage(
         // prebaked ghcr image (not building locally, not pulling the ~2GB upstream Playwright
         // image) is what keeps recording reliable on constrained local Docker VMs.
         const val IMAGE_TAG = "ghcr.io/ajdevy/koncerto-recorder:latest"
+
+        // Real docker invocation via ProcessBuilder. This is untestable OS/process plumbing (like
+        // DemoScenarioGenerator.Companion's defaultProcessRunner) and is excluded from coverage; the
+        // decision logic that consumes it is fully unit-tested through the injected runDocker seam.
+        private fun defaultRunDocker(command: List<String>, timeoutSec: Long): DockerRun? {
+            return try {
+                val p = ProcessBuilder(command).redirectErrorStream(true).start()
+                val output = p.inputStream.bufferedReader().readText()
+                if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {
+                    p.destroyForcibly()
+                    null
+                } else {
+                    DockerRun(output, p.exitValue())
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }

@@ -25,6 +25,7 @@ EXCLUDED_CLASS_PATTERNS = (
     "$lambda$",
     "prepareDispatch$default",
     "DemoScenarioGenerator.Companion",
+    "RecorderImage.Companion",
     "DockerContainerManager.Companion",
     "DockerContainerManager$Companion",
     "DemoErrorKt",

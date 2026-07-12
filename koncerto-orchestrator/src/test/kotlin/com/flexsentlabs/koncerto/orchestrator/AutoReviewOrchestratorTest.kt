@@ -590,6 +590,55 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `backupReviewOutput copies the raw review output to the detailed path`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        Files.writeString(ws.path.resolve(".review-output"), "✅ Approved")
+
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "backupReviewOutput", com.flexsentlabs.koncerto.workspace.Workspace::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, ws)
+        assertThat(Files.exists(ws.path.resolve(".review-output-detailed"))).isTrue()
+    }
+
+    @Test
+    fun `backupReviewOutput swallows a copy failure`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val ws = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }).ensureWorkspace("T-1")
+        Files.writeString(ws.path.resolve(".review-output"), "✅ Approved")
+        // Make the destination a NON-EMPTY directory so copy-with-REPLACE_EXISTING throws.
+        val dest = Files.createDirectories(ws.path.resolve(".review-output-detailed"))
+        Files.writeString(dest.resolve("blocker"), "x")
+
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "backupReviewOutput", com.flexsentlabs.koncerto.workspace.Workspace::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, ws) // must not throw
+        assertThat(Files.isDirectory(dest)).isTrue()
+    }
+
+    @Test
+    fun `postDetailedReviewAsPrComment returns early when there is no workspace`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "postDetailedReviewAsPrComment",
+            Issue::class.java,
+            com.flexsentlabs.koncerto.workspace.Workspace::class.java,
+            Int::class.javaPrimitiveType,
+            String::class.java,
+            String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, issue(), null, 1, null, null) // null workspace → immediate return
+    }
+
+    @Test
     fun `onReviewStageComplete returns RetryWithCoding when review fails and attempts remain`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
@@ -1704,6 +1753,58 @@ class AutoReviewOrchestratorTest {
         assertThat(trace.contains("review_pass")).isTrue()
         assertThat(trace.contains("pr_comment")).isTrue()
         assertThat(trace.contains("demo_recording")).isTrue()
+    }
+
+    @Test
+    fun `readGitHead follows a worktree dot-git file to the HEAD ref`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        // A worktree checkout has `.git` as a FILE pointing at the real gitdir.
+        val realGitDir = tmpDir.resolve("realgit").also { Files.createDirectories(it) }
+        Files.writeString(realGitDir.resolve("HEAD"), "ref: refs/heads/feature-x\n")
+        Files.writeString(workspaceDir.resolve(".git"), "gitdir: $realGitDir\n")
+
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("readGitHead", Path::class.java)
+        method.isAccessible = true
+        val head = method.invoke(orchestrator, workspaceDir) as String?
+        assertThat(head).isEqualTo("ref: refs/heads/feature-x")
+    }
+
+    @Test
+    fun `readGitHead returns null when there is no git metadata`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod("readGitHead", Path::class.java)
+        method.isAccessible = true
+        assertThat(method.invoke(orchestrator, workspaceDir) as String?).isEqualTo(null as String?)
+    }
+
+    @Test
+    fun `writeDemoFixRequest records the failure reason for the next coding pass`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "writeDemoFixRequest", Path::class.java, String::class.java
+        )
+        method.isAccessible = true
+        method.invoke(orchestrator, workspaceDir, "the send-code button did nothing")
+        val written = Files.readString(workspaceDir.resolve(".demo-fix-request"))
+        assertThat(written).contains("send-code button")
+    }
+
+    @Test
+    fun `writeDemoFixRequest swallows a write failure`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        // Point the "workspace path" at a regular file, so resolving+writing a child path throws.
+        val notADir = tmpDir.resolve("iamafile").also { Files.writeString(it, "x") }
+        val orchestrator = passingReviewOrchestrator(workspaceDir)
+        val method = AutoReviewOrchestrator::class.java.getDeclaredMethod(
+            "writeDemoFixRequest", Path::class.java, String::class.java
+        )
+        method.isAccessible = true
+        // Must not throw — the failure is logged and swallowed.
+        method.invoke(orchestrator, notADir, "boom")
+        assertThat(Files.isRegularFile(notADir)).isTrue()
     }
 
     @Test

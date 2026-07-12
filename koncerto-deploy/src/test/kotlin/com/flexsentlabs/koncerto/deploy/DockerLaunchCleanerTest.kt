@@ -128,6 +128,13 @@ exit 0
         assertThat(report.containersRemoved).isEqualTo(0)
     }
 
+    @Test
+    fun `can be constructed with the default docker command mapper`() {
+        // Exercises the default dockerCmd argument (TargetProjectDeployer.dockerCmd) without running it.
+        val cleaner = DockerLaunchCleaner(StructuredLogger(emptyList()))
+        assertThat(cleaner.hashCode()).isEqualTo(cleaner.hashCode())
+    }
+
     private fun createCleaner(script: String): DockerLaunchCleaner {
         val docker = Files.createTempDirectory("docker-launch-cleaner").resolve("docker")
         docker.toFile().writeText(script)

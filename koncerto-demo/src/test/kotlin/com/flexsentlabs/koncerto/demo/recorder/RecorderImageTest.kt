@@ -26,6 +26,24 @@ class RecorderImageTest {
     }
 
     @Test
+    fun `default docker runner reports a bogus tag as absent`() {
+        // Exercises the default-argument runner (real ProcessBuilder). A tag this bizarre is never
+        // present, and if docker is unavailable the runner returns null → still false.
+        assertThat(RecorderImage().imageExists("koncerto-recorder-definitely-not-present:xyz")).isFalse()
+    }
+
+    @Test
+    fun `imageExists and ensureAvailable default to the published IMAGE_TAG`() {
+        val docker = FakeDocker(RecorderImage.DockerRun("sha256:present\n", 0))
+        // No tag argument → exercises the IMAGE_TAG default parameter.
+        assertThat(RecorderImage(docker.run).imageExists()).isTrue()
+        assertThat(docker.commands.single().last()).isEqualTo(RecorderImage.IMAGE_TAG)
+
+        val docker2 = FakeDocker(RecorderImage.DockerRun("id\n", 0))
+        assertThat(RecorderImage(docker2.run).ensureAvailable().isSuccess).isTrue()
+    }
+
+    @Test
     fun `imageExists is true when docker prints an image id`() {
         val docker = FakeDocker(RecorderImage.DockerRun("sha256:abc123\n", 0))
         assertThat(RecorderImage(docker.run).imageExists("some:tag")).isTrue()
