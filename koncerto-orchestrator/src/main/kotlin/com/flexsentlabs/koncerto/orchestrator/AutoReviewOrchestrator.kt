@@ -53,6 +53,7 @@ class AutoReviewOrchestrator(
     private val demoFailureReporter: DemoFailureReporter? = null,
     private val demoScenarioGenerator: DemoScenarioGenerator? = null,
     private val scenarioCoverageClassifier: ScenarioCoverageClassifier? = null,
+    private val ticketCredentialExtractor: TicketCredentialExtractor? = null,
     private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner
 ) {
     private val reviewStage: StageAgentConfig?
@@ -232,9 +233,21 @@ class AutoReviewOrchestrator(
         stage: StageAgentConfig,
         currentAttempt: Int
     ): ReviewDecision {
+        // Merge ticket-extracted credentials UNDER the demo secrets file (file wins on collision),
+        // stage them next to the scenario for the recorder, and hand the scenario agent the credential
+        // KEY NAMES (never values) so it can author a `resolve` step. Fail-open: any error → no creds.
+        val effectiveCredentials = runCatching {
+            val extracted = ticketCredentialExtractor?.extract(issue) ?: emptyMap()
+            extracted + com.flexsentlabs.koncerto.deploy.SecretsFile.load(projectConfig.demoSecretsFile)
+        }.getOrDefault(emptyMap())
+        if (effectiveCredentials.isNotEmpty()) {
+            demoScenarioGenerator?.saveCredentials(issue, effectiveCredentials)
+        }
+        val credentialKeys = effectiveCredentials.keys.sorted()
+
         val scenarioGenerationAttempted = demoScenarioGenerator != null
         val scenarioPath = runCatching {
-            workspace?.let { demoScenarioGenerator?.generate(issue, it) }
+            workspace?.let { demoScenarioGenerator?.generate(issue, it, credentialKeys) }
         }.onFailure { e ->
             logger.warn("demo_scenario_generator_failed", mapOf(
                 "issue_id" to issue.id,
@@ -255,6 +268,7 @@ class AutoReviewOrchestrator(
             logger.warn("demo_scenario_generation_exhausted", mapOf("issue_id" to issue.id))
             traceReviewStep(workspace, issue, "demo_scenario", "exhausted")
             workspace?.let { cleanupReviewFiles(it.path) }
+            demoScenarioGenerator?.deleteCredentials(issue)
             handleDemoRecordingFailure(issue, "scenario generation failed after exhausting all fallback models")
             traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
                 "attempt" to currentAttempt.toString(),
@@ -279,6 +293,7 @@ class AutoReviewOrchestrator(
                 logger.warn("demo_blocked_missing_secrets", mapOf(
                     "issue_id" to issue.id, "missing" to missing.joinToString(",")))
                 cleanupReviewFiles(workspace.path)
+                demoScenarioGenerator?.deleteCredentials(issue)
                 handleDemoRecordingFailure(issue,
                     "required secret(s) not configured: ${missing.joinToString(", ")}. " +
                         "Add them to this project's demo secrets file, then unblock.")
@@ -288,7 +303,7 @@ class AutoReviewOrchestrator(
             }
         }
 
-        return runDemoWithRecovery(issue, workspace, stage, currentAttempt, scenarioPath)
+        return runDemoWithRecovery(issue, workspace, stage, currentAttempt, scenarioPath, credentialKeys)
     }
 
     /**
@@ -304,7 +319,8 @@ class AutoReviewOrchestrator(
         workspace: com.flexsentlabs.koncerto.workspace.Workspace?,
         stage: StageAgentConfig,
         currentAttempt: Int,
-        initialScenarioPath: String?
+        initialScenarioPath: String?,
+        credentialKeys: List<String> = emptyList()
     ): ReviewDecision {
         val deployResult = runCatching { deployTargetProject(issue, workspace) }
             .onFailure { e ->
@@ -352,6 +368,7 @@ class AutoReviewOrchestrator(
                     }
                 traceReviewStep(workspace, issue, "pr_comment", "attempted", mapOf("demo_url" to (demoUrl ?: "")))
                 cleanupDeployBestEffort(issue, workspace, deployResult)
+                demoScenarioGenerator?.deleteCredentials(issue)
                 workspace?.let { cleanupReviewFiles(it.path) }
                 // Clear the recovery counter on success (mirrors reviewAttempts) so a later demo for
                 // the same issue starts with a fresh budget instead of inheriting a stale count.
@@ -369,6 +386,7 @@ class AutoReviewOrchestrator(
 
             if (cycle >= MAX_DEMO_RECOVERY) {
                 cleanupDeployBestEffort(issue, workspace, deployResult)
+                demoScenarioGenerator?.deleteCredentials(issue)
                 workspace?.let { cleanupReviewFiles(it.path) }
                 handleDemoRecordingFailure(issue,
                     "demo could not be produced after $cycle recovery cycles: ${demoRecordingError}")
@@ -384,7 +402,7 @@ class AutoReviewOrchestrator(
             val priorScenario = initialScenarioPath?.let { runCatching { java.io.File(it).readText() }.getOrNull() }
             val generator = demoScenarioGenerator
             val repaired = if (workspace != null && generator != null && priorScenario != null && deployUrl != null) {
-                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!) }.getOrNull()
+                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys) }.getOrNull()
             } else null
             if (repaired != null) {
                 traceReviewStep(workspace, issue, "demo_scenario", "repaired", mapOf("cycle" to cycle.toString()))
@@ -393,6 +411,7 @@ class AutoReviewOrchestrator(
 
             // Scenario repair unavailable/ineffective → escalate to a target code fix + re-review.
             cleanupDeployBestEffort(issue, workspace, deployResult)
+                demoScenarioGenerator?.deleteCredentials(issue)
             workspace?.let { writeDemoFixRequest(it.path, demoRecordingError!!) }
             traceReviewStep(workspace, issue, "demo_recovery", "escalated_to_code_fix", mapOf("cycle" to cycle.toString()))
             logger.info("demo_recovery_code_fix", mapOf("issue_id" to issue.id, "cycle" to cycle.toString()))

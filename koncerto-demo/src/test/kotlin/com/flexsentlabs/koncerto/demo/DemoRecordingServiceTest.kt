@@ -556,6 +556,34 @@ class DemoRecordingServiceTest {
     }
 
     @Test
+    fun `requestRecording resolves a staged credentials file by issue id`() = runTest {
+        val creds = File(System.getProperty("java.io.tmpdir"), "issue-cred-id-credentials.env")
+        creds.writeText("TEST_EMAIL_INBOX=qa@example.com\n")
+        try {
+            val result = service.requestRecording(
+                "issue-cred-id", "KONC-CRED", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+            )
+            assert(result is DemoResult.Success)
+        } finally {
+            creds.delete()
+        }
+    }
+
+    @Test
+    fun `requestRecording falls back to identifier-keyed credentials file`() = runTest {
+        val creds = File(System.getProperty("java.io.tmpdir"), "KONC-CREDID-credentials.env")
+        creds.writeText("TEST_EMAIL_INBOX=qa@example.com\n")
+        try {
+            val result = service.requestRecording(
+                "issue-cred-ident", "KONC-CREDID", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+            )
+            assert(result is DemoResult.Success)
+        } finally {
+            creds.delete()
+        }
+    }
+
+    @Test
     fun `requestRecording fails preflight when storage quota check fails`() = runTest {
         val quotaFailStorage = QuotaCheckFailStorage()
         val preflightService = DemoRecordingService(

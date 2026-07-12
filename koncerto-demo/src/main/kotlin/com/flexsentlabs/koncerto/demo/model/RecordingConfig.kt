@@ -13,7 +13,8 @@ data class RecordingConfig(
     val outputFormat: String = "webm",
     val targetUrl: String = "",
     val captureInputIndex: String = "1",
-    val scenarioPath: String = ""
+    val scenarioPath: String = "",
+    val credentialsPath: String = ""
 ) {
     val maxDuration: kotlin.time.Duration get() = maxDurationSeconds.seconds
 }
