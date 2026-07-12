@@ -67,4 +67,39 @@ class TestResourceRequirementDetectorTest {
         val result = detector(runner, models = listOf("m1", "m2")).detect(issue())
         assertThat(result.map { it.name }).containsExactly("test email inbox")
     }
+
+    @Test
+    fun `swallows a runner exception and yields no resources`() {
+        val throwing = DemoScenarioGenerator.ProcessRunner { _: List<String>, _: File, _: Long ->
+            throw RuntimeException("opencode blew up")
+        }
+        val result = detector(throwing).detect(issue())
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `uses the default free-model list when none is supplied`() {
+        // Constructing without an explicit models list must exercise the default-argument path.
+        val d = TestResourceRequirementDetector("opencode", noopLogger(), runnerReturning("[]"))
+        assertThat(d.detect(issue(description = "internal refactor"))).isEmpty()
+    }
+
+    @Test
+    fun `skips array items whose name is blank`() {
+        val out = """[{"name":"","why":"empty"},{"name":"test email inbox","why":"ok"}]"""
+        val result = detector(runnerReturning(out)).detect(issue())
+        assertThat(result.map { it.name }).containsExactly("test email inbox")
+    }
+
+    @Test
+    fun `balanced brackets with invalid JSON inside yield no resources`() {
+        val result = detector(runnerReturning("[oops not json]")).detect(issue())
+        assertThat(result).isEmpty()
+    }
+
+    @Test
+    fun `an opening bracket with no matching close yields no resources`() {
+        val result = detector(runnerReturning("here is a list [ but it never closes")).detect(issue())
+        assertThat(result).isEmpty()
+    }
 }

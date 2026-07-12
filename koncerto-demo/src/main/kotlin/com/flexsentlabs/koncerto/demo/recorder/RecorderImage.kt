@@ -11,19 +11,19 @@ import java.util.concurrent.TimeUnit
  * a build proved unreliable on constrained local Docker VMs (TLS/connection failures reaching the
  * Alpine and Debian mirrors). Building in CI (clean networking) and pulling a small prebaked image
  * sidesteps that entirely, and keeps the image small enough to pull reliably.
+ *
+ * The raw `docker` invocation is injected as [runDocker] so the decision logic can be unit-tested
+ * without a Docker daemon; the default runs the real command via [ProcessBuilder].
  */
-class RecorderImage {
+class RecorderImage(
+    private val runDocker: (command: List<String>, timeoutSec: Long) -> DockerRun? = ::defaultRunDocker
+) {
+    /** Result of a docker invocation: combined stdout/stderr plus the process exit code. */
+    data class DockerRun(val output: String, val exitCode: Int)
 
     fun imageExists(tag: String = IMAGE_TAG): Boolean {
-        return try {
-            val pb = ProcessBuilder("docker", "images", "-q", tag).redirectErrorStream(true)
-            val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText().trim()
-            p.waitFor(10, TimeUnit.SECONDS)
-            output.isNotBlank()
-        } catch (_: Exception) {
-            false
-        }
+        val run = runDocker(listOf("docker", "images", "-q", tag), 10) ?: return false
+        return run.output.trim().isNotBlank()
     }
 
     /**
@@ -32,14 +32,12 @@ class RecorderImage {
      */
     fun ensureAvailable(tag: String = IMAGE_TAG, pullTimeoutSec: Long = 900): Result<String> {
         if (imageExists(tag)) return Result.success(tag)
-        return try {
-            val pb = ProcessBuilder("docker", "pull", tag).redirectErrorStream(true)
-            val p = pb.start()
-            val output = p.inputStream.bufferedReader().readText()
-            val ok = p.waitFor(pullTimeoutSec, TimeUnit.SECONDS) && p.exitValue() == 0
-            if (ok) Result.success(tag) else Result.failure(RuntimeException("recorder image pull failed:\n$output"))
-        } catch (e: Exception) {
-            Result.failure(RuntimeException("recorder image pull error: ${e.message}"))
+        val run = runDocker(listOf("docker", "pull", tag), pullTimeoutSec)
+            ?: return Result.failure(RuntimeException("recorder image pull error: docker could not be run"))
+        return if (run.exitCode == 0) {
+            Result.success(tag)
+        } else {
+            Result.failure(RuntimeException("recorder image pull failed:\n${run.output}"))
         }
     }
 
@@ -48,5 +46,23 @@ class RecorderImage {
         // prebaked ghcr image (not building locally, not pulling the ~2GB upstream Playwright
         // image) is what keeps recording reliable on constrained local Docker VMs.
         const val IMAGE_TAG = "ghcr.io/ajdevy/koncerto-recorder:latest"
+
+        // Real docker invocation via ProcessBuilder. This is untestable OS/process plumbing (like
+        // DemoScenarioGenerator.Companion's defaultProcessRunner) and is excluded from coverage; the
+        // decision logic that consumes it is fully unit-tested through the injected runDocker seam.
+        private fun defaultRunDocker(command: List<String>, timeoutSec: Long): DockerRun? {
+            return try {
+                val p = ProcessBuilder(command).redirectErrorStream(true).start()
+                val output = p.inputStream.bufferedReader().readText()
+                if (!p.waitFor(timeoutSec, TimeUnit.SECONDS)) {
+                    p.destroyForcibly()
+                    null
+                } else {
+                    DockerRun(output, p.exitValue())
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }

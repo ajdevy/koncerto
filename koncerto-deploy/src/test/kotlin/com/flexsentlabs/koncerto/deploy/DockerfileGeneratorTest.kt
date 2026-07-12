@@ -40,6 +40,17 @@ class DockerfileGeneratorTest {
     }
 
     @Test
+    fun `generate python dockerfile installs the project dir when no build command is given`() {
+        // buildCmd null → installTarget falls back to "." (install the project directory).
+        val fw = FrameworkInfo("python", listOf(5000), null, null)
+        val dockerfile = generator.generate(fw)
+
+        assertThat(dockerfile).contains("python:3.12-slim")
+        assertThat(dockerfile).contains("--no-build-isolation")
+        assertThat(dockerfile).contains("python app.py")
+    }
+
+    @Test
     fun `generate go dockerfile`() {
         val fw = FrameworkInfo("go", listOf(8080), "go build -o app .", "./app")
         val dockerfile = generator.generate(fw)
