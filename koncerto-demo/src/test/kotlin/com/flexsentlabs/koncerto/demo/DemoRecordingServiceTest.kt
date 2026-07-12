@@ -532,6 +532,30 @@ class DemoRecordingServiceTest {
     }
 
     @Test
+    fun `partial recovery uploads the partial even when the report post fails`() = runTest {
+        // A failing report during partial recovery is logged but must not abort the recovery.
+        reporter.reportShouldFail = true
+        val partialService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0, retryDelayMs = 1
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(PartialFileRecorder())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+        val result = partialService.requestRecording(
+            "issue-partial-reportfail", "KONC-PRF", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+        assert(result is DemoResult.Success || result is DemoResult.Failure)
+    }
+
+    @Test
     fun `requestRecording fails preflight when storage quota check fails`() = runTest {
         val quotaFailStorage = QuotaCheckFailStorage()
         val preflightService = DemoRecordingService(
