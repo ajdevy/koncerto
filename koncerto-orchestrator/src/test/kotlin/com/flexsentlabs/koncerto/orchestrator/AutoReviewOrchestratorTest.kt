@@ -902,6 +902,91 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `a non-empty DOM inventory regenerates the scenario grounded on the live app`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, callCount) = trackingScenarioGenerator()
+        var crawledUrl: String? = null
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = gen,
+            targetProjectDeployer = RecordingProjectDeployer(
+                DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+            deployRepoFullName = "acme/widget",
+            crawlDomInventory = { url -> crawledUrl = url; """[{"route":"/login","testids":["send-code-button"]}]""" },
+            onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(crawledUrl).isEqualTo("http://demo-c:5000")
+        // Two generate passes: the pre-deploy (diff-grounded) one plus the live-DOM-grounded regenerate.
+        assertThat(callCount()).isEqualTo(2)
+    }
+
+    @Test
+    fun `an empty DOM inventory leaves the pre-deploy scenario in place`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, callCount) = trackingScenarioGenerator()
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = gen,
+            targetProjectDeployer = RecordingProjectDeployer(
+                DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+            deployRepoFullName = "acme/widget",
+            crawlDomInventory = { _ -> null },
+            onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        // Only the pre-deploy generate ran; no grounded regenerate.
+        assertThat(callCount()).isEqualTo(1)
+    }
+
+    @Test
+    fun `a failing DOM crawl falls back to the ungrounded scenario`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, callCount) = trackingScenarioGenerator()
+        val decision = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(),
+            workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+            linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+            projectSlug = "p",
+            runtimeState = RuntimeState(),
+            notifier = noopNotifier(),
+            logger = noopLogger(),
+            demoScenarioGenerator = gen,
+            targetProjectDeployer = RecordingProjectDeployer(
+                DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+            deployRepoFullName = "acme/widget",
+            crawlDomInventory = { _ -> throw RuntimeException("crawl boom") },
+            onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+        ).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(callCount()).isEqualTo(1)
+    }
+
+    @Test
     fun `review exhaustion sends notification to notifier`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         Files.createDirectories(workspaceDir.resolve("T-1"))

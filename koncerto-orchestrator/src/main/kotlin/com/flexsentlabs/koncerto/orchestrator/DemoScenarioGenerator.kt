@@ -18,8 +18,13 @@ class DemoScenarioGenerator(
         fun run(command: List<String>, workDir: File, timeoutSeconds: Long): String?
     }
 
-    fun generate(issue: Issue, workspace: Workspace, credentialKeys: List<String> = emptyList()): String? {
-        val prompt = buildPrompt(issue, workspace, credentialKeys)
+    fun generate(
+        issue: Issue,
+        workspace: Workspace,
+        credentialKeys: List<String> = emptyList(),
+        domInventory: String? = null
+    ): String? {
+        val prompt = buildPrompt(issue, workspace, credentialKeys, domInventory)
         val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
         val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
         val grounded = ensureNavigatesToRealRoute(block, routes)
@@ -37,9 +42,10 @@ class DemoScenarioGenerator(
         workspace: Workspace,
         priorScenario: String,
         failureReason: String,
-        credentialKeys: List<String> = emptyList()
+        credentialKeys: List<String> = emptyList(),
+        domInventory: String? = null
     ): String? {
-        val prompt = buildRepairPrompt(issue, workspace, priorScenario, failureReason, credentialKeys)
+        val prompt = buildRepairPrompt(issue, workspace, priorScenario, failureReason, credentialKeys, domInventory)
         val block = runWithFallback(prompt, workspace.path.toFile(), issue.id) ?: return null
         val routes = extractRealRoutes(runGitDiff(workspace.path.toFile()) ?: "")
         val grounded = ensureNavigatesToRealRoute(block, routes)
@@ -52,7 +58,8 @@ class DemoScenarioGenerator(
         workspace: Workspace,
         priorScenario: String,
         failureReason: String,
-        credentialKeys: List<String> = emptyList()
+        credentialKeys: List<String> = emptyList(),
+        domInventory: String? = null
     ): String {
         return buildString {
             appendLine("The previous demo scenario FAILED to record. Produce a corrected `demo_scenario` YAML block.")
@@ -67,7 +74,7 @@ class DemoScenarioGenerator(
             appendLine("feature's page with `navigate` if it isn't linked from the landing page, and keep")
             appendLine("steps that clearly worked. Then re-emit the full corrected scenario.")
             appendLine()
-            append(buildPrompt(issue, workspace, credentialKeys))
+            append(buildPrompt(issue, workspace, credentialKeys, domInventory))
         }
     }
 
@@ -162,7 +169,12 @@ class DemoScenarioGenerator(
         runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}-credentials.env")) }
     }
 
-    internal fun buildPrompt(issue: Issue, workspace: Workspace, credentialKeys: List<String> = emptyList()): String {
+    internal fun buildPrompt(
+        issue: Issue,
+        workspace: Workspace,
+        credentialKeys: List<String> = emptyList(),
+        domInventory: String? = null
+    ): String {
         // The demo-scenario system prompt is a koncerto-provided template (like implement.md /
         // review.md), not something individual target projects ship — it must resolve relative
         // to koncerto's own workflow directory, not the target project's own workspace, or it's
@@ -214,6 +226,16 @@ class DemoScenarioGenerator(
                 appendLine("## Real Routes (extracted from the actual diff)")
                 appendLine("These routes are confirmed to exist in the PR's changes. If the feature lives on one of these and it isn't reachable by clicking something on the landing page, use `navigate` with this exact relative URL as an early step — do not just click and hope, and do not silently stay on the landing page.")
                 realRoutes.forEach { appendLine("- $it") }
+                appendLine()
+            }
+            if (!domInventory.isNullOrBlank()) {
+                appendLine("## Live UI Inventory (crawled from the actually-deployed app)")
+                appendLine("This is the STRONGEST ground truth: routes and elements observed in the running app,")
+                appendLine("not guessed from source. Author steps using ONLY the routes, data-testid values, form")
+                appendLine("fields, and button/link text listed here. To reach a feature's page, use `navigate`")
+                appendLine("with the exact route below rather than clicking a landing-page link and hoping. If a")
+                appendLine("selector or route you want is not in this inventory, it does not exist — do not invent it.")
+                appendLine(domInventory.trim())
                 appendLine()
             }
             if (diff.isNotBlank()) {
@@ -296,26 +318,38 @@ class DemoScenarioGenerator(
         return block.substring(0, insertAt) + injected + block.substring(insertAt)
     }
 
-    private fun runGitDiff(workDir: File): String? = try {
-        val pb = ProcessBuilder("git", "diff", "main...HEAD")
+    private fun runGitDiff(workDir: File): String? {
+        // Deployed target workspaces are typically a clone checked out on the PR branch with only
+        // a remote-tracking `origin/main` — no local `main` ref. `git diff main...HEAD` there dies
+        // with "fatal: ambiguous argument 'main...HEAD'", so grounding silently no-ops and the
+        // model hallucinates selectors. Try `main` first (the common local-dev/test case), then
+        // fall back to `origin/main` before giving up.
+        for (baseRef in DIFF_BASE_REFS) {
+            gitDiffAgainst(workDir, baseRef)?.let { return it }
+        }
+        return null
+    }
+
+    private fun gitDiffAgainst(workDir: File, baseRef: String): String? = try {
+        val pb = ProcessBuilder("git", "diff", "$baseRef...HEAD")
             .directory(workDir)
             .redirectErrorStream(true)
         val process = pb.start()
         val output = process.inputStream.bufferedReader().use { it.readText() }
         val completed = process.waitFor(30, TimeUnit.SECONDS)
-        // redirectErrorStream(true) merges stderr into stdout, so a failure (e.g. no "main"
-        // branch/ref in this checkout) produces non-blank "fatal: ..." text that isBlank()
+        // redirectErrorStream(true) merges stderr into stdout, so a failure (e.g. this base ref
+        // doesn't resolve in this checkout) produces non-blank "fatal: ..." text that isBlank()
         // alone wouldn't catch — that text would silently pass for a real diff, and
         // extractRealSelectors/extractRealRoutes would then find nothing in it. Require a
         // clean exit before trusting the output at all.
         if (!completed || process.exitValue() != 0) {
-            logger.warn("demo_scenario_git_diff_failed", mapOf("error" to output.take(200)))
+            logger.warn("demo_scenario_git_diff_failed", mapOf("base_ref" to baseRef, "error" to output.take(200)))
             null
         } else {
             output.takeIf { it.isNotBlank() }
         }
     } catch (e: Exception) {
-        logger.warn("demo_scenario_git_diff_failed", mapOf("error" to (e.message ?: "unknown")))
+        logger.warn("demo_scenario_git_diff_failed", mapOf("base_ref" to baseRef, "error" to (e.message ?: "unknown")))
         null
     }
 
@@ -364,6 +398,10 @@ class DemoScenarioGenerator(
     companion object {
         /** Conventional staging dir the recorder resolves scenario + credentials from, keyed by issue. */
         const val SCENARIO_DIR = "/tmp/koncerto-demo"
+
+        /** Base refs tried in order for the grounding diff: local `main` first, then the
+         *  remote-tracking `origin/main` that PR-branch clones actually have. */
+        private val DIFF_BASE_REFS = listOf("main", "origin/main")
 
         // Measured 8-139s for successful runs against the real prompt; hangs (now much rarer
         // after fixing the stdin/permission/deadlock issues) still occasionally ride out the

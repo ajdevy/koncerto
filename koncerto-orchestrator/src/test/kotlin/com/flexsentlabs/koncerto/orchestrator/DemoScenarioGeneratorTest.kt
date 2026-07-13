@@ -209,6 +209,65 @@ class DemoScenarioGeneratorTest {
     }
 
     @Test
+    fun `buildPrompt includes the live DOM inventory section when provided`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val inventory = """[{"route":"/login","testids":["send-code-button"]}]"""
+        val prompt = generator().buildPrompt(issue, workspace, emptyList(), inventory)
+        assertThat(prompt.contains("Live UI Inventory")).isEqualTo(true)
+        assertThat(prompt.contains("STRONGEST ground truth")).isEqualTo(true)
+        assertThat(prompt.contains("\"route\":\"/login\"")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt omits the live DOM inventory section when absent or blank`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        assertThat(generator().buildPrompt(issue, workspace, emptyList(), null).contains("Live UI Inventory")).isEqualTo(false)
+        assertThat(generator().buildPrompt(issue, workspace, emptyList(), "   ").contains("Live UI Inventory")).isEqualTo(false)
+    }
+
+    @Test
+    fun `buildRepairPrompt threads the live DOM inventory into the base prompt`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildRepairPrompt(
+            issue, workspace, "demo_scenario:\n  steps: []", "click missed", emptyList(),
+            """[{"route":"/login"}]"""
+        )
+        assertThat(prompt.contains("Live UI Inventory")).isEqualTo(true)
+        assertThat(prompt.contains("\"route\":\"/login\"")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildPrompt grounds on origin_main when no local main ref exists`(@TempDir tmpDir: Path) {
+        // Reproduces the deployed-workspace shape: a PR-branch checkout whose only main-line ref is
+        // origin/main. runGitDiff must fall back to it, otherwise grounding silently no-ops.
+        initGitRepoWithOriginMain(tmpDir, "id=\"send-code-button\"")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = com.flexsentlabs.koncerto.core.model.Issue(
+            id = "issue-1", identifier = "T-1", title = "t", description = "d",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+        val prompt = generator().buildPrompt(issue, workspace)
+        assertThat(prompt.contains("Real Selectors")).isEqualTo(true)
+        assertThat(prompt.contains("[id=\"send-code-button\"]")).isEqualTo(true)
+    }
+
+    @Test
     fun `saveCredentials stages a KEY=VALUE file and deleteCredentials removes it`() {
         val issue = com.flexsentlabs.koncerto.core.model.Issue(
             id = "issue-creds-save", identifier = "T-CREDS", title = "t", description = "d",
@@ -656,6 +715,30 @@ class DemoScenarioGeneratorTest {
         java.nio.file.Files.writeString(tmpDir.resolve("README.md"), changeContent)
         runProcess(listOf("git", "add", "README.md"), tmpDir)
         runProcess(listOf("git", "commit", "-m", "feature"), tmpDir)
+    }
+
+    private fun initGitRepoWithOriginMain(tmpDir: Path, changeContent: String) {
+        // Build a clone-like checkout on a PR branch whose ONLY main-line ref is origin/main:
+        // create a bare "remote", push main to it, branch to feature with the change, then delete
+        // the local main branch. `git diff main...HEAD` then fails; `git diff origin/main...HEAD`
+        // works — exactly the deployed-workspace shape.
+        val remote = tmpDir.resolveSibling(tmpDir.fileName.toString() + "-remote.git")
+        java.nio.file.Files.createDirectories(remote)
+        runProcess(listOf("git", "init", "--bare", "-b", "main"), remote)
+        runProcess(listOf("git", "init", "-b", "main"), tmpDir)
+        runProcess(listOf("git", "config", "user.email", "test@example.com"), tmpDir)
+        runProcess(listOf("git", "config", "user.name", "Test User"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), "initial content")
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "initial"), tmpDir)
+        runProcess(listOf("git", "remote", "add", "origin", remote.toString()), tmpDir)
+        runProcess(listOf("git", "push", "origin", "main"), tmpDir)
+        runProcess(listOf("git", "checkout", "-b", "feature"), tmpDir)
+        java.nio.file.Files.writeString(tmpDir.resolve("README.md"), changeContent)
+        runProcess(listOf("git", "add", "README.md"), tmpDir)
+        runProcess(listOf("git", "commit", "-m", "feature"), tmpDir)
+        // Drop the local main so only the remote-tracking origin/main remains.
+        runProcess(listOf("git", "branch", "-D", "main"), tmpDir)
     }
 
     private fun runProcess(command: List<String>, workDir: Path) {
