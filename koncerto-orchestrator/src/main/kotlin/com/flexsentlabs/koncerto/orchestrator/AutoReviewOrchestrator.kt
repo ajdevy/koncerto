@@ -888,7 +888,11 @@ class AutoReviewOrchestrator(
             val content = Files.readString(gitConfigPath)
             val originIdx = content.indexOf("[remote \"origin\"]")
             if (originIdx < 0) return null
-            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""")
+            // MULTILINE so `$` anchors to the end of the url LINE, not end-of-file. Without it the
+            // match only succeeds when origin's url is the very last line of .git/config; a clone
+            // whose config has a `[branch ...]` section after `[remote "origin"]` (the common case
+            // once a branch is checked out) silently fails to resolve, and deploy is skipped.
+            val match = Regex("""url\s*=\s*.+github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$""", RegexOption.MULTILINE)
                 .find(content, originIdx)
             match?.groupValues?.get(1)
         } catch (_: Exception) { null }

@@ -1559,6 +1559,31 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `resolveRepoFullName resolves origin even when a branch section follows it`(@TempDir tmpDir: Path) = runTest {
+        // Real clones put a `[branch ...]` section after `[remote "origin"]` once a branch is
+        // checked out, so origin's url is NOT the last line. The resolver must still find it.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.createDirectories(issueDir.resolve(".git"))
+        Files.writeString(issueDir.resolve(".git/HEAD"), "ref: refs/heads/feature/T-1\n")
+        Files.writeString(
+            issueDir.resolve(".git/config"),
+            """
+            [remote "origin"]
+                url = https://x-access-token:TOKEN@github.com/acme/widget.git
+            [branch "feature/T-1"]
+                remote = origin
+                merge = refs/heads/feature/T-1
+            """.trimIndent()
+        )
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
     fun `resolveRepoFullName reads owner repo from worktree gitdir file`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
