@@ -48,6 +48,7 @@ EXCLUDED_CLASS_PATTERNS = (
     "TrackerError",
     "TenantId",
     "PlaywrightRecorder",
+    "DomInventoryCrawler",
     "AdbRecorder",
     "AsciinemaRecorder",
     "RecorderFactory",

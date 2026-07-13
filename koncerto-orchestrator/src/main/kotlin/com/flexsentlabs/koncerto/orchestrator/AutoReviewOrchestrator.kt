@@ -54,6 +54,11 @@ class AutoReviewOrchestrator(
     private val demoScenarioGenerator: DemoScenarioGenerator? = null,
     private val scenarioCoverageClassifier: ScenarioCoverageClassifier? = null,
     private val ticketCredentialExtractor: TicketCredentialExtractor? = null,
+    // Crawls the deployed app's live DOM for a grounding inventory, given the target's internal
+    // URL. A suspend-fn seam (like onReviewPassed) so the orchestrator needn't depend on
+    // koncerto-demo; wired in Beans to DomInventoryCrawler.crawl. Best-effort — returns null when
+    // crawling is impossible or yields nothing.
+    private val crawlDomInventory: (suspend (internalUrl: String) -> String?)? = null,
     private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner
 ) {
     private val reviewStage: StageAgentConfig?
@@ -340,6 +345,33 @@ class AutoReviewOrchestrator(
                 "url" to (deployUrl ?: ""), "error" to (deployResult.error ?: "")))
         }
 
+        // Ground the scenario on the LIVE deployed DOM: crawl the running app for its real routes
+        // and selectors and regenerate. Best-effort — any failure/empty result leaves the pre-deploy
+        // (diff-grounded) scenario in place, so the demo is never blocked by crawling. saveScenario
+        // overwrites the same issue-keyed files, so the record callback below picks up the grounded
+        // scenario transparently. The crawled inventory also feeds the recovery repair.
+        var scenarioPath = initialScenarioPath
+        val crawler = crawlDomInventory
+        val generator0 = demoScenarioGenerator
+        val domInventory = if (recordingUrl != null && crawler != null) {
+            runCatching { crawler.invoke(recordingUrl) }
+                .onFailure { e -> logger.warn("dom_inventory_failed", mapOf(
+                    "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
+                .getOrNull()
+        } else null
+        if (!domInventory.isNullOrBlank() && workspace != null && generator0 != null) {
+            val grounded = runCatching {
+                generator0.generate(issue, workspace, credentialKeys, domInventory)
+            }.getOrNull()
+            if (grounded != null) {
+                scenarioPath = grounded
+                logger.info("demo_scenario_dom_grounded", mapOf("issue_id" to issue.id))
+                traceReviewStep(workspace, issue, "demo_scenario", "dom_grounded")
+            }
+        } else if (recordingUrl != null && crawler != null) {
+            logger.info("dom_inventory_empty", mapOf("issue_id" to issue.id))
+        }
+
         while (true) {
             var demoRecordingError: String? = null
             val demoUrl = runCatching { onReviewPassed?.invoke(issue, recordingUrl) }
@@ -399,10 +431,10 @@ class AutoReviewOrchestrator(
             }
 
             // Scenario-first repair: re-record against the SAME deployment, no re-review.
-            val priorScenario = initialScenarioPath?.let { runCatching { java.io.File(it).readText() }.getOrNull() }
+            val priorScenario = scenarioPath?.let { runCatching { java.io.File(it).readText() }.getOrNull() }
             val generator = demoScenarioGenerator
             val repaired = if (workspace != null && generator != null && priorScenario != null && deployUrl != null) {
-                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys) }.getOrNull()
+                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys, domInventory) }.getOrNull()
             } else null
             if (repaired != null) {
                 traceReviewStep(workspace, issue, "demo_scenario", "repaired", mapOf("cycle" to cycle.toString()))

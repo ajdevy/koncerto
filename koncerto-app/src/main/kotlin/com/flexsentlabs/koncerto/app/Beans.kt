@@ -421,7 +421,10 @@ class Beans {
                         demoFailureReporter = DemoFailureReporter(logger),
                         demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache),
                         scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger),
-                        ticketCredentialExtractor = TicketCredentialExtractor(logger = logger)
+                        ticketCredentialExtractor = TicketCredentialExtractor(logger = logger),
+                        crawlDomInventory = { internalUrl ->
+                            com.flexsentlabs.koncerto.demo.recorder.DomInventoryCrawler(logger).crawl(internalUrl)
+                        }
                     )
                 }
             } else null,
