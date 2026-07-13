@@ -194,6 +194,9 @@ class DemoScenarioGeneratorTest {
         assertThat(prompt.contains("- TEST_EMAIL_INBOX")).isEqualTo(true)
         assertThat(prompt.contains("- TEST_EMAIL_IMAP_PASSWORD")).isEqualTo(true)
         assertThat(prompt.contains("action: resolve")).isEqualTo(true)
+        // The resolve guidance must steer the model to read connection params from env, not hardcode.
+        assertThat(prompt.contains("NEVER hardcode a username")).isEqualTo(true)
+        assertThat(prompt.contains("most RECENT message")).isEqualTo(true)
     }
 
     @Test

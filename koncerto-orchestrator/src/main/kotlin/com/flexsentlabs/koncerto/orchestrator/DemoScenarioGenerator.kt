@@ -262,6 +262,17 @@ class DemoScenarioGenerator(
                 appendLine("      selector: \"[data-testid=\\\"code-input\\\"]\"")
                 appendLine("      value: \${code}")
                 appendLine()
+                appendLine("CRITICAL rules for a `resolve` command so it actually returns a value:")
+                appendLine("- Read EVERY connection parameter from the env vars listed above via os.getenv/os.environ")
+                appendLine("  — host, port, USERNAME, and password. NEVER hardcode a username, host, port, or")
+                appendLine("  sender. For IMAP login use the exact user key provided (e.g. os.environ['TEST_EMAIL_IMAP_USER']),")
+                appendLine("  which is the full login the provider expects — do not shorten an email to its local part.")
+                appendLine("- Do NOT filter by a guessed sender/subject. Fetch the most RECENT message(s) in the inbox")
+                appendLine("  and extract the code by shape (e.g. the first 4-8 digit run: re.search(r'\\\\b(\\\\d{4,8})\\\\b', body)).")
+                appendLine("- Poll briefly (a few retries with a short sleep) since the email may take seconds to arrive.")
+                appendLine("- The command MUST exit 0 and print ONLY the resolved value (nothing else). If it errors or")
+                appendLine("  prints a placeholder, \${name} is left unsubstituted and the literal text is typed instead.")
+                appendLine()
             }
             append("Generate the demo_scenario YAML now. The scenario must include scrolling and button pressing, with at least one scroll action and at least one button click.")
         }
