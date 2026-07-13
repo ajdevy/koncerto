@@ -2,7 +2,7 @@
 title: 'DOM-grounded demo scenario generation'
 type: 'feature'
 created: '2026-07-12'
-status: 'in-review'
+status: 'done'
 context: []
 baseline_commit: '694ce9c13e1f2ee8ff5dd7a847b226b1018a4c0f'
 ---
