@@ -197,6 +197,10 @@ class DemoScenarioGeneratorTest {
         // The resolve guidance must steer the model to read connection params from env, not hardcode.
         assertThat(prompt.contains("NEVER hardcode a username")).isEqualTo(true)
         assertThat(prompt.contains("most RECENT message")).isEqualTo(true)
+        // And it must steer the model to reference a credential (e.g. the email) as ${KEY} in browser
+        // type steps rather than inventing a placeholder that won't match the inbox.
+        assertThat(prompt.contains("\${TEST_EMAIL_INBOX}")).isEqualTo(true)
+        assertThat(prompt.contains("Do NOT invent a placeholder")).isEqualTo(true)
     }
 
     @Test
