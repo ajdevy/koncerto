@@ -22,6 +22,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Instant
+import java.util.concurrent.TimeUnit
 
 data class GhProcessResult(val exitCode: Int, val output: String)
 
@@ -764,7 +765,15 @@ class AutoReviewOrchestrator(
     private suspend fun deployTargetProject(issue: Issue, workspace: com.flexsentlabs.koncerto.workspace.Workspace?): DeployResult? {
         val deployer = targetProjectDeployer ?: return null
         val ws = workspace ?: return null
-        val repoFullName = resolveRepoFullName(ws.path) ?: deployRepoFullName ?: return null
+        val repoFullName = resolveRepoFullName(ws.path) ?: deployRepoFullName
+        if (repoFullName == null) {
+            // The most common cause of a silent "no demo" was this returning null: the workspace's
+            // git origin couldn't be resolved (transient mid-clone state) and no config-level
+            // deployRepoFullName was set. Log it so it isn't invisible.
+            logger.warn("deploy_repo_unresolved", mapOf(
+                "issue_id" to issue.id, "workspace_path" to ws.path.toString()))
+            return null
+        }
         if (!Files.isDirectory(ws.path)) return null
 
         logger.info("deploy_target_project_start", mapOf("issue_id" to issue.id, "repo" to repoFullName))
@@ -883,6 +892,11 @@ class AutoReviewOrchestrator(
             "Write '❌ FAIL' if there are critical issues, otherwise indicate the review passed."
 
     private fun resolveRepoFullName(workspacePath: Path): String? {
+        // Ask git itself first — it's authoritative and atomic. A hand-rolled .git/config parse
+        // can race a clone that is mid-write (the file exists but the origin url isn't flushed yet),
+        // which is exactly the intermittent state that made deploy silently no-op. `git config`
+        // reads through git's own locking and also handles worktree gitdir indirection for free.
+        gitConfigOriginUrl(workspacePath)?.let { url -> parseGithubSlug(url)?.let { return it } }
         val gitConfigPath = resolveGitConfigPath(workspacePath) ?: return null
         return try {
             val content = Files.readString(gitConfigPath)
@@ -897,6 +911,18 @@ class AutoReviewOrchestrator(
             match?.groupValues?.get(1)
         } catch (_: Exception) { null }
     }
+
+    /** Authoritative origin url via `git config`, or null if git can't be run or origin is unset. */
+    private fun gitConfigOriginUrl(workspacePath: Path): String? = runCatching {
+        val p = ProcessBuilder("git", "-C", workspacePath.toString(), "config", "--get", "remote.origin.url")
+            .redirectErrorStream(true).start()
+        val out = p.inputStream.bufferedReader().readText().trim()
+        if (p.waitFor(10, TimeUnit.SECONDS) && p.exitValue() == 0) out.takeIf { it.isNotBlank() } else null
+    }.getOrNull()
+
+    /** Extracts `owner/repo` from any github origin url (ssh or https, with or without a token/.git). */
+    private fun parseGithubSlug(url: String): String? =
+        Regex("""github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?/?\s*$""").find(url.trim())?.groupValues?.get(1)
 
     private fun resolveGitConfigPath(workspacePath: Path): Path? {
         val directConfig = workspacePath.resolve(".git/config")

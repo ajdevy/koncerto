@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.orchestrator
 
 import assertk.assertThat
 import assertk.assertions.contains
+import assertk.assertions.isEmpty
 import assertk.assertions.isEqualTo
 import assertk.assertions.isFalse
 import assertk.assertions.isGreaterThan
@@ -1556,6 +1557,41 @@ class AutoReviewOrchestratorTest {
         val deployer = RecordingProjectDeployer()
         passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
         assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `resolveRepoFullName uses git config for a real clone`(@TempDir tmpDir: Path) = runTest {
+        // A real git repo (not just a hand-written .git/config) so the authoritative `git config`
+        // path resolves the origin — the atomic read that survives a mid-clone state.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        runGit(issueDir, "init", "-q", "-b", "main")
+        runGit(issueDir, "remote", "add", "origin", "https://x-access-token:TOK@github.com/acme/widget.git")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(deployer.deployCalls.single().repoFullName).isEqualTo("acme/widget")
+    }
+
+    @Test
+    fun `deploy is skipped when the repo cannot be resolved`(@TempDir tmpDir: Path) = runTest {
+        // No git metadata at all and no config-level deployRepoFullName → repo unresolved → the
+        // deploy is skipped (and logged) rather than proceeding with a bogus target.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val deployer = RecordingProjectDeployer()
+        passingReviewOrchestrator(workspaceDir, deployer = deployer).onCodingComplete(issue())
+        assertThat(deployer.deployCalls).isEmpty()
+    }
+
+    private fun runGit(dir: Path, vararg args: String) {
+        val p = ProcessBuilder(listOf("git") + args).directory(dir.toFile())
+            .redirectErrorStream(true).start()
+        p.inputStream.bufferedReader().readText()
+        check(p.waitFor() == 0) { "git ${args.joinToString(" ")} failed" }
     }
 
     @Test
