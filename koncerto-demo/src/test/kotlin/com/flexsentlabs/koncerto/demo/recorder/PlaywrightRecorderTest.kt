@@ -134,6 +134,12 @@ class PlaywrightRecorderTest {
               const unresolved = {value: $dollar + '{missing}'};
               substituteVars(unresolved, vars);
               if (unresolved.value !== ($dollar + '{missing}')) { console.error('FAIL unresolved'); process.exit(1); }
+              // A credential env var (not a resolved var) is substituted too, so a browser email
+              // field can reference the injected inbox by its env var name.
+              process.env.TEST_EMAIL_INBOX = 'real@inbox.test';
+              const emailStep = {action:'type', value: $dollar + '{TEST_EMAIL_INBOX}'};
+              substituteVars(emailStep, vars);
+              if (emailStep.value !== 'real@inbox.test') { console.error('FAIL env subst: ' + emailStep.value); process.exit(1); }
               await executeScenarioStep(null, {action:'resolve', name:'bad'}, vars);
               console.log('OK');
               process.exit(0);

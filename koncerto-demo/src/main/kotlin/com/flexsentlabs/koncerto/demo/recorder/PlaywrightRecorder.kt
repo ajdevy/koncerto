@@ -549,8 +549,15 @@ function substituteVars(step, vars) {
     const end = v.indexOf('}', idx);
     if (end === -1) continue;
     const name = v.slice(idx + 2, end);
-    if (Object.prototype.hasOwnProperty.call(vars, name)) {
-      step[k] = v.slice(0, idx) + vars[name] + v.slice(end + 1);
+    // Resolve-produced vars take precedence; otherwise fall back to an injected credential env var
+    // of the same name, so a browser step can type a provided credential value (e.g. the login
+    // email = the SAME test inbox the resolve step reads) by referencing that env var by name
+    // rather than a guessed literal that wouldn't match where the code is actually sent.
+    let val;
+    if (Object.prototype.hasOwnProperty.call(vars, name)) val = vars[name];
+    else if (Object.prototype.hasOwnProperty.call(process.env, name)) val = process.env[name];
+    if (val !== undefined) {
+      step[k] = v.slice(0, idx) + val + v.slice(end + 1);
     }
   }
 }
