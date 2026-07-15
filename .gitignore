@@ -61,3 +61,6 @@ config/ngrok.yml
 
 # Gradle local plugin repo variant jars
 gradle/local-plugin-repo/*-gradle85.jar
+
+# Stray dir if koncerto is launched without KONCERTO_WORKSPACE_ROOT set
+$KONCERTO_WORKSPACE_ROOT/
