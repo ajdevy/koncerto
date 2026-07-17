@@ -34,10 +34,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Install opencode CLI
+        # @opencode-ai/cli's npm `latest` tag currently points at an unrelated in-progress
+        # rewrite (self-identifies as "OpenCode 2.0 preview" / "lildax") that dropped the
+        # `run` command our E2E test needs and speaks a different, unverified HTTP API.
+        # Install the real, stable CLI straight from GitHub Releases instead.
         run: |
-          npm install -g @opencode-ai/cli@latest
-          echo "$(npm bin -g)" >> $GITHUB_PATH
-          npx @opencode-ai/cli --version
+          curl -fsSL -o opencode.tar.gz "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz"
+          tar -xzf opencode.tar.gz
+          chmod +x opencode
+          sudo mv opencode /usr/local/bin/opencode
+          rm -f opencode.tar.gz
+          opencode --version
 
       - name: Cache Gradle dependencies
         uses: actions/cache@v4
@@ -161,10 +168,17 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Install opencode CLI
+        # @opencode-ai/cli's npm `latest` tag currently points at an unrelated in-progress
+        # rewrite (self-identifies as "OpenCode 2.0 preview" / "lildax") that dropped the
+        # `run` command our E2E test needs and speaks a different, unverified HTTP API.
+        # Install the real, stable CLI straight from GitHub Releases instead.
         run: |
-          npm install -g @opencode-ai/cli@latest
-          echo "$(npm bin -g)" >> $GITHUB_PATH
-          npx @opencode-ai/cli --version
+          curl -fsSL -o opencode.tar.gz "https://github.com/anomalyco/opencode/releases/latest/download/opencode-linux-x64.tar.gz"
+          tar -xzf opencode.tar.gz
+          chmod +x opencode
+          sudo mv opencode /usr/local/bin/opencode
+          rm -f opencode.tar.gz
+          opencode --version
 
       - name: Install codex CLI
         run: |
