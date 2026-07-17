@@ -14,13 +14,20 @@ import kotlinx.serialization.encodeToString
 
 class TelegramNotifier(
     private val botToken: String,
-    private val chatId: String
+    private val chatId: String,
+    /** Telegram API root. Overridable so tests can point at a local server instead of the network. */
+    private val baseUrl: String = "https://api.telegram.org"
 ) : Notifier {
+    // encodeDefaults is required: parse_mode has a default value, and kotlinx-serialization
+    // omits defaults unless told otherwise. Without it Telegram never receives parse_mode and
+    // renders the Markdown in formatTelegram() as literal asterisks.
+    private val json = Json { encodeDefaults = true }
+
     override suspend fun send(event: NotificationEvent) {
         val text = formatTelegram(event)
-        val payload = Json.encodeToString(SendMessage(chatId = chatId, text = text))
+        val payload = json.encodeToString(SendMessage(chatId = chatId, text = text))
         withContext(Dispatchers.IO) {
-            val conn = URL("https://api.telegram.org/bot$botToken/sendMessage").openConnection() as HttpURLConnection
+            val conn = URL("$baseUrl/bot$botToken/sendMessage").openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")

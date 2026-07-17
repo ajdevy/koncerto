@@ -12,6 +12,7 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.test.runTest
+import kotlin.time.Duration.Companion.minutes
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -344,8 +345,10 @@ class TargetProjectDeployerTest {
         assertThat(result.error!!.startsWith("Deployment error:")).isTrue()
     }
 
+    // Really shells out to `docker compose up`, so the first run on a machine without the nginx
+    // image cached spends most of its time pulling it — well past runTest's 60s default.
     @Test
-    fun `deploy uses detected docker compose file`(@TempDir tmpDir: Path) = runTest {
+    fun `deploy uses detected docker compose file`(@TempDir tmpDir: Path) = runTest(timeout = 5.minutes) {
         Files.writeString(
             tmpDir.resolve("docker-compose.yml"),
             "services:\n  web:\n    image: nginx\n    ports:\n      - \"8080:80\"\n"
