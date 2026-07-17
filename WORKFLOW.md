@@ -59,11 +59,42 @@ projects:
         "In Review":
           prompt: prompts/review.md
           agent_kind: claude
-          command: claude --print
+          # --output-format json exposes token usage + latency for review telemetry (Epic 18).
+          # The parser falls back to plain-text mode if the envelope is absent.
+          command: claude --print --output-format json
           model: claude-sonnet-4-6
           effort: medium
           on_complete_state: "Ready for Human Review"
           max_review_attempts: 3
+          # Review-quality policy (Epics 18-23). Omit any key to keep built-in defaults.
+          review:
+            # blocking = failing review routes to on_failure_state (current behavior).
+            # advisory = findings are still published + recorded, but never block.
+            mode: blocking
+            # Diffs where every file matches are skipped without a model call.
+            skip_globs:
+              - ".koncerto/**"
+              - ".review-*"
+              - "**/*.lock"
+              - "**/generated/**"
+              - "**/node_modules/**"
+            # Any changed file matching these forces the critical tier (multi-agent when enabled).
+            critical_globs:
+              - "**/auth/**"
+              - "**/ClaudeAuthSupport.kt"
+              - "**/*Credential*"
+              - "**/*Secret*"
+            large_change_loc: 500
+            many_files: 15
+            # Publish a finding only when its self-reported confidence clears the bar.
+            publication_thresholds:
+              critical: 0.5
+              warning: 0.7
+              suggestion: 0.85
+            context_budget_chars: 60000
+            review_invariants_path: review-invariants.md
+            # Specialist fan-out for the critical tier; empty list disables multi-agent review.
+            specialists: []
         "Ready for Human Review":
           prompt: prompts/human-review.md
           agent_kind: human

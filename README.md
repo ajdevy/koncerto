@@ -143,6 +143,56 @@ koncerto-app/          Spring Boot entry point
 koncerto-e2e/          Integration tests
 ```
 
+## AI Code Review
+
+Review runs as a staged pipeline rather than one opaque model call. Everything that can be
+decided deterministically is Kotlin — eligibility, routing, gating, and state transitions — so
+the model's job is narrowed to reading code and emitting findings.
+
+```
+eligibility → risk routing → context pack → review → publication gate → publish → telemetry
+```
+
+Configure it per stage in `WORKFLOW.md` under `review:` (every key is optional; omitting the
+block preserves the previous behavior exactly):
+
+```yaml
+"In Review":
+  command: claude --print --output-format json   # exposes token usage for telemetry
+  review:
+    mode: blocking            # or `advisory` — publishes findings but never blocks
+    skip_globs: [".koncerto/**", "**/*.lock"]   # skipped without a model call
+    critical_globs: ["**/auth/**"]              # forces the critical tier
+    publication_thresholds:                     # drop findings below this confidence
+      critical: 0.5
+      warning: 0.7
+      suggestion: 0.85
+    specialists: []           # e.g. [prompts/review-security.md] for critical-tier fan-out
+```
+
+**Domain invariants.** Drop a `review-invariants.md` in the repo root to teach the reviewer
+rules it cannot infer from a diff (see this repo's own for an example). It is injected into
+the review context.
+
+**Measuring usefulness.** The point is signal-to-cost, not comment count. Every run records
+its findings, confidence, tokens, latency, and prompt version:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/review/runs` | Review runs with verdict, tier, tokens |
+| `GET /api/v1/review/runs/{runId}/findings` | Findings, including gate-dropped ones |
+| `POST /api/v1/review/findings/{id}/label?label=accept\|reject\|false_positive` | Human feedback |
+| `GET /api/v1/review/baseline?window=30` | High-evidence rate, FP rate, tokens per useful finding |
+
+```bash
+./scripts/review-baseline.sh --stdout       # snapshot the current numbers
+./scripts/review-calibration.sh --stdout    # FP analysis + threshold recommendations
+```
+
+Roll out measurement-first: collect a baseline (≥30 reviews) before tuning thresholds, and
+start new projects in `advisory` mode until the false-positive rate is under 20%. Design notes
+and decision records: `_bmad-output/planning-artifacts/architecture-review-quality.md`.
+
 ## Docker Agent Isolation
 
 Koncerto can run each agent in a dedicated Docker container for process-level isolation. This is **enabled by default** when Docker is available.

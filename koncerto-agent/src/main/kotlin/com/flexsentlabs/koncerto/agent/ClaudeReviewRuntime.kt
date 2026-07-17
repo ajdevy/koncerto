@@ -18,9 +18,13 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.flexsentlabs.koncerto.core.model.TokenUsage
+import com.flexsentlabs.koncerto.core.review.ReviewOutputParser
+import com.flexsentlabs.koncerto.core.review.ReviewParseResult
 import com.flexsentlabs.koncerto.core.tenant.TenantContext
 
 class ClaudeReviewRuntime(
@@ -36,6 +40,7 @@ class ClaudeReviewRuntime(
     override val output: SharedFlow<String> = _output.asSharedFlow()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pid: Long? = null
+    private val findingsJson = Json { prettyPrint = false; encodeDefaults = true }
 
     override suspend fun start(tenantContext: TenantContext?): Boolean = true
 
@@ -85,9 +90,6 @@ class ClaudeReviewRuntime(
                 }
                 .joinToString("\n")
                 .trim()
-            if (output.isNotBlank()) {
-                output.lines().forEach { _output.tryEmit(it) }
-            }
 
             val completed = p.waitFor(5, TimeUnit.MINUTES)
             if (!completed) {
@@ -103,17 +105,44 @@ class ClaudeReviewRuntime(
                 "output_bytes" to output.length.toString()
             ))
 
-            val hasFailures = output.contains("❌ FAIL")
+            // Parse structured findings + usage from the (possibly JSON-enveloped) output.
+            // Degrades to legacy verdict-string parsing on any failure (Epic 18, NFR-02).
+            val parsed = ReviewOutputParser.parse(output, promptVersion = extractPromptVersion(prompt))
+
+            // `.review-output` feeds the PR comment, so it must hold the human-readable review —
+            // never the raw JSON envelope (--output-format json) or the machine findings block.
+            val humanText = parsed.humanText.ifBlank { output }
+            if (humanText.isNotBlank()) {
+                humanText.lines().forEach { _output.tryEmit(it) }
+            }
 
             val statusFile = workspacePath.resolve(".review-status")
-            Files.writeString(statusFile, if (hasFailures) "fail" else "pass")
-            Files.writeString(workspacePath.resolve(".review-output"), output)
+            Files.writeString(statusFile, if (parsed.verdictPass) "pass" else "fail")
+            Files.writeString(workspacePath.resolve(".review-output"), humanText)
+            runCatching {
+                Files.writeString(
+                    workspacePath.resolve(".review-findings.json"),
+                    findingsJson.encodeToString(ReviewParseResult.serializer(), parsed)
+                )
+            }.onFailure { logger.warn("claude_review_findings_write_failed", emptyMap(), "error" to (it.message ?: "?")) }
+
+            logger.info("claude_review_parsed", mapOf(
+                "verdict" to if (parsed.verdictPass) "pass" else "fail",
+                "findings" to parsed.findings.size.toString(),
+                "parse_status" to parsed.parseStatus.name,
+                "input_tokens" to parsed.usage.inputTokens.toString(),
+                "output_tokens" to parsed.usage.outputTokens.toString()
+            ))
 
             val attemptFile = workspacePath.resolve(".review-attempt")
             val attempt = if (Files.exists(attemptFile)) {
                 (runCatching { Files.readString(attemptFile).trim().toInt() }.getOrNull() ?: 0) + 1
             } else 1
             Files.writeString(attemptFile, attempt.toString())
+
+            val usage = parsed.usage.takeIf { it.totalTokens > 0 }?.let {
+                TokenUsage(it.inputTokens, it.outputTokens, it.totalTokens)
+            }
 
             events.trySend(AgentEvent.SessionStarted(
                 threadId = UUID.randomUUID().toString(),
@@ -123,7 +152,7 @@ class ClaudeReviewRuntime(
             events.trySend(AgentEvent.TurnCompleted(
                 threadId = UUID.randomUUID().toString(),
                 turnId = "1",
-                usage = null,
+                usage = usage,
                 pid = pid
             ))
         } catch (e: Exception) {
@@ -133,6 +162,19 @@ class ClaudeReviewRuntime(
                 error = e.message ?: "claude_review_failed", pid = pid
             ))
         }
+    }
+
+    /** Reads `version:` from the leading YAML frontmatter of the rendered prompt, if present. */
+    internal fun extractPromptVersion(prompt: String): String? {
+        val lines = prompt.lineSequence().iterator()
+        if (!lines.hasNext() || lines.next().trim() != "---") return null
+        val versionRegex = Regex("""^version:\s*['"]?([^'"\s]+)['"]?\s*$""")
+        while (lines.hasNext()) {
+            val line = lines.next()
+            if (line.trim() == "---") return null
+            versionRegex.find(line.trim())?.let { return it.groupValues[1] }
+        }
+        return null
     }
 
     internal fun hasNonZeroCritical(output: String): Boolean {

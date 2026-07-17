@@ -39,6 +39,12 @@ tasks.register<Test>("e2eTest") {
         systemProperty("koncerto.e2e.codex", e2eCodex.get())
     }
     inputs.property("koncerto.e2e.codex", e2eCodex.orElse("false"))
+    // Review-pipeline e2e against a real free model (FreeModelReviewE2eTest).
+    val e2eReview = providers.systemProperty("koncerto.e2e.review")
+    if (e2eReview.isPresent) {
+        systemProperty("koncerto.e2e.review", e2eReview.get())
+    }
+    inputs.property("koncerto.e2e.review", e2eReview.orElse("false"))
     group = "verification"
     description = "Runs end-to-end tests (requires opencode and/or codex CLI)"
 }

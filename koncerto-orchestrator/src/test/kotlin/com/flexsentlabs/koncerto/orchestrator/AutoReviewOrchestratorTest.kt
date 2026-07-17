@@ -1805,9 +1805,12 @@ class AutoReviewOrchestratorTest {
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-output-detailed"), "✅ PASS\nNo repo.")
 
-        var ghCalled = false
-        val ghRunner: GhProcessRunner = { _, _ ->
-            ghCalled = true
+        // The review pipeline also makes read-only gh calls (e.g. `gh pr view` to pull the PR
+        // body into the review context), so assert on what this test is actually about: no
+        // comment is *posted* when the repo cannot be resolved.
+        var commentPosted = false
+        val ghRunner: GhProcessRunner = { command, _ ->
+            if (command.contains("comment")) commentPosted = true
             GhProcessResult(0, "ok")
         }
 
@@ -1816,7 +1819,7 @@ class AutoReviewOrchestratorTest {
             ghProcessRunner = ghRunner,
             deployRepoFullName = null
         ).onCodingComplete(issue())
-        assertThat(ghCalled).isFalse()
+        assertThat(commentPosted).isFalse()
     }
 
     @Test

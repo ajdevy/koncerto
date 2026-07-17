@@ -1078,6 +1078,12 @@ class DispatchService(
         val onFailure = stageConfig.onFailureState
         val maxAttempts = stageConfig.maxReviewAttempts ?: 3
 
+        // Advisory mode (Epic 21): findings are still published + persisted, but a failing
+        // verdict never blocks — always transition to on_complete_state.
+        if (stageConfig.review?.mode == com.flexsentlabs.koncerto.core.review.ReviewMode.ADVISORY) {
+            return onComplete
+        }
+
         if (onFailure == null) return onComplete
 
         val ws = workspaces ?: return onComplete

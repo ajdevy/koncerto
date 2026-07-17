@@ -478,16 +478,39 @@ New LinearClient methods:
 
 After an agent completes implementation and creates a PR, the `AutoReviewOrchestrator` runs Claude Code against the PR diff to validate code quality before state transition.
 
+Since Epics 18–23 this is a staged pipeline rather than a single opaque model call. The
+governing principle: **everything that can be deterministic is Kotlin, not prompt** — eligibility,
+routing, gating, verdict derivation, and state transitions are code; the model only reads code
+and emits findings. See `architecture-review-quality.md` for the full design and decision records.
+
+```
+Issue enters "In Review"
+  ├─ 1. ReviewEligibility     (skip artifact/generated/docs-only diffs — no model call)
+  ├─ 2. RiskRouter            (low | standard | critical tier)
+  ├─ 3. ReviewContextBuilder  (bounded context pack: intent, invariants, neighbors)
+  ├─ 4. ClaudeReviewRuntime   (JSON envelope → human text + structured findings + usage)
+  │      └─ critical tier: SpecialistReviewCoordinator fan-out, merged + deduped
+  ├─ 5. PublicationGate       (confidence thresholds; dropped findings persisted, not posted)
+  ├─ 6. Publish               (PR comment w/ koncerto-finding markers)
+  ├─ 7. ReviewTelemetryRecorder (review_runs + review_findings)
+  └─ 8. Transition            (advisory → always complete; blocking → Needs Fix loop)
+         └─ FindingOutcomeTracker: fix-agent report + re-review corroboration
+```
+
 ### 14.2 Flow
 
 ```
 agent_completes → PR_created → AutoReviewOrchestrator.review()
     ├── Read .review-output-detailed (backup of previous review)
-    ├── Run ClaudeReviewRuntime: claude --print with prompts/review.md
+    ├── Eligibility pre-check (skip trivial diffs → record skipped run, transition)
+    ├── Run ClaudeReviewRuntime: claude --print --output-format json with prompts/review.md
     │   ├── Filter stderr config errors from output
-    │   └── Strip conversational preamble
-    ├── Parse verdict: ❌ FAIL or ✅ PASS
-    │   ├── FAIL → post comment, re-dispatch (up to max_review_attempts)
+    │   ├── ReviewOutputParser: unwrap envelope, extract `review-findings` block
+    │   │   └── parse failure → fallback to legacy verdict string (parse_status=fallback)
+    │   └── Write .review-status, .review-output (human text), .review-findings.json
+    ├── Parse verdict: any critical finding → fail (legacy ❌ FAIL string as fallback)
+    │   ├── FAIL → post comment, re-dispatch (up to max_review_attempts) [blocking mode]
+    │   ├── FAIL → publish + record, transition anyway            [advisory mode]
     │   └── PASS → proceed to demo/deploy
     ├── If target_project_deploy.enabled:
     │   ├── TargetProjectDeployer.deploy()
@@ -515,7 +538,11 @@ agent_completes → PR_created → AutoReviewOrchestrator.review()
 | Component | Module | Responsibility |
 |-----------|--------|---------------|
 | AutoReviewOrchestrator | koncerto-orchestrator | Orchestrates review → deploy → demo → comment lifecycle |
-| ClaudeReviewRuntime | koncerto-agent | Spawns claude --print, filters output |
+| ClaudeReviewRuntime | koncerto-agent | Spawns claude --print, parses findings + usage, writes handoff files |
+| ReviewOutputParser / PublicationGate / RiskRouter / ReviewEligibility / Glob | koncerto-core (`core.review`) | Pure review decisions + parsing (no IO) |
+| ReviewDiffInspector / ReviewContextBuilder / ReviewTelemetryRecorder / FindingOutcomeTracker / SpecialistReviewCoordinator / ReviewCommentRenderer | koncerto-orchestrator (`orchestrator.review`) | IO-bound pipeline stages |
+| ReviewMetricsRepository | koncerto-metrics | review_runs + review_findings persistence, baseline aggregates |
+| ReviewController | koncerto-dashboard | `/api/v1/review/*` — runs, findings, human labels, baseline |
 | TargetProjectDeployer | koncerto-deploy | Docker build/run/health/cleanup for target project |
 | DemoRecordingService | koncerto-demo | Coordinates Playwright + ffmpeg + R2 upload |
 | PlaywrightRecorder | koncerto-demo | Embedded Node.js Playwright script via Xvfb |

@@ -8,7 +8,21 @@ A code review was performed and found issues that need to be fixed. The review r
 2. Fix each critical finding in order — edit the source files to address each issue
 3. After fixing all critical issues, run `./gradlew build` to verify compilation
 4. Run `./gradlew test` to verify tests still pass
-5. Commit changes with a commit message like: `fix: address review findings for {{ issue.identifier }}`
+5. **Write a disposition report** (see below) so the pipeline can track finding outcomes
+6. Commit changes with a commit message like: `fix: address review findings for {{ issue.identifier }}`
+
+## Disposition Report (required)
+
+If a `.review-findings.json` file exists in the workspace root, it lists the findings with their `finding_id` values (the review report may also embed `<!-- koncerto-finding:{id} -->` markers). After working through them, write a file `.review-fix-report.json` in the workspace root — a JSON array, one entry per finding you acted on:
+
+```json
+[
+  {"findingId":"<run>-<seq>","disposition":"fixed","note":"corrected the null check"},
+  {"findingId":"<run>-<seq>","disposition":"not_a_bug","note":"input is validated upstream"}
+]
+```
+
+`disposition` is one of `fixed`, `wont_fix`, or `not_a_bug`. This is machine-read — emit valid JSON. If you cannot determine finding ids, omit the file; the pipeline will infer outcomes from the next review.
 
 ## Format for Each Fix
 
