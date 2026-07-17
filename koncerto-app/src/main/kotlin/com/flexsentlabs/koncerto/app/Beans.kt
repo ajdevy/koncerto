@@ -351,7 +351,17 @@ class Beans {
 
     @Bean
     fun prometheusMetricsBinder(metricsRepository: MetricsRepository): MeterBinder =
-        PrometheusMetricsBinder(metricsRepository as SqliteMetricsRepository)
+        PrometheusMetricsBinder(
+            metricsRepository as SqliteMetricsRepository,
+            reviewMetricsRepository = metricsRepository
+        )
+
+    /** Same SQLite store, exposed under the review-telemetry contract (Epic 18, D-9). */
+    @Bean
+    fun reviewMetricsRepository(
+        metricsRepository: MetricsRepository
+    ): com.flexsentlabs.koncerto.metrics.ReviewMetricsRepository =
+        metricsRepository as SqliteMetricsRepository
 
     @Bean
     fun runtimeStates(
@@ -424,7 +434,8 @@ class Beans {
                         ticketCredentialExtractor = TicketCredentialExtractor(logger = logger),
                         crawlDomInventory = { internalUrl ->
                             com.flexsentlabs.koncerto.demo.recorder.DomInventoryCrawler(logger).crawl(internalUrl)
-                        }
+                        },
+                        reviewMetrics = metricsRepository as? com.flexsentlabs.koncerto.metrics.ReviewMetricsRepository
                     )
                 }
             } else null,

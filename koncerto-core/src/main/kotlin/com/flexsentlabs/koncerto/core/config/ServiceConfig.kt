@@ -222,6 +222,7 @@ data class ServiceConfig(
                 onCompleteState = stageMap["on_complete_state"] as? String,
                 onFailureState = stageMap["on_failure_state"] as? String,
                 maxReviewAttempts = (stageMap["max_review_attempts"] as? Number)?.toInt(),
+                review = parseReviewPolicy(stageMap["review"] as? Map<*, *>),
                 agent = stageMap["agent"] as? String,
                     followUp = (stageMap["follow_up"] as? Map<*, *>)?.let { f ->
                         FollowUpConfig(
@@ -236,6 +237,40 @@ data class ServiceConfig(
                     }
                 )
             }.toMap()
+        }
+
+        internal fun parseReviewPolicy(map: Map<*, *>?): com.flexsentlabs.koncerto.core.review.ReviewPolicy? {
+            if (map == null) return null
+            val d = com.flexsentlabs.koncerto.core.review.ReviewPolicy.DEFAULT
+            fun strList(key: String, default: List<String>): List<String> =
+                (map[key] as? List<*>)?.filterIsInstance<String>() ?: default
+            val thresholdsRaw = map["publication_thresholds"] as? Map<*, *>
+            val thresholds = if (thresholdsRaw == null) d.publicationThresholds else {
+                thresholdsRaw.mapNotNull { (k, v) ->
+                    val sev = com.flexsentlabs.koncerto.core.review.Severity.fromWire(k as? String)
+                    val num = (v as? Number)?.toDouble()
+                    if (sev != null && num != null) sev to num else null
+                }.toMap().ifEmpty { d.publicationThresholds }
+            }
+            val tierModelsRaw = map["tier_models"] as? Map<*, *>
+            val tierModels = tierModelsRaw?.mapNotNull { (k, v) ->
+                val tier = com.flexsentlabs.koncerto.core.review.RiskTier.fromWire(k as? String)
+                val model = resolveInlineEnvRefs(v as? String)
+                if (model != null) tier to model else null
+            }?.toMap() ?: d.tierModels
+            return com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+                mode = com.flexsentlabs.koncerto.core.review.ReviewMode.fromWire(map["mode"] as? String),
+                skipGlobs = strList("skip_globs", d.skipGlobs),
+                criticalGlobs = strList("critical_globs", d.criticalGlobs),
+                largeChangeLoc = (map["large_change_loc"] as? Number)?.toInt() ?: d.largeChangeLoc,
+                manyFiles = (map["many_files"] as? Number)?.toInt() ?: d.manyFiles,
+                publicationThresholds = thresholds,
+                contextBudgetChars = (map["context_budget_chars"] as? Number)?.toInt() ?: d.contextBudgetChars,
+                reviewInvariantsPath = (map["review_invariants_path"] as? String) ?: d.reviewInvariantsPath,
+                tierModels = tierModels,
+                specialists = strList("specialists", d.specialists),
+                perRunTokenCap = (map["per_run_token_cap"] as? Number)?.toInt()
+            )
         }
 
         internal fun parseRoutingRules(agentMap: Map<*, *>?): List<RoutingRule> {
@@ -484,7 +519,9 @@ data class StageAgentConfig(
     val maxReviewAttempts: Int? = null,
     val agent: String? = null,
     val followUp: FollowUpConfig? = null,
-    val crossProjectFollowUp: CrossProjectFollowUpConfig? = null
+    val crossProjectFollowUp: CrossProjectFollowUpConfig? = null,
+    /** Review-quality knobs (Epics 18-23); null means "use built-in defaults". */
+    val review: com.flexsentlabs.koncerto.core.review.ReviewPolicy? = null
 )
 
 data class GitConfig(
