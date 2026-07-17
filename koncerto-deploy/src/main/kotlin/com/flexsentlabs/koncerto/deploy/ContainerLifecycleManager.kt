@@ -29,6 +29,14 @@ class ContainerLifecycleManager(
 ) {
     private val usedPorts = mutableSetOf<Int>()
 
+    /**
+     * Resolves the docker executable through the same test seam as [TargetProjectDeployer]
+     * (`testDockerOverride` / `KONCERTO_TEST_DOCKER`). Without it this class would always shell
+     * out to a real `docker` on PATH, so tests that inject a fake docker script silently had no
+     * effect here. Defaults to "docker", so production behavior is unchanged.
+     */
+    private fun dockerExe(): String = TargetProjectDeployer.dockerCmd().first()
+
     fun allocatePort(): Int {
         val occupied = getOccupiedPorts()
         val free = portRange.firstOrNull { it !in usedPorts && it !in occupied && isPortFree(it) }
@@ -40,7 +48,7 @@ class ContainerLifecycleManager(
 
     private fun getOccupiedPorts(): Set<Int> {
         return try {
-            val pb = ProcessBuilder("sh", "-c", "docker ps -a --format '{{.Ports}}' | grep -oE ':[0-9]+->' | grep -oE '[0-9]+'")
+            val pb = ProcessBuilder("sh", "-c", "${dockerExe()} ps -a --format '{{.Ports}}' | grep -oE ':[0-9]+->' | grep -oE '[0-9]+'")
                 .redirectErrorStream(true)
             val p = pb.start()
             val out = p.inputStream.bufferedReader().readText()
@@ -67,7 +75,7 @@ class ContainerLifecycleManager(
     fun buildImage(projectPath: Path, dockerfilePath: Path, tag: String): Result<Unit> {
         return try {
             val pb = ProcessBuilder(
-                "docker", "build", "-f", dockerfilePath.toString(),
+                dockerExe(), "build", "-f", dockerfilePath.toString(),
                 "-t", tag, projectPath.toString()
             ).redirectErrorStream(true)
             val p = pb.start()
@@ -121,7 +129,7 @@ class ContainerLifecycleManager(
     ): List<String> {
         val envArgs = envVars.flatMap { (k, v) -> listOf("-e", "$k=$v") }
         return listOf(
-            "docker", "run", "-d",
+            dockerExe(), "run", "-d",
             "--name", containerName,
             "--label", "${KoncertoDockerLabels.MANAGED_BY}=${KoncertoDockerLabels.MANAGED_VALUE}",
             "--network", network,
@@ -166,7 +174,7 @@ class ContainerLifecycleManager(
         while (System.currentTimeMillis() < deadline) {
             try {
                 val pb = ProcessBuilder(
-                    "docker", "inspect", containerId,
+                    dockerExe(), "inspect", containerId,
                     "--format", "{{.State.Status}}"
                 ).redirectErrorStream(true)
                 val p = pb.start()
@@ -184,7 +192,7 @@ class ContainerLifecycleManager(
 
     fun captureLogs(containerId: String): String {
         return try {
-            val pb = ProcessBuilder("docker", "logs", containerId).redirectErrorStream(true)
+            val pb = ProcessBuilder(dockerExe(), "logs", containerId).redirectErrorStream(true)
             val p = pb.start()
             val logs = p.inputStream.bufferedReader().readText()
             p.waitFor(5, TimeUnit.SECONDS)
@@ -194,14 +202,14 @@ class ContainerLifecycleManager(
 
     fun stopAndRemove(containerId: String) {
         try {
-            ProcessBuilder("docker", "rm", "-f", containerId).start().waitFor(10, TimeUnit.SECONDS)
+            ProcessBuilder(dockerExe(), "rm", "-f", containerId).start().waitFor(10, TimeUnit.SECONDS)
             logger.info("docker_container_removed", mapOf("id" to (containerId as Any?)))
         } catch (_: Exception) {}
     }
 
     /** Builds the `docker exec` argv that runs `command` inside `containerId` via a shell. */
     internal fun buildExecCommand(containerId: String, command: String): List<String> {
-        return listOf("docker", "exec", containerId, "sh", "-c", command)
+        return listOf(dockerExe(), "exec", containerId, "sh", "-c", command)
     }
 
     /**
