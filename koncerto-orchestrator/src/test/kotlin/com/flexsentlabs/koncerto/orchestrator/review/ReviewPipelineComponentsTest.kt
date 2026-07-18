@@ -270,6 +270,125 @@ class ReviewPipelineComponentsTest {
     }
 
     @Test
+    fun `context builder includes neighbouring source files`() {
+        val ws = Files.createTempDirectory("ctx-neighbors-")
+        Files.createDirectories(ws.resolve("src"))
+        Files.writeString(ws.resolve("src/Changed.kt"), "class Changed")
+        Files.writeString(ws.resolve("src/Neighbor.kt"), "class Neighbor { val x = 1 }")
+        Files.writeString(ws.resolve("src/Helper.kt"), "class Helper")
+        val pack = ReviewContextBuilder().build(
+            workspacePath = ws,
+            issueTitle = "T",
+            issueDescription = null,
+            acceptanceCriteria = null,
+            prBody = null,
+            changedFiles = listOf("src/Changed.kt"),
+            policy = ReviewPolicy.DEFAULT
+        )
+        assertThat(pack.composition.containsKey("neighbors")).isTrue()
+        assertThat(pack.text.contains("Neighbor.kt") || pack.text.contains("Helper.kt")).isTrue()
+        ws.toFile().deleteRecursively()
+    }
+
+    // ---- ReviewTelemetryRecorder.readParseResult (companion) ----
+
+    @Test
+    fun `readParseResult reads the runtime handoff file`() {
+        val ws = Files.createTempDirectory("parse-handoff-")
+        val json = """{"verdictPass":false,"findings":[{"seq":1,"category":"security","severity":"critical","description":"x"}],"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15,"durationMs":0,"isError":false},"promptVersion":"2.0","parseStatusName":"OK","humanText":"h"}"""
+        Files.writeString(ws.resolve(".review-findings.json"), json)
+        val parsed = ReviewTelemetryRecorder.readParseResult(ws)
+        assertThat(parsed).isNotNull()
+        assertThat(parsed!!.findings.size).isEqualTo(1)
+        assertThat(parsed.promptVersion).isEqualTo("2.0")
+        ws.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `readParseResult returns null when the file is absent or garbage`() {
+        val ws = Files.createTempDirectory("parse-handoff-missing-")
+        assertThat(ReviewTelemetryRecorder.readParseResult(ws)).isNull()
+        Files.writeString(ws.resolve(".review-findings.json"), "{ not valid json")
+        assertThat(ReviewTelemetryRecorder.readParseResult(ws)).isNull()
+        ws.toFile().deleteRecursively()
+    }
+
+    // ---- FindingOutcomeTracker edge paths ----
+
+    @Test
+    fun `outcome tracker no-ops without metrics or files`() = runBlocking<Unit> {
+        val ws = Files.createTempDirectory("tracker-empty-")
+        // Null metrics: both operations are safe no-ops returning 0.
+        val nullTracker = FindingOutcomeTracker(null)
+        assertThat(nullTracker.applyFixReport(ws)).isEqualTo(0)
+        assertThat(nullTracker.applyRereview("issue-x", emptyList())).isEqualTo(0)
+        // Metrics present but no fix-report file → 0 applied.
+        assertThat(FindingOutcomeTracker(FakeReviewMetrics()).applyFixReport(ws)).isEqualTo(0)
+        ws.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `fix report ignores unknown dispositions`() = runBlocking<Unit> {
+        val metrics = FakeReviewMetrics()
+        val ws = Files.createTempDirectory("tracker-bad-disp-")
+        Files.writeString(ws.resolve(".review-fix-report.json"),
+            """[{"findingId":"r-1","disposition":"banana"}]""")
+        assertThat(FindingOutcomeTracker(metrics).applyFixReport(ws)).isEqualTo(0)
+        ws.toFile().deleteRecursively()
+    }
+
+    @Test
+    fun `fix report normalizes every disposition alias`() = runBlocking<Unit> {
+        val metrics = FakeReviewMetrics()
+        val recorder = ReviewTelemetryRecorder(metrics, idGen = { "run-1" })
+        recorder.record(ctx(), ReviewParseResult(false, (1..5).map { finding(it, Severity.CRITICAL, 0.9) }), ReviewPolicy.DEFAULT)
+        val ws = Files.createTempDirectory("tracker-aliases-")
+        Files.writeString(ws.resolve(".review-fix-report.json"), """[
+            {"findingId":"run-1-1","disposition":"resolved"},
+            {"findingId":"run-1-2","disposition":"skip"},
+            {"findingId":"run-1-3","disposition":"invalid"},
+            {"findingId":"run-1-4","disposition":"discussed"},
+            {"findingId":"run-1-5","disposition":"DONE"}
+        ]""")
+        assertThat(FindingOutcomeTracker(metrics).applyFixReport(ws)).isEqualTo(5)
+        assertThat(metrics.recordedFindings.first { it.findingId == "run-1-2" }.outcome).isEqualTo("wont_fix")
+        assertThat(metrics.recordedFindings.first { it.findingId == "run-1-3" }.outcome).isEqualTo("not_a_bug")
+        assertThat(metrics.recordedFindings.first { it.findingId == "run-1-4" }.outcome).isEqualTo("discussed")
+        ws.toFile().deleteRecursively()
+    }
+
+    // ---- SpecialistReviewCoordinator empty ----
+
+    @Test
+    fun `specialist coordinator with no specialists returns empty`() = runBlocking<Unit> {
+        val result = SpecialistReviewCoordinator { null }.run(emptyList())
+        assertThat(result.specialistCount).isEqualTo(0)
+        assertThat(result.findings.size).isEqualTo(0)
+        assertThat(result.verdictPass).isTrue()
+    }
+
+    // ---- ReviewDiffInspector against a real git repo (default runner) ----
+
+    @Test
+    fun `diff inspector reads a real repo via the default runner`() {
+        val repo = Files.createTempDirectory("diff-real-").toRealPath()
+        fun git(vararg a: String) {
+            val p = ProcessBuilder(listOf("git") + a).directory(repo.toFile()).redirectErrorStream(true).start()
+            p.inputStream.readBytes(); check(p.waitFor() == 0)
+        }
+        git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+        git("config", "commit.gpgsign", "false")
+        Files.writeString(repo.resolve("a.txt"), "one\n"); git("add", "-A"); git("commit", "-q", "-m", "init", "--no-verify")
+        Files.writeString(repo.resolve("a.txt"), "one\ntwo\n"); git("add", "-A"); git("commit", "-q", "-m", "more", "--no-verify")
+
+        val diff = ReviewDiffInspector().inspect(repo)
+        assertThat(diff.changedFiles).isEqualTo(listOf("a.txt"))
+        assertThat(diff.totalLinesChanged).isGreaterThan(0)
+        assertThat(diff.commitSha).isNotNull()
+        repo.toFile().deleteRecursively()
+    }
+
+    @Test
     fun `context builder truncates to budget`() {
         val ws = Files.createTempDirectory("ctx2-")
         val builder = ReviewContextBuilder()

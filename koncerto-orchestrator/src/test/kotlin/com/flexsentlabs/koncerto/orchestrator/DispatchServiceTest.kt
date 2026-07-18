@@ -588,6 +588,32 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `advisory review mode transitions to on_complete_state ignoring on_failure_state`() {
+        // Epic 21: in advisory mode a failing verdict never routes to on_failure_state — the
+        // issue always advances to on_complete_state (findings are still published/persisted).
+        val trackingLinear = TrackingLinearClient()
+        trackingLinear.addIssue(issue("a", "ENG-1", "In Review"))
+        val stages = mapOf(
+            "in review" to StageAgentConfig(
+                prompt = null, model = null, effort = null, maxConcurrent = null,
+                agentKind = null, command = null, onCompleteState = "Done",
+                onFailureState = "Needs Fix", maxReviewAttempts = 3,
+                review = com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+                    mode = com.flexsentlabs.koncerto.core.review.ReviewMode.ADVISORY
+                )
+            )
+        )
+        val svc = createService(
+            projectConfig = config(stages = stages),
+            linear = trackingLinear,
+            candidates = listOf(issue("a", "ENG-1", "In Review"))
+        )
+        val stage = svc.projectConfig.agent.stages["in review"]
+        runBlocking { svc.transitionOnComplete(issue("a", "ENG-1", "In Review"), stage) }
+        assertThat(trackingLinear.transitionedStateId).isEqualTo("done-id")
+    }
+
+    @Test
     fun `onCompleteState without stage does not transition`() {
         val state = RuntimeState()
         val trackingLinear = TrackingLinearClient()
