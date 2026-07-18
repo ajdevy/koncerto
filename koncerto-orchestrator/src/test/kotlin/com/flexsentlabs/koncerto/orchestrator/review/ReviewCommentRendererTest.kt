@@ -49,10 +49,21 @@ class ReviewCommentRendererTest {
     }
 
     @Test
-    fun `severity icons distinguish blockers from suggestions`() {
+    fun `severity icons distinguish all three levels`() {
         val critical = ReviewCommentRenderer.renderFinding("r", finding(1, Severity.CRITICAL))
-        val suggestion = ReviewCommentRenderer.renderFinding("r", finding(2, Severity.SUGGESTION))
+        val warning = ReviewCommentRenderer.renderFinding("r", finding(2, Severity.WARNING))
+        val suggestion = ReviewCommentRenderer.renderFinding("r", finding(3, Severity.SUGGESTION))
         assertThat(critical.contains("🔴")).isTrue()
+        assertThat(warning.contains("🟡")).isTrue()
         assertThat(suggestion.contains("🔵")).isTrue()
+    }
+
+    @Test
+    fun `finding without expected action or evidence still renders`() {
+        val bare = ReviewFinding(1, "correctness", Severity.WARNING, null, "A.kt", 5, "just a description")
+        val body = ReviewCommentRenderer.renderFinding("run-9", bare)
+        assertThat(body.contains("just a description")).isTrue()
+        assertThat(body.contains("**Fix:**")).isEqualTo(false)
+        assertThat(body.contains("Evidence:")).isEqualTo(false)
     }
 }

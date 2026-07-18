@@ -85,6 +85,15 @@ EXCLUDED_CLASS_PATTERNS = (
     "DockerRuntime",
     "DefaultAgentRunner$",
     "Beans$",
+    # Review-quality @Serializable enums (wire-mapping types; synthetic serializer/`values`
+    # boilerplate can't be unit-covered — same treatment as DemoRecordingTrigger/SubtaskStatus).
+    # fromWire() logic is still exercised by ReviewTypesTest; it is simply not coverage-counted.
+    # "FindingOutcome" is intentionally NOT a substring pattern here so it does not swallow the
+    # logic class FindingOutcomeTracker — it is handled by exact match in the DTO set below.
+    "Severity",
+    "RiskTier",
+    "ReviewMode",
+    "HumanLabel",
 )
 
 METHOD_EXCLUDED_PATTERNS = ("$lambda$", "$default", "invokeSuspend", "getTest", "setTest")
@@ -97,6 +106,15 @@ _SERIALIZATION_DTO_CLASSES = frozenset({
     "LimitPauseConfig", "CrossProjectFollowUpConfig", "RateLimitsConfig", "FallbackProviderConfig",
     "AgentProviderConfig", "RateLimiterConfig", "CircuitBreakerConfig", "FallbackProvider",
     "JsonRpcError",
+    # Review-quality @Serializable data carriers + record DTOs. Like the config DTOs above,
+    # their generated serializer/`write$Self`/`<init>` boilerplate is not unit-coverable. The
+    # real behaviour (parsing, gating, rendering) lives in the algorithm classes, which ARE
+    # coverage-enforced. Companions are listed where they carry serializer synthetic.
+    "ReviewFinding", "ReviewFindingsPayload", "ReviewUsage", "ReviewUsage.Companion",
+    "ReviewParseResult", "ReviewParseResult.Companion", "FixDisposition", "FixDisposition.Companion",
+    "ReviewPolicy", "ReviewPolicy.Companion",
+    "FindingOutcome", "FindingOutcome.Companion",
+    "ReviewRunRecord", "ReviewFindingRecord", "ReviewBaseline",
 })
 
 
@@ -112,6 +130,9 @@ _INTEGRATION_CLASS_EXCLUSIONS = frozenset({
     "Beans",
     "TokenBucketRateLimiter",
     "RuntimeState",
+    # REST controller: thin request→repository delegation over the reactive stack, exactly
+    # like the already-excluded ApiV1Controller. Behaviour is covered by ReviewMetricsRepositoryTest.
+    "ReviewController",
 })
 
 
@@ -127,6 +148,10 @@ def is_excluded(class_name: str) -> bool:
     ):
         return True
     if class_name.startswith("AdminController."):
+        return True
+    if class_name.startswith("ReviewController$") or (
+        class_name.startswith("ReviewController.") and class_name != "ReviewController"
+    ):
         return True
     if class_name == "SqliteDemoTaskRepository" or class_name.endswith(".SqliteDemoTaskRepository"):
         return True

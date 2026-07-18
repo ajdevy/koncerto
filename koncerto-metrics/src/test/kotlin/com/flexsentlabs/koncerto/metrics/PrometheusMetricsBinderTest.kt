@@ -192,4 +192,44 @@ class PrometheusMetricsBinderTest {
             .tag("type", "total").gauge()
         assertThat(totalRuns).isNotNull()
     }
+
+    @Test
+    fun `review gauges are registered when a review metrics repository is supplied`() = runBlocking<Unit> {
+        // A recorded review with a high-evidence outcome so the derived rates are non-trivial.
+        val now = java.time.Instant.now().toString()
+        repo.recordRun(
+            ReviewRunRecord(
+                runId = "run-1", issueId = "i-1", issueIdentifier = "ABC-1", projectSlug = "proj",
+                attempt = 1, commitSha = "abc", prNumber = 1, model = "free", promptVersion = "2.0",
+                riskTier = "standard", reviewMode = "advisory", eligibility = "reviewed",
+                parseStatus = "ok", verdict = "fail", findingsTotal = 1, findingsPublished = 1,
+                inputTokens = 100, outputTokens = 50, durationMs = 200, contextPackJson = null, createdAt = now
+            )
+        )
+        repo.recordFindings(listOf(
+            ReviewFindingRecord(
+                findingId = "run-1-1", runId = "run-1", seq = 1, specialist = null, category = "security",
+                severity = "critical", confidence = 0.9, file = "A.kt", line = 1, description = "d",
+                expectedAction = "fix", evidence = "e", published = true, dropReason = null,
+                outcome = "fixed", outcomeSource = "fix_agent", humanLabel = null, issueId = "i-1", updatedAt = now
+            )
+        ))
+
+        val binder = PrometheusMetricsBinder(repo, reviewMetricsRepository = repo)
+        binder.bindTo(registry)
+
+        assertThat(registry.find("koncerto_review_runs_total").tag("eligibility", "all").gauge()!!.value())
+            .isEqualTo(1.0)
+        assertThat(registry.find("koncerto_review_findings_total").tag("published", "true").gauge()!!.value())
+            .isEqualTo(1.0)
+        assertThat(registry.find("koncerto_review_high_evidence_rate").gauge()!!.value()).isEqualTo(1.0)
+        assertThat(registry.find("koncerto_review_tokens_total").gauge()).isNotNull()
+        assertThat(registry.find("koncerto_review_tokens_per_useful_finding").gauge()).isNotNull()
+    }
+
+    @Test
+    fun `review gauges are absent when no review repository is supplied`() {
+        PrometheusMetricsBinder(repo).bindTo(registry)
+        assertThat(registry.find("koncerto_review_runs_total").gauge()).isNull()
+    }
 }

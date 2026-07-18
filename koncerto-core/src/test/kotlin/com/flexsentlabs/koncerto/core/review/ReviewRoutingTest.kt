@@ -29,6 +29,19 @@ class ReviewRoutingTest {
         assertThat(Glob.matches("src/*.kt", "src/sub/A.kt")).isFalse()
     }
 
+    @Test
+    fun `question mark matches exactly one non-slash char`() {
+        assertThat(Glob.matches("src/?.kt", "src/A.kt")).isTrue()
+        assertThat(Glob.matches("src/?.kt", "src/AB.kt")).isFalse()
+        assertThat(Glob.matches("src/?.kt", "src//.kt")).isFalse()
+    }
+
+    @Test
+    fun `bare double star matches across directories`() {
+        assertThat(Glob.matches("**", "any/deep/path.kt")).isTrue()
+        assertThat(Glob.matches("src/**", "src/a/b/c.kt")).isTrue()
+    }
+
     // ---- Eligibility ----
 
     @Test

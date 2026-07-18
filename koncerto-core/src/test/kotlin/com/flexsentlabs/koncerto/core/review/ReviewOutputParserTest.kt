@@ -60,6 +60,40 @@ class ReviewOutputParserTest {
     }
 
     @Test
+    fun `envelope uses text field and duration alias and error flag`() {
+        // A CLI shape that uses `text` instead of `result`, `duration` instead of `duration_ms`,
+        // and signals an error — exercises the alternate extraction branches.
+        val envelope = """
+            {"type":"result","text":"❌ FAIL — broke\n\n```review-findings\n{\"findings\":[]}\n```","usage":{"input_tokens":7,"output_tokens":3},"duration":4200,"is_error":true}
+        """.trimIndent()
+
+        val result = ReviewOutputParser.parse(envelope)
+
+        assertThat(result.usage.durationMs).isEqualTo(4200L)
+        assertThat(result.usage.isError).isTrue()
+        assertThat(result.usage.totalTokens).isEqualTo(10L)
+        assertThat(result.humanText.contains("broke")).isTrue()
+    }
+
+    @Test
+    fun `envelope with no result or text field falls back to the raw payload`() {
+        // A JSON object envelope carrying only usage — the model text isn't where we expect it,
+        // so the raw payload is used as the review text (and has no findings block → fallback).
+        val envelope = """{"type":"result","usage":{"input_tokens":1,"output_tokens":1}}"""
+        val result = ReviewOutputParser.parse(envelope)
+        assertThat(result.parseStatus).isEqualTo(ParseStatus.FALLBACK)
+        assertThat(result.usage.inputTokens).isEqualTo(1L)
+    }
+
+    @Test
+    fun `non-object json is treated as plain text`() {
+        // Input that starts with '{' but isn't a JSON object envelope falls through to raw text.
+        val result = ReviewOutputParser.parse("{ this is not json ❌ FAIL")
+        assertThat(result.parseStatus).isEqualTo(ParseStatus.FALLBACK)
+        assertThat(result.verdictPass).isFalse()
+    }
+
+    @Test
     fun `falls back to verdict string when no findings block`() {
         val text = "❌ FAIL — something broke and there is no JSON block here"
         val result = ReviewOutputParser.parse(text)

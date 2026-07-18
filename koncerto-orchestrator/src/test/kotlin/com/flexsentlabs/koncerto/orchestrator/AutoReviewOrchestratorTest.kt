@@ -1594,6 +1594,116 @@ class AutoReviewOrchestratorTest {
         check(p.waitFor() == 0) { "git ${args.joinToString(" ")} failed" }
     }
 
+    // ---- Review-quality method coverage (Epics 18-23) ----
+
+    private fun initGitRepo(dir: Path) {
+        runGit(dir, "init", "-q", "-b", "main")
+        runGit(dir, "config", "user.email", "t@t")
+        runGit(dir, "config", "user.name", "t")
+        runGit(dir, "config", "commit.gpgsign", "false")
+    }
+
+    private fun reviewMetricsOrchestrator(
+        workspaceDir: Path,
+        metrics: com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics,
+        stage: StageAgentConfig = reviewStage(),
+        runner: AgentRunner = fakeRunner(),
+        gh: GhProcessRunner = { _, _ -> GhProcessResult(0, "PR body from gh") }
+    ) = AutoReviewOrchestrator(
+        agentRunner = runner,
+        workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+        linearClient = fakeTracker(),
+        projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = workspaceDir.toString()),
+        projectSlug = "p",
+        runtimeState = RuntimeState(),
+        notifier = noopNotifier(),
+        logger = noopLogger(),
+        ghProcessRunner = gh,
+        reviewMetrics = metrics
+    )
+
+    @Test
+    fun `records review telemetry and gates findings when metrics supplied`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        Files.writeString(
+            issueDir.resolve(".review-findings.json"),
+            """{"verdictPass":true,"findings":[{"seq":1,"category":"security","severity":"warning","confidence":0.8,"description":"real"},{"seq":2,"category":"conventions","severity":"suggestion","confidence":0.2,"description":"nit"}],"usage":{"inputTokens":100,"outputTokens":50,"totalTokens":150,"durationMs":10,"isError":false},"promptVersion":"2.0","parseStatusName":"OK","humanText":"ok"}"""
+        )
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+
+        reviewMetricsOrchestrator(ws, metrics).onCodingComplete(issue())
+
+        assertThat(metrics.recordedRuns.size).isEqualTo(1)
+        assertThat(metrics.recordedRuns.first().verdict).isEqualTo("pass")
+        // Gate drops the 0.2-confidence suggestion, publishes the 0.8 warning.
+        assertThat(metrics.recordedRuns.first().findingsPublished).isEqualTo(1)
+        assertThat(metrics.recordedFindings.size).isEqualTo(2)
+    }
+
+    @Test
+    fun `skips review for artifact-only diffs and records the skip`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        initGitRepo(issueDir)
+        Files.writeString(issueDir.resolve("README.md"), "x\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "init", "--no-verify")
+        Files.createDirectories(issueDir.resolve(".koncerto"))
+        Files.writeString(issueDir.resolve(".koncerto/state.jsonl"), "{}\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "state", "--no-verify")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+
+        val decision = reviewMetricsOrchestrator(ws, metrics).onCodingComplete(issue())
+
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+        assertThat(metrics.recordedRuns.single().eligibility).isEqualTo("skipped_artifact_only")
+        assertThat(metrics.recordedRuns.single().verdict).isEqualTo("skipped")
+    }
+
+    @Test
+    fun `runs specialist reviewers and records a merged critical-tier review`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        initGitRepo(issueDir)
+        Files.writeString(issueDir.resolve("README.md"), "x\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "init", "--no-verify")
+        Files.createDirectories(issueDir.resolve("src"))
+        Files.writeString(issueDir.resolve("src/Auth.kt"), "class Auth\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "auth", "--no-verify")
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+
+        val policy = com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+            criticalGlobs = listOf("**/Auth.kt"),
+            specialists = listOf("prompts/review-security.md", "prompts/review-reliability.md")
+        )
+        // Each specialist invocation writes its own findings handoff, as the real runtime would.
+        val writingRunner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                Files.writeString(
+                    issueDir.resolve(".review-findings.json"),
+                    """{"verdictPass":true,"findings":[{"seq":1,"category":"security","severity":"warning","confidence":0.9,"file":"src/Auth.kt","line":1,"description":"d"}],"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15,"durationMs":1,"isError":false},"parseStatusName":"OK","humanText":"h"}"""
+                )
+                return Result.Success(Unit)
+            }
+        }
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+
+        reviewMetricsOrchestrator(ws, metrics, stage = reviewStage().copy(review = policy), runner = writingRunner)
+            .onCodingComplete(issue())
+
+        val run = metrics.recordedRuns.single()
+        assertThat(run.riskTier).isEqualTo("critical")
+        assertThat(run.promptVersion?.startsWith("specialists")).isEqualTo(true)
+    }
+
     @Test
     fun `resolveRepoFullName resolves origin even when a branch section follows it`(@TempDir tmpDir: Path) = runTest {
         // Real clones put a `[branch ...]` section after `[remote "origin"]` once a branch is
