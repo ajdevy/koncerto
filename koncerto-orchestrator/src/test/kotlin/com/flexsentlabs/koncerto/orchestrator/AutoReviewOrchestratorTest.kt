@@ -3256,4 +3256,114 @@ class AutoReviewOrchestratorTest {
             clearStaging("issue-1", "T-1")
         }
     }
+
+    /** Makes the workspace look like an Android application repo to AndroidProjectDetector. */
+    private fun makeAndroidApp(workspaceDir: Path) {
+        val appDir = workspaceDir.resolve("T-1/app").also { Files.createDirectories(it) }
+        Files.writeString(
+            appDir.resolve("build.gradle.kts"),
+            """plugins { id("com.android.application") }
+               android { defaultConfig { applicationId = "com.example.demoapp" } }"""
+        )
+    }
+
+    private fun androidScenarioGenerator(succeeds: Boolean = true): Pair<DemoScenarioGenerator, () -> String?> {
+        var lastPrompt: String? = null
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { command, _, _ ->
+                val prompt = command.last()
+                if (prompt.contains("android_scenario")) {
+                    lastPrompt = prompt
+                    if (succeeds) {
+                        "android_scenario:\n  appId: com.example.demoapp\n  steps:\n    - action: launch\n"
+                    } else {
+                        "the model produced nothing usable"
+                    }
+                } else {
+                    validScenarioYaml
+                }
+            }
+        )
+        return gen to { lastPrompt }
+    }
+
+    @Test
+    fun `an Android repository stages an Android scenario and clears the other kinds`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        makeAndroidApp(workspaceDir)
+        val (gen, lastPrompt) = androidScenarioGenerator()
+        val staleApi = java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml")
+        try {
+            staleApi.parentFile.mkdirs()
+            staleApi.writeText("api_scenario:\n  steps: []\n")
+
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> null },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.mp4" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-android-scenario.yaml").exists()).isEqualTo(true)
+            // The other kinds must go, or the reader's precedence would override today's verdict.
+            assertThat(staleApi.exists()).isEqualTo(false)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-scenario.yaml").exists()).isEqualTo(false)
+            // The detected application id is pinned into the prompt.
+            assertThat(lastPrompt()!!.contains("com.example.demoapp")).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+            java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-android-scenario.yaml").delete()
+            java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/T-1-android-scenario.yaml").delete()
+        }
+    }
+
+    @Test
+    fun `a failed Android generation leaves the browser scenario in place`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        makeAndroidApp(workspaceDir)
+        val (gen, _) = androidScenarioGenerator(succeeds = false)
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> null },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-android-scenario.yaml").exists()).isEqualTo(false)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-scenario.yaml").exists()).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
 }

@@ -376,7 +376,23 @@ class AutoReviewOrchestrator(
                 .getOrNull()
         } else null
 
-        val verdict = DemoPlatformDecision.decide(domInventory, openApiInventory)
+        // An Android app is detected from the repository, not the deployment — it has no URL to
+        // crawl or probe.
+        val androidApp = workspace?.let { AndroidProjectDetector.isAndroidApp(it.path) } == true
+        val verdict = DemoPlatformDecision.decide(domInventory, openApiInventory, androidApp)
+
+        val androidScenarioPath = if (verdict.kind == DemoPlatformKind.ANDROID && workspace != null && generator0 != null) {
+            runCatching {
+                generator0.generateAndroid(
+                    issue, workspace,
+                    AndroidProjectDetector.applicationId(workspace.path),
+                    credentialKeys
+                )
+            }.onFailure { e -> logger.warn("demo_scenario_android_failed", mapOf(
+                "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
+                .getOrNull()
+        } else null
+
         val apiScenarioPath = if (verdict.kind == DemoPlatformKind.API && workspace != null && generator0 != null) {
             runCatching { generator0.generateApi(issue, workspace, credentialKeys, openApiInventory) }
                 .onFailure { e -> logger.warn("demo_scenario_api_failed", mapOf(
@@ -385,7 +401,19 @@ class AutoReviewOrchestrator(
         } else null
 
         var apiDemoUnavailable = false
-        if (apiScenarioPath != null) {
+        if (androidScenarioPath != null) {
+            // Same contract as the API path: the staged kind is what routes the recorder, so the
+            // other kinds go only once this one is safely written.
+            generator0?.deleteBrowserScenario(issue)
+            generator0?.deleteApiScenario(issue)
+            scenarioPath = androidScenarioPath
+            logger.info("demo_scenario_android", mapOf("issue_id" to issue.id, "reason" to verdict.reason))
+            traceReviewStep(workspace, issue, "demo_scenario", "android", mapOf("reason" to verdict.reason))
+        } else if (verdict.kind == DemoPlatformKind.ANDROID) {
+            generator0?.deleteAndroidScenario(issue)
+            logger.warn("demo_scenario_android_exhausted", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "demo_scenario", "android_exhausted")
+        } else if (apiScenarioPath != null) {
             // The recorder chooses its platform from which scenario kind is staged, so clearing the
             // browser scenario is what actually routes this ticket to the API recorder. Only done
             // once the API scenario is safely written — never leaving the ticket with neither.
@@ -407,6 +435,7 @@ class AutoReviewOrchestrator(
             // recorder checks for one first and would keep routing this issue to the API recorder
             // forever, silently overriding today's verdict with last pass's leftover state.
             generator0.deleteApiScenario(issue)
+            generator0.deleteAndroidScenario(issue)
             val grounded = runCatching {
                 generator0.generate(issue, workspace, credentialKeys, domInventory)
             }.getOrNull()
@@ -417,6 +446,7 @@ class AutoReviewOrchestrator(
             }
         } else if (recordingUrl != null && crawler != null) {
             generator0?.deleteApiScenario(issue)
+            generator0?.deleteAndroidScenario(issue)
             logger.info("dom_inventory_empty", mapOf("issue_id" to issue.id))
         }
 

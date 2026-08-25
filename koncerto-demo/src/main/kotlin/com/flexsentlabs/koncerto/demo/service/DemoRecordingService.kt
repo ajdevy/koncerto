@@ -12,6 +12,7 @@ import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
 import com.flexsentlabs.koncerto.demo.recorder.DemoRecorder
 import com.flexsentlabs.koncerto.demo.recorder.RecorderFactory
+import com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles
 import com.flexsentlabs.koncerto.demo.report.AiTimelineGenerator
 import com.flexsentlabs.koncerto.demo.report.DemoReporter
 import com.flexsentlabs.koncerto.demo.report.DemoReportGenerator
@@ -505,14 +506,14 @@ class DemoRecordingService(
     }
 
     private fun resolveScenarioPath(task: DemoTask): String {
-        val suffix = if (task.platform == DemoPlatform.API) {
-            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.API_SUFFIX
-        } else {
-            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.BROWSER_SUFFIX
+        val suffix = when (task.platform) {
+            DemoPlatform.API -> DemoScenarioFiles.API_SUFFIX
+            DemoPlatform.ADB -> DemoScenarioFiles.ANDROID_SUFFIX
+            else -> DemoScenarioFiles.BROWSER_SUFFIX
         }
         // Both keys are tried: the orchestrator stages under the issue id, while manually triggered
         // runs and older staged files use the human identifier.
-        return com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
+        return DemoScenarioFiles.findExisting(
             config.tempDir, listOf(task.issueId, task.issueIdentifier), suffix
         )?.absolutePath.orEmpty()
     }
@@ -521,9 +522,9 @@ class DemoRecordingService(
     // KEY=VALUE file keyed by issue id (fallback identifier); the recorder injects them into the
     // recording container's env so a scenario `resolve` step can use them.
     private fun resolveCredentialsPath(task: DemoTask): String =
-        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
+        DemoScenarioFiles.findExisting(
             config.tempDir, listOf(task.issueId, task.issueIdentifier),
-            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.CREDENTIALS_SUFFIX
+            DemoScenarioFiles.CREDENTIALS_SUFFIX
         )?.absolutePath.orEmpty()
 
     /**
@@ -535,7 +536,10 @@ class DemoRecordingService(
      */
     private suspend fun resolvePlatform(issueId: String, issueIdentifier: String): DemoPlatform? {
         val available = recorderFactory.availablePlatforms()
-        if (available.contains(DemoPlatform.API) && hasApiScenario(issueId, issueIdentifier)) {
+        if (available.contains(DemoPlatform.ADB) && hasStagedScenario(issueId, issueIdentifier, DemoScenarioFiles.ANDROID_SUFFIX)) {
+            return DemoPlatform.ADB
+        }
+        if (available.contains(DemoPlatform.API) && hasStagedScenario(issueId, issueIdentifier, DemoScenarioFiles.API_SUFFIX)) {
             return DemoPlatform.API
         }
         val configured = config.defaultPlatform
@@ -549,11 +553,8 @@ class DemoRecordingService(
             ?: available.firstOrNull()
     }
 
-    private fun hasApiScenario(issueId: String, issueIdentifier: String): Boolean =
-        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
-            config.tempDir, listOf(issueId, issueIdentifier),
-            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.API_SUFFIX
-        ) != null
+    private fun hasStagedScenario(issueId: String, issueIdentifier: String, suffix: String): Boolean =
+        DemoScenarioFiles.findExisting(config.tempDir, listOf(issueId, issueIdentifier), suffix) != null
 
     private fun traceDemoStep(
         task: DemoTask,

@@ -685,6 +685,110 @@ class DemoScenarioGeneratorTest {
         generator().deleteApiScenario(issue)
     }
 
+    private val validAndroidScenarioOutput = """
+        android_scenario:
+          appId: com.example.app
+          description: "Sign in"
+          steps:
+            - action: launch
+            - action: tap
+              text: "Sign in"
+    """.trimIndent()
+
+    @Test
+    fun `generateAndroid stages under both keys and pins the detected application id`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-android", identifier = "T-ANDROID")
+        var seenPrompt: String? = null
+        val gen = generatorWithRunner { command, _, _ -> seenPrompt = command.last(); validAndroidScenarioOutput }
+        try {
+            val path = gen.generateAndroid(issue, workspace, applicationId = "com.example.demoapp")
+
+            assertThat(path).isNotNull()
+            assertThat(path!!.endsWith("issue-android-android-scenario.yaml")).isEqualTo(true)
+            assertThat(java.io.File("/tmp/koncerto-demo/T-ANDROID-android-scenario.yaml").exists()).isEqualTo(true)
+            // A wrong appId is the one error Maestro cannot recover from, so it is injected rather
+            // than left to the model.
+            assertThat(seenPrompt!!.contains("com.example.demoapp")).isEqualTo(true)
+            assertThat(seenPrompt!!.contains("do not infer another one")).isEqualTo(true)
+        } finally {
+            gen.deleteAndroidScenario(issue)
+        }
+    }
+
+    @Test
+    fun `generateAndroid rejects a block with no appId or nothing to do`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-android-bad", identifier = "T-ANDROIDBAD")
+
+        assertThat(generatorWithRunner { _, _, _ -> "android_scenario:\n  steps:\n    - action: launch\n" }
+            .generateAndroid(issue, workspace)).isNull()
+        assertThat(generatorWithRunner { _, _, _ -> "android_scenario:\n  appId: com.x\n  steps:\n    - action: wait\n" }
+            .generateAndroid(issue, workspace)).isNull()
+        assertThat(generatorWithRunner { _, _, _ -> null }.generateAndroid(issue, workspace)).isNull()
+    }
+
+    @Test
+    fun `carriesAndroidStep needs an appId and a non-wait action`() {
+        assertThat(generator().carriesAndroidStep(validAndroidScenarioOutput)).isEqualTo(true)
+        assertThat(generator().carriesAndroidStep("android_scenario:\n  appId:\n  steps:\n    - action: tap\n")).isEqualTo(false)
+        assertThat(generator().carriesAndroidStep("android_scenario:\n  appId: com.x\n  steps:\n    - action: wait\n")).isEqualTo(false)
+    }
+
+    @Test
+    fun `buildAndroidPrompt omits optional sections when nothing is available`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val bare = generator().buildAndroidPrompt(apiIssue(), workspace)
+        assertThat(bare.contains("Application id")).isEqualTo(false)
+        assertThat(bare.contains("Available test credentials")).isEqualTo(false)
+        assertThat(bare.contains("Generate the android_scenario YAML now.")).isEqualTo(true)
+
+        val withCreds = generator().buildAndroidPrompt(apiIssue(), workspace, null, listOf("TEST_LOGIN"))
+        assertThat(withCreds.contains("- TEST_LOGIN")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildAndroidPrompt includes the diff when the workspace has one`(@TempDir tmpDir: Path) {
+        initGitRepoWithOriginMain(tmpDir, "id=\"sign-in-button\"")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val prompt = generator().buildAndroidPrompt(apiIssue(), workspace)
+
+        assertThat(prompt.contains("## PR Changes")).isEqualTo(true)
+        assertThat(prompt.contains("sign-in-button")).isEqualTo(true)
+    }
+
+    @Test
+    fun `deleteAndroidScenario removes both keys and tolerates absent files`() {
+        val issue = apiIssue(id = "issue-android-del", identifier = "T-ANDROIDDEL")
+        val byId = java.io.File("/tmp/koncerto-demo/issue-android-del-android-scenario.yaml")
+        val byIdent = java.io.File("/tmp/koncerto-demo/T-ANDROIDDEL-android-scenario.yaml")
+        byId.parentFile.mkdirs(); byId.writeText("android_scenario:"); byIdent.writeText("android_scenario:")
+
+        generator().deleteAndroidScenario(issue)
+
+        assertThat(byId.exists()).isEqualTo(false)
+        assertThat(byIdent.exists()).isEqualTo(false)
+        generator().deleteAndroidScenario(issue)
+    }
+
+    @Test
+    fun `buildAndroidPrompt reads its system prompt from koncerto's own workflow dir`(
+        @TempDir tmpDir: Path,
+        @TempDir workflowDir: Path
+    ) {
+        val promptsDir = workflowDir.resolve("prompts").also { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.writeString(promptsDir.resolve("demo-scenario-android.md"), "You are a mobile demo generator.")
+        val cache = com.flexsentlabs.koncerto.workflow.WorkflowCache()
+        cache.setWorkflowDir(workflowDir)
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val gen = DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), workflowCache = cache)
+
+        assertThat(gen.buildAndroidPrompt(apiIssue(), workspace).contains("You are a mobile demo generator.")).isEqualTo(true)
+    }
+
     @Test
     fun `the staging suffixes match the reader side convention`() {
         assertThat(DemoScenarioGenerator.BROWSER_SCENARIO_SUFFIX).isEqualTo("-scenario.yaml")

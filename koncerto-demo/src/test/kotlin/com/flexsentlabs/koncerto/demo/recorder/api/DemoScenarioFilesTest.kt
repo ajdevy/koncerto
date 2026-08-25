@@ -12,6 +12,7 @@ class DemoScenarioFilesTest {
         assert(DemoScenarioFiles.browserScenario("/tmp", "FLE-1").name == "FLE-1-scenario.yaml")
         assert(DemoScenarioFiles.apiScenario("/tmp", "FLE-1").name == "FLE-1-api-scenario.yaml")
         assert(DemoScenarioFiles.credentials("/tmp", "FLE-1").name == "FLE-1-credentials.env")
+        assert(DemoScenarioFiles.androidScenario("/tmp", "FLE-1").name == "FLE-1-android-scenario.yaml")
         assert(DemoScenarioFiles.apiScenario("/tmp", "FLE-1").parentFile.name == "tmp")
     }
 

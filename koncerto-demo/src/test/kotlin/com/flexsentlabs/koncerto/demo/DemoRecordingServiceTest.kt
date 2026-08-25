@@ -1669,6 +1669,46 @@ class DemoRecordingServiceTest {
         assert(result is DemoResult.Failure)
     }
 
+    @Test
+    fun `a staged Android scenario selects the ADB recorder`() = runTest {
+        val stagingDir = createTempDir(prefix = "android-scenario-staging-")
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles
+            .androidScenario(stagingDir.absolutePath, "issue-droid")
+            .writeText("android_scenario:\n  appId: com.x\n  steps: []\n")
+
+        val androidRecorder = object : DemoRecorder {
+            override val platform: DemoPlatform = DemoPlatform.ADB
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+            ): DemoResult<DemoRecorder.RecordingResult> {
+                outputFile.writeText("android demo video")
+                return DemoResult.Success(DemoRecorder.RecordingResult(
+                    outputFile, 1000L, outputFile.length(), config.outputFormat))
+            }
+        }
+        val svc = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = stagingDir.absolutePath,
+                targetUrl = "http://target:8080",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(FakeRecorder2(), androidRecorder)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = svc.requestRecording("issue-droid", "KONC-DROID", "test", null, DemoTrigger.MANUAL)
+
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ADB)
+        stagingDir.deleteRecursively()
+    }
+
     private suspend fun invokePerformIntegrityCheck(task: DemoTask, file: File): DemoResult<Unit> {
         val method = DemoRecordingService::class.java.getDeclaredMethod(
             "performIntegrityCheck",

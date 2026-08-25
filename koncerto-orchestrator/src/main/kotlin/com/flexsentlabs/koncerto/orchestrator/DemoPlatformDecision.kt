@@ -5,7 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 
 /** Which recorder a ticket's demo should use. */
-enum class DemoPlatformKind { BROWSER, API }
+enum class DemoPlatformKind { BROWSER, API, ANDROID }
 
 /** The chosen recorder plus why, so the choice is traceable in the logs rather than inferred. */
 data class DemoPlatformVerdict(val kind: DemoPlatformKind, val reason: String)
@@ -30,10 +30,21 @@ object DemoPlatformDecision {
     /** Inventory keys whose contents mean a human would have something to interact with. */
     private val SIGNAL_KEYS = listOf("testids", "fields", "buttons")
 
-    fun decide(domInventory: String?, openApiInventory: String?): DemoPlatformVerdict {
+    fun decide(
+        domInventory: String?,
+        openApiInventory: String?,
+        isAndroidApp: Boolean = false
+    ): DemoPlatformVerdict {
         val hasUi = hasUiSignal(domInventory)
         val hasApi = !openApiInventory.isNullOrBlank()
         return when {
+            // An Android app has no URL to crawl or probe, so the repository is the only
+            // evidence and it outranks both deployment signals — a web deployment of an
+            // Android repo, if one somehow exists, is not what the ticket is about.
+            isAndroidApp -> DemoPlatformVerdict(
+                DemoPlatformKind.ANDROID,
+                "the repository builds an Android application"
+            )
             hasUi -> DemoPlatformVerdict(
                 DemoPlatformKind.BROWSER,
                 "the deployed app exposes a browsable UI"

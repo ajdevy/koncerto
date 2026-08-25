@@ -100,6 +100,91 @@ class DemoScenarioGenerator(
         return saveApiScenario(issue, block)
     }
 
+    /**
+     * Generates an ANDROID demo scenario: the `android_scenario` YAML the mobile recorder turns into
+     * a Maestro flow and drives through the app on a device.
+     *
+     * [applicationId] is the id detected from the repository. It is injected into the prompt rather
+     * than left to the model, because a wrong appId is the one error Maestro cannot recover from —
+     * it fails before the first step and the recording shows nothing.
+     */
+    fun generateAndroid(
+        issue: Issue,
+        workspace: Workspace,
+        applicationId: String? = null,
+        credentialKeys: List<String> = emptyList()
+    ): String? {
+        val prompt = buildAndroidPrompt(issue, workspace, applicationId, credentialKeys)
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id, ANDROID_ROOT_KEY) ?: return null
+        if (!carriesAndroidStep(block)) {
+            logger.warn("demo_android_scenario_unusable", mapOf("issue_id" to issue.id))
+            return null
+        }
+        return saveAndroidScenario(issue, block)
+    }
+
+    internal fun buildAndroidPrompt(
+        issue: Issue,
+        workspace: Workspace,
+        applicationId: String? = null,
+        credentialKeys: List<String> = emptyList()
+    ): String {
+        val systemPromptFile = workflowCache?.workflowDir?.resolve("prompts/demo-scenario-android.md")?.toFile()
+            ?: workspace.path.resolve("prompts/demo-scenario-android.md").toFile()
+        val systemPrompt = if (systemPromptFile.exists()) systemPromptFile.readText() else ""
+        val diff = (runGitDiff(workspace.path.toFile()) ?: "").take(8000)
+
+        return buildString {
+            if (systemPrompt.isNotBlank()) {
+                appendLine(systemPrompt)
+                appendLine()
+            }
+            appendLine("## Issue")
+            appendLine("${issue.title}: ${issue.description ?: ""}")
+            appendLine()
+            if (!applicationId.isNullOrBlank()) {
+                appendLine("## Application id (detected from the repository)")
+                appendLine("Use exactly this as `appId` — do not infer another one:")
+                appendLine(applicationId)
+                appendLine()
+            }
+            if (diff.isNotBlank()) {
+                appendLine("## PR Changes")
+                appendLine("Author steps against the ids and visible strings introduced here. An element that")
+                appendLine("does not appear in this diff or in the app's existing screens will not be found.")
+                appendLine(diff)
+                appendLine()
+            }
+            if (credentialKeys.isNotEmpty()) {
+                appendLine("## Available test credentials")
+                appendLine("These credential KEYS are available to the recorder (values are injected at run time):")
+                credentialKeys.forEach { appendLine("- $it") }
+                appendLine("Never write a literal secret into the scenario.")
+                appendLine()
+            }
+            append("Generate the android_scenario YAML now.")
+        }
+    }
+
+    /** Whether an extracted `android_scenario` block has an appId and something to do. */
+    internal fun carriesAndroidStep(block: String): Boolean {
+        if (!block.lineSequence().any { it.trim().startsWith("appId:") && it.trim().length > "appId:".length }) return false
+        return block.lineSequence().any { line ->
+            val t = line.trim()
+            t.startsWith("- action:") && !t.endsWith("wait")
+        }
+    }
+
+    private fun saveAndroidScenario(issue: Issue, block: String): String? =
+        stageScenario(issue, block, ANDROID_SCENARIO_SUFFIX, "demo_android_scenario_saved")
+
+    /** Removes the Android scenario staged for this issue, mirroring the other two kinds. */
+    fun deleteAndroidScenario(issue: Issue) {
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.id}$ANDROID_SCENARIO_SUFFIX")) }
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}$ANDROID_SCENARIO_SUFFIX")) }
+    }
+
     /** Whether an extracted `api_scenario` block actually contains an executable request step. */
     internal fun carriesRequest(block: String): Boolean {
         if (!block.lineSequence().any { it.trim().startsWith("steps:") }) return false
@@ -174,24 +259,27 @@ class DemoScenarioGenerator(
      * caller treats null as "nothing staged" and keeps the browser scenario, which would otherwise
      * leave both kinds present and the two sides disagreeing about the platform.
      */
-    private fun saveApiScenario(issue: Issue, block: String): String? {
+    private fun saveApiScenario(issue: Issue, block: String): String? =
+        stageScenario(issue, block, API_SCENARIO_SUFFIX, "demo_api_scenario_saved")
+
+    private fun stageScenario(issue: Issue, block: String, suffix: String, event: String): String? {
         val scenarioDir = java.nio.file.Paths.get(SCENARIO_DIR)
         val written = mutableListOf<java.nio.file.Path>()
         return try {
             java.nio.file.Files.createDirectories(scenarioDir)
             listOf(issue.id, issue.identifier).forEach { key ->
-                val target = scenarioDir.resolve("$key$API_SCENARIO_SUFFIX")
+                val target = scenarioDir.resolve("$key$suffix")
                 writeAtomically(target, block)
                 written.add(target)
             }
-            logger.info("demo_api_scenario_saved", mapOf(
+            logger.info(event, mapOf(
                 "issue_id" to issue.id,
                 "issue_identifier" to issue.identifier
             ))
             written.first().toString()
         } catch (e: Exception) {
             written.forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
-            logger.warn("demo_api_scenario_save_failed", mapOf(
+            logger.warn("${event.removeSuffix("_saved")}_save_failed", mapOf(
                 "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
             null
         }
@@ -644,6 +732,8 @@ class DemoScenarioGenerator(
         const val BROWSER_SCENARIO_SUFFIX = "-scenario.yaml"
         const val API_SCENARIO_SUFFIX = "-api-scenario.yaml"
         private const val API_ROOT_KEY = "api_scenario"
+        private const val ANDROID_ROOT_KEY = "android_scenario"
+        const val ANDROID_SCENARIO_SUFFIX = "-android-scenario.yaml"
         // Mirrors the 8000-char diff cap: a service with hundreds of routes would otherwise
         // push the prompt past every free model's context and fail generation outright.
         private const val MAX_INVENTORY_CHARS = 8000

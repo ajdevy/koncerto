@@ -103,4 +103,27 @@ class DemoPlatformDecisionTest {
         assertThat(DemoPlatformDecision.hasUiSignal(null)).isFalse()
         assertThat(DemoPlatformDecision.hasUiSignal("  ")).isFalse()
     }
+
+    @Test
+    fun `an Android repository outranks both deployment signals`() {
+        // An Android app has no URL to crawl or probe, so the repository is the only evidence.
+        val verdict = DemoPlatformDecision.decide(uiInventory, apiInventory, isAndroidApp = true)
+
+        assertThat(verdict.kind).isEqualTo(DemoPlatformKind.ANDROID)
+        assertThat(verdict.reason.contains("Android application")).isTrue()
+    }
+
+    @Test
+    fun `Android wins with no inventories at all`() {
+        assertThat(DemoPlatformDecision.decide(null, null, isAndroidApp = true).kind)
+            .isEqualTo(DemoPlatformKind.ANDROID)
+    }
+
+    @Test
+    fun `a non-Android repository leaves the deployment split untouched`() {
+        assertThat(DemoPlatformDecision.decide(uiInventory, apiInventory, isAndroidApp = false).kind)
+            .isEqualTo(DemoPlatformKind.BROWSER)
+        assertThat(DemoPlatformDecision.decide(signallessInventory, apiInventory, isAndroidApp = false).kind)
+            .isEqualTo(DemoPlatformKind.API)
+    }
 }

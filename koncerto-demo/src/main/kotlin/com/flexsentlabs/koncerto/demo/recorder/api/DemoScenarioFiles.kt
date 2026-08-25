@@ -19,11 +19,14 @@ object DemoScenarioFiles {
 
     const val BROWSER_SUFFIX = "-scenario.yaml"
     const val API_SUFFIX = "-api-scenario.yaml"
+    const val ANDROID_SUFFIX = "-android-scenario.yaml"
     const val CREDENTIALS_SUFFIX = "-credentials.env"
 
     fun browserScenario(dir: String, key: String): File = File(dir, "$key$BROWSER_SUFFIX")
 
     fun apiScenario(dir: String, key: String): File = File(dir, "$key$API_SUFFIX")
+
+    fun androidScenario(dir: String, key: String): File = File(dir, "$key$ANDROID_SUFFIX")
 
     fun credentials(dir: String, key: String): File = File(dir, "$key$CREDENTIALS_SUFFIX")
 
