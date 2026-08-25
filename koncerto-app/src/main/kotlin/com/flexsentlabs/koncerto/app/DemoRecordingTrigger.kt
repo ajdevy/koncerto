@@ -6,7 +6,7 @@ import com.flexsentlabs.koncerto.demo.model.DemoResult
 import com.flexsentlabs.koncerto.demo.model.DemoTrigger
 import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
-import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AndroidRecorder
 import com.flexsentlabs.koncerto.demo.recorder.ApiRecorder
 import com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher
 import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
@@ -210,7 +210,7 @@ object DemoRecordingTrigger {
 
         val recorders: List<DemoRecorder> = listOf(
             PlaywrightRecorder(), ApiRecorder(OpenApiSpecFetcher(logger)),
-            AsciinemaRecorder(), AdbRecorder(), XcrunRecorder(), FfmpegRecorder()
+            AsciinemaRecorder(), AndroidRecorder(), XcrunRecorder(), FfmpegRecorder()
         )
         val recorderFactory = RecorderFactory(recorders)
         val taskRepository = SqliteDemoTaskRepository(dbPath)

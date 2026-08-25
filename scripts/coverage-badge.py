@@ -49,7 +49,7 @@ EXCLUDED_CLASS_PATTERNS = (
     "TenantId",
     "PlaywrightRecorder",
     "DomInventoryCrawler",
-    "AdbRecorder",
+    "AndroidRecorder",
     "ApiRecorder",
     "OpenApiSpecFetcher",
     "AsciinemaRecorder",

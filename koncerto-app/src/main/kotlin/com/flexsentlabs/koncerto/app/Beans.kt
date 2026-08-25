@@ -48,7 +48,7 @@ import com.flexsentlabs.koncerto.demo.config.DemoConfig
 import com.flexsentlabs.koncerto.demo.integration.DemoEventListener
 import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
-import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AndroidRecorder
 import com.flexsentlabs.koncerto.demo.recorder.ApiRecorder
 import com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher
 import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
@@ -485,7 +485,7 @@ class Beans {
     fun asciinemaRecorder(): DemoRecorder = AsciinemaRecorder()
 
     @Bean
-    fun adbRecorder(): DemoRecorder = AdbRecorder()
+    fun androidRecorder(): DemoRecorder = AndroidRecorder()
 
     @Bean
     fun xcrunRecorder(): DemoRecorder = XcrunRecorder()
