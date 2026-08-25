@@ -17,11 +17,20 @@ RUN apk add --no-cache \
     ttf-freefont \
     ffmpeg \
     xvfb \
-    python3
+    python3 \
+    curl \
+    xterm \
+    fontconfig \
+    ncurses-terminfo-base
 
 # python3 (stdlib: imaplib, smtplib, urllib, json) backs generic scenario `resolve` steps, where the
 # demo agent authors a one-line snippet to fetch an out-of-band value (e.g. an emailed login code)
 # using credentials injected into the container env. No protocol is hardcoded — the agent decides.
+#
+# curl + xterm back the API recorder: server-side demos run the ticket's real HTTP calls in a
+# terminal on the same Xvfb display ffmpeg is already grabbing, so an API ticket gets a video of the
+# contract being exercised instead of a screenshot of an idle page. fontconfig and the ncurses
+# terminfo base are what make xterm render text at all in a bare container.
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 RUN npm install -g playwright

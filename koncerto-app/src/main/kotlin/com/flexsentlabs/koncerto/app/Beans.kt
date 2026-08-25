@@ -49,6 +49,8 @@ import com.flexsentlabs.koncerto.demo.integration.DemoEventListener
 import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
 import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.ApiRecorder
+import com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher
 import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
 import com.flexsentlabs.koncerto.demo.recorder.DemoRecorder
 import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
@@ -467,6 +469,9 @@ class Beans {
 
     @Bean
     fun playwrightRecorder(): DemoRecorder = PlaywrightRecorder()
+
+    @Bean
+    fun apiRecorder(logger: StructuredLogger): DemoRecorder = ApiRecorder(OpenApiSpecFetcher(logger))
 
     @Bean
     fun asciinemaRecorder(): DemoRecorder = AsciinemaRecorder()

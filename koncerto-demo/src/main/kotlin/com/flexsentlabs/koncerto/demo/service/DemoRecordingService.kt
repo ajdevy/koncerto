@@ -86,7 +86,7 @@ class DemoRecordingService(
         platform: DemoPlatform?, trigger: DemoTrigger,
         targetUrl: String? = null
     ): DemoResult<DemoTask> {
-        val resolvedPlatform = platform ?: resolvePlatform()
+        val resolvedPlatform = platform ?: resolvePlatform(issueId, issueIdentifier)
         if (resolvedPlatform == null) {
             traceRequestStep(issueId, issueIdentifier, projectSlug, "request_recording", "no_platform")
             return DemoResult.Failure(DemoError.RecorderNotAvailable("no_platform_available"))
@@ -302,11 +302,12 @@ class DemoRecordingService(
     }
 
     private suspend fun attemptFallbackRecording(failedTask: DemoTask, originalError: DemoError?): DemoResult<DemoTask> {
+        // A browser recording that fails still has a running deployment behind it, so the API
+        // recorder can demonstrate the same service from its HTTP surface — a genuinely useful
+        // degraded demo. The remaining platforms have no such second angle yet, so they stop here
+        // rather than emitting an artifact that shows nothing.
         val fallbackPlatform = when (failedTask.platform) {
-            DemoPlatform.PLAYWRIGHT -> DemoPlatform.ASCIINEMA
-            DemoPlatform.ADB -> DemoPlatform.ASCIINEMA
-            DemoPlatform.XCRUN -> DemoPlatform.ASCIINEMA
-            DemoPlatform.FFMPEG -> DemoPlatform.ASCIINEMA
+            DemoPlatform.PLAYWRIGHT -> DemoPlatform.API
             else -> return DemoResult.Failure(originalError ?: DemoError.RecorderNotAvailable("no_fallback"))
         }
 
@@ -405,7 +406,8 @@ class DemoRecordingService(
             platform = task.platform,
             targetUrl = effectiveTargetUrl,
             scenarioPath = scenarioPath,
-            credentialsPath = resolveCredentialsPath(task)
+            credentialsPath = resolveCredentialsPath(task),
+            issueIdentifier = task.issueIdentifier
         )
         val tempFile = File(config.tempDir, "${task.id}.${recordingConfig.outputFormat}")
 
@@ -503,27 +505,39 @@ class DemoRecordingService(
     }
 
     private fun resolveScenarioPath(task: DemoTask): String {
-        val scenarioFile = File(config.tempDir, "${task.issueId}-scenario.yaml")
-        if (scenarioFile.exists()) return scenarioFile.absolutePath
-        // Also check for issue-identifier based scenario (for backward compatibility)
-        val identFile = File(config.tempDir, "${task.issueIdentifier}-scenario.yaml")
-        if (identFile.exists()) return identFile.absolutePath
-        return ""
+        val suffix = if (task.platform == DemoPlatform.API) {
+            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.API_SUFFIX
+        } else {
+            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.BROWSER_SUFFIX
+        }
+        // Both keys are tried: the orchestrator stages under the issue id, while manually triggered
+        // runs and older staged files use the human identifier.
+        return com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
+            config.tempDir, listOf(task.issueId, task.issueIdentifier), suffix
+        )?.absolutePath.orEmpty()
     }
 
     // Mirrors resolveScenarioPath: the orchestrator stages the effective demo credentials as a
     // KEY=VALUE file keyed by issue id (fallback identifier); the recorder injects them into the
     // recording container's env so a scenario `resolve` step can use them.
-    private fun resolveCredentialsPath(task: DemoTask): String {
-        val credFile = File(config.tempDir, "${task.issueId}-credentials.env")
-        if (credFile.exists()) return credFile.absolutePath
-        val identFile = File(config.tempDir, "${task.issueIdentifier}-credentials.env")
-        if (identFile.exists()) return identFile.absolutePath
-        return ""
-    }
+    private fun resolveCredentialsPath(task: DemoTask): String =
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
+            config.tempDir, listOf(task.issueId, task.issueIdentifier),
+            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.CREDENTIALS_SUFFIX
+        )?.absolutePath.orEmpty()
 
-    private suspend fun resolvePlatform(): DemoPlatform? {
+    /**
+     * The recorder to use for this ticket.
+     *
+     * An API scenario staged for the issue means the orchestrator judged this a server-side ticket,
+     * and that beats the configured default: the alternative is recording a browser staring at an
+     * app with no UI. Everything after that is the previous preference order.
+     */
+    private suspend fun resolvePlatform(issueId: String, issueIdentifier: String): DemoPlatform? {
         val available = recorderFactory.availablePlatforms()
+        if (available.contains(DemoPlatform.API) && hasApiScenario(issueId, issueIdentifier)) {
+            return DemoPlatform.API
+        }
         val configured = config.defaultPlatform
             .trim()
             .takeIf { it.isNotBlank() }
@@ -534,6 +548,12 @@ class DemoRecordingService(
             ?: available.firstOrNull { it == DemoPlatform.ASCIINEMA }
             ?: available.firstOrNull()
     }
+
+    private fun hasApiScenario(issueId: String, issueIdentifier: String): Boolean =
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.findExisting(
+            config.tempDir, listOf(issueId, issueIdentifier),
+            com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles.API_SUFFIX
+        ) != null
 
     private fun traceDemoStep(
         task: DemoTask,

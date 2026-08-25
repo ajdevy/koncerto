@@ -23,7 +23,11 @@ class RecorderImage(
 
     fun imageExists(tag: String = IMAGE_TAG): Boolean {
         val run = runDocker(listOf("docker", "images", "-q", tag), 10) ?: return false
-        return run.output.trim().isNotBlank()
+        // The exit code matters as much as the output: stderr is folded into stdout, so a daemon
+        // that is installed but not running answers with a connection error, which read as "image
+        // present" and made ensureAvailable skip the pull — turning a clear "pull failed" into a
+        // confusing `docker run` failure much later.
+        return run.exitCode == 0 && run.output.trim().isNotBlank()
     }
 
     /**

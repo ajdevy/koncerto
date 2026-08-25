@@ -171,7 +171,7 @@ class DemoModelTest {
     @Test
     fun `DemoPlatform enum values`() {
         assert(DemoPlatform.values().toSet() == setOf(
-            DemoPlatform.PLAYWRIGHT, DemoPlatform.ASCIINEMA,
+            DemoPlatform.PLAYWRIGHT, DemoPlatform.API, DemoPlatform.ASCIINEMA,
             DemoPlatform.ADB, DemoPlatform.XCRUN, DemoPlatform.FFMPEG
         ))
     }

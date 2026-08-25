@@ -50,6 +50,8 @@ EXCLUDED_CLASS_PATTERNS = (
     "PlaywrightRecorder",
     "DomInventoryCrawler",
     "AdbRecorder",
+    "ApiRecorder",
+    "OpenApiSpecFetcher",
     "AsciinemaRecorder",
     "RecorderFactory",
     "DemoCleanupScheduler",
