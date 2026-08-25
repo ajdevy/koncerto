@@ -237,7 +237,11 @@ exit 0
         var cursor = 0
         PLACEHOLDER.findAll(text).forEach { match ->
             append(escapeForDoubleQuotes(text.substring(cursor, match.range.first)))
-            append("\${SAVED_${match.groupValues[1]}}")
+            // Two namespaces share one {{}} syntax: values captured by an earlier `save`, and
+            // credentials injected into the container env. Resolve saved-first, then the injected
+            // credential, then empty — a bare ${SAVED_x} was unset for every credential reference
+            // and aborted the whole script under `set -u`.
+            append("\${SAVED_${match.groupValues[1]}:-\${${match.groupValues[1]}:-}}")
             cursor = match.range.last + 1
         }
         append(escapeForDoubleQuotes(text.substring(cursor)))

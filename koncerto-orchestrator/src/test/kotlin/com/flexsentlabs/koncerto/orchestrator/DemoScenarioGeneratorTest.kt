@@ -405,6 +405,292 @@ class DemoScenarioGeneratorTest {
         assertThat(prompt.contains("You are a demo scenario generator.")).isEqualTo(true)
     }
 
+    // ---- API (server-side) scenarios -------------------------------------------------------
+
+    private fun apiIssue(id: String = "issue-api", identifier: String = "T-API") =
+        com.flexsentlabs.koncerto.core.model.Issue(
+            id = id, identifier = identifier, title = "Add items endpoint",
+            description = "POST /api/items creates an item",
+            priority = 1, state = "Todo", branchName = null, url = null,
+            labels = emptyList(), blockedBy = emptyList(), createdAt = null, updatedAt = null
+        )
+
+    private val validApiScenarioOutput = """
+        Here is your API scenario:
+        api_scenario:
+          description: "Items API"
+          steps:
+            - action: request
+              method: GET
+              path: /api/items
+              expect_status: 200
+    """.trimIndent()
+
+    @Test
+    fun `extractScenarioBlock parses an unfenced api_scenario block`() {
+        val result = generator().extractScenarioBlock(validApiScenarioOutput, "api_scenario")
+
+        assertThat(result).isNotNull()
+        assertThat(result!!.startsWith("api_scenario:")).isEqualTo(true)
+        assertThat(result.contains("path: /api/items")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock parses an unlabeled fence whose content starts with api_scenario`() {
+        val raw = "Sure.\n\n```yaml\napi_scenario:\n  description: \"d\"\n  steps:\n    - action: request\n      path: /a\n```"
+
+        val result = generator().extractScenarioBlock(raw, "api_scenario")
+
+        assertThat(result).isNotNull()
+        assertThat(result!!.startsWith("api_scenario:")).isEqualTo(true)
+        assertThat(result.contains("path: /a")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock wraps a labeled api_scenario fence under the root key`() {
+        val raw = "```yaml api_scenario\ndescription: \"d\"\nsteps:\n  - action: request\n    path: /a\n```"
+
+        val result = generator().extractScenarioBlock(raw, "api_scenario")!!
+
+        assertThat(result.startsWith("api_scenario:\n  description")).isEqualTo(true)
+        assertThat(result.contains("  steps:")).isEqualTo(true)
+    }
+
+    @Test
+    fun `extractScenarioBlock does not confuse the two scenario kinds`() {
+        // A browser scenario must not satisfy an API extraction, or a UI ticket would be staged as
+        // a server-side demo and recorded with the wrong recorder.
+        assertThat(generator().extractScenarioBlock(validScenarioOutput, "api_scenario")).isNull()
+        assertThat(generator().extractScenarioBlock(validApiScenarioOutput, "demo_scenario")).isNull()
+    }
+
+    @Test
+    fun `extractScenarioBlock returns null for an empty api_scenario section`() {
+        assertThat(generator().extractScenarioBlock("api_scenario:\n", "api_scenario")).isNull()
+        assertThat(generator().extractScenarioBlock("```yaml api_scenario\n\n```", "api_scenario")).isNull()
+    }
+
+    @Test
+    fun `buildApiPrompt includes the issue and the live endpoint inventory`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val inventory = """{"routes":[{"method":"POST","path":"/api/items"}]}"""
+
+        val prompt = generator().buildApiPrompt(apiIssue(), workspace, emptyList(), inventory)
+
+        assertThat(prompt.contains("Add items endpoint")).isEqualTo(true)
+        assertThat(prompt.contains("POST /api/items creates an item")).isEqualTo(true)
+        assertThat(prompt.contains("Live Endpoint Inventory")).isEqualTo(true)
+        assertThat(prompt.contains("\"path\":\"/api/items\"")).isEqualTo(true)
+        assertThat(prompt.contains("Generate the api_scenario YAML now.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `buildApiPrompt omits the endpoint inventory when absent or blank`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        assertThat(generator().buildApiPrompt(apiIssue(), workspace, emptyList(), null)
+            .contains("Live Endpoint Inventory")).isEqualTo(false)
+        assertThat(generator().buildApiPrompt(apiIssue(), workspace, emptyList(), "  ")
+            .contains("Live Endpoint Inventory")).isEqualTo(false)
+    }
+
+    @Test
+    fun `buildApiPrompt lists credential keys as interpolation references and never values`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val withCreds = generator().buildApiPrompt(apiIssue(), workspace, listOf("API_TOKEN"), null)
+        assertThat(withCreds.contains("- API_TOKEN")).isEqualTo(true)
+        assertThat(withCreds.contains("{{API_TOKEN}}")).isEqualTo(true)
+        assertThat(withCreds.contains("Never write a literal secret")).isEqualTo(true)
+
+        assertThat(generator().buildApiPrompt(apiIssue(), workspace, emptyList(), null)
+            .contains("Available test credentials")).isEqualTo(false)
+    }
+
+    @Test
+    fun `buildApiPrompt reads its system prompt from koncerto's own workflow dir`(
+        @TempDir tmpDir: Path,
+        @TempDir workflowDir: Path
+    ) {
+        val promptsDir = workflowDir.resolve("prompts").also { java.nio.file.Files.createDirectories(it) }
+        java.nio.file.Files.writeString(promptsDir.resolve("demo-scenario-api.md"), "You are an API demo generator.")
+        val cache = com.flexsentlabs.koncerto.workflow.WorkflowCache()
+        cache.setWorkflowDir(workflowDir)
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val gen = DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), workflowCache = cache)
+
+        assertThat(gen.buildApiPrompt(apiIssue(), workspace).contains("You are an API demo generator.")).isEqualTo(true)
+    }
+
+    @Test
+    fun `generateApi stages the scenario under both keys and leaves the browser scenario alone`(
+        @TempDir tmpDir: Path
+    ) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-api-save", identifier = "T-APISAVE")
+        val browser = java.io.File("/tmp/koncerto-demo/${issue.id}-scenario.yaml")
+        val gen = generatorWithRunner { _, _, _ -> validApiScenarioOutput }
+        try {
+            browser.parentFile.mkdirs()
+            browser.writeText("demo_scenario:\n  steps: []\n")
+
+            val path = gen.generateApi(issue, workspace)
+
+            assertThat(path).isNotNull()
+            assertThat(path!!.endsWith("issue-api-save-api-scenario.yaml")).isEqualTo(true)
+            assertThat(java.io.File(path).readText().contains("api_scenario:")).isEqualTo(true)
+            assertThat(java.io.File("/tmp/koncerto-demo/T-APISAVE-api-scenario.yaml").exists()).isEqualTo(true)
+            // Generation alone must not clear the browser scenario — only the caller does that,
+            // and only once the API scenario is safely written.
+            assertThat(browser.exists()).isEqualTo(true)
+        } finally {
+            browser.delete()
+            java.io.File("/tmp/koncerto-demo/issue-api-save-api-scenario.yaml").delete()
+            java.io.File("/tmp/koncerto-demo/T-APISAVE-api-scenario.yaml").delete()
+        }
+    }
+
+    @Test
+    fun `generateApi returns null when no model produces a usable scenario`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        assertThat(generatorWithRunner { _, _, _ -> "no scenario here" }
+            .generateApi(apiIssue(), workspace)).isNull()
+        assertThat(generatorWithRunner { _, _, _ -> null }
+            .generateApi(apiIssue(), workspace)).isNull()
+    }
+
+    @Test
+    fun `buildApiPrompt includes the PR diff when the workspace has one`(@TempDir tmpDir: Path) {
+        initGitRepoWithOriginMain(tmpDir, "fun createItem() = 201")
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+
+        val prompt = generator().buildApiPrompt(apiIssue(), workspace)
+
+        assertThat(prompt.contains("## PR Changes")).isEqualTo(true)
+        assertThat(prompt.contains("fun createItem() = 201")).isEqualTo(true)
+    }
+
+    @Test
+    fun `generateApi returns null when the scenario cannot be staged`(@TempDir tmpDir: Path) {
+        // A directory sitting where the scenario file belongs makes the write fail — the same shape
+        // as a permissions or disk problem, which must degrade to null rather than throw into the
+        // pipeline.
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-api-blocked", identifier = "T-APIBLOCK")
+        val blocker = java.io.File("/tmp/koncerto-demo/issue-api-blocked-api-scenario.yaml")
+        try {
+            blocker.mkdirs()
+
+            val path = generatorWithRunner { _, _, _ -> validApiScenarioOutput }.generateApi(issue, workspace)
+
+            assertThat(path).isNull()
+        } finally {
+            blocker.deleteRecursively()
+            java.io.File("/tmp/koncerto-demo/T-APIBLOCK-api-scenario.yaml").delete()
+        }
+    }
+
+    @Test
+    fun `deleteBrowserScenario removes both keys and tolerates absent files`() {
+        val issue = apiIssue(id = "issue-del", identifier = "T-DEL")
+        val byId = java.io.File("/tmp/koncerto-demo/issue-del-scenario.yaml")
+        val byIdent = java.io.File("/tmp/koncerto-demo/T-DEL-scenario.yaml")
+        byId.parentFile.mkdirs()
+        byId.writeText("demo_scenario:")
+        byIdent.writeText("demo_scenario:")
+
+        generator().deleteBrowserScenario(issue)
+
+        assertThat(byId.exists()).isEqualTo(false)
+        assertThat(byIdent.exists()).isEqualTo(false)
+        // Idempotent: a second call on already-absent files must not throw.
+        generator().deleteBrowserScenario(issue)
+    }
+
+    @Test
+    fun `generateApi rejects a block that carries no request`() {
+        // The caller deletes the browser scenario on a non-null return, so a block that merely has
+        // the right root key must not count as success.
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(
+            java.nio.file.Files.createTempDirectory("api-unusable"), "key", false)
+        val issue = apiIssue(id = "issue-api-unusable", identifier = "T-APIUNUSABLE")
+        val gen = generatorWithRunner { _, _, _ -> "api_scenario:\n  description: \"no steps at all\"\n" }
+        try {
+            assertThat(gen.generateApi(issue, workspace)).isNull()
+            assertThat(java.io.File("/tmp/koncerto-demo/issue-api-unusable-api-scenario.yaml").exists()).isEqualTo(false)
+        } finally {
+            gen.deleteApiScenario(issue)
+        }
+    }
+
+    @Test
+    fun `carriesRequest accepts a real scenario and rejects a shape-only one`() {
+        assertThat(generator().carriesRequest(validApiScenarioOutput)).isEqualTo(true)
+        assertThat(generator().carriesRequest("api_scenario:\n  description: \"d\"\n")).isEqualTo(false)
+        assertThat(generator().carriesRequest("api_scenario:\n  steps:\n    - action: note\n      note: hi\n")).isEqualTo(false)
+    }
+
+    @Test
+    fun `repairApi regenerates the API scenario and feeds back the failure`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-api-repair", identifier = "T-APIREPAIR")
+        var seenPrompt: String? = null
+        val gen = generatorWithRunner { command, _, _ -> seenPrompt = command.last(); validApiScenarioOutput }
+        try {
+            val path = gen.repairApi(
+                issue, workspace,
+                priorScenario = "api_scenario:\n  steps:\n    - action: request\n      path: /wrong\n",
+                failureReason = "expected 200 got 404",
+                openApiInventory = """{"routes":[{"method":"GET","path":"/api/items"}]}"""
+            )
+
+            assertThat(path).isNotNull()
+            assertThat(path!!.endsWith("issue-api-repair-api-scenario.yaml")).isEqualTo(true)
+            // The repair prompt must carry both why it failed and what failed, or the model just
+            // re-emits the same broken scenario.
+            assertThat(seenPrompt!!.contains("expected 200 got 404")).isEqualTo(true)
+            assertThat(seenPrompt!!.contains("/wrong")).isEqualTo(true)
+            assertThat(seenPrompt!!.contains("api_scenario")).isEqualTo(true)
+        } finally {
+            gen.deleteApiScenario(issue)
+        }
+    }
+
+    @Test
+    fun `repairApi returns null when the model fails or emits an unusable block`(@TempDir tmpDir: Path) {
+        val workspace = com.flexsentlabs.koncerto.workspace.Workspace(tmpDir, "key", false)
+        val issue = apiIssue(id = "issue-api-repair-fail", identifier = "T-APIREPAIRFAIL")
+
+        assertThat(generatorWithRunner { _, _, _ -> null }
+            .repairApi(issue, workspace, "prior", "boom")).isNull()
+        assertThat(generatorWithRunner { _, _, _ -> "api_scenario:\n  description: \"nothing\"\n" }
+            .repairApi(issue, workspace, "prior", "boom")).isNull()
+    }
+
+    @Test
+    fun `deleteApiScenario removes both keys and tolerates absent files`() {
+        val issue = apiIssue(id = "issue-api-del", identifier = "T-APIDEL")
+        val byId = java.io.File("/tmp/koncerto-demo/issue-api-del-api-scenario.yaml")
+        val byIdent = java.io.File("/tmp/koncerto-demo/T-APIDEL-api-scenario.yaml")
+        byId.parentFile.mkdirs()
+        byId.writeText("api_scenario:")
+        byIdent.writeText("api_scenario:")
+
+        generator().deleteApiScenario(issue)
+
+        assertThat(byId.exists()).isEqualTo(false)
+        assertThat(byIdent.exists()).isEqualTo(false)
+        generator().deleteApiScenario(issue)
+    }
+
+    @Test
+    fun `the staging suffixes match the reader side convention`() {
+        assertThat(DemoScenarioGenerator.BROWSER_SCENARIO_SUFFIX).isEqualTo("-scenario.yaml")
+        assertThat(DemoScenarioGenerator.API_SCENARIO_SUFFIX).isEqualTo("-api-scenario.yaml")
+    }
+
     private fun generatorWithRunner(runner: DemoScenarioGenerator.ProcessRunner) =
         DemoScenarioGenerator(opencodeCommand = "opencode", logger = logger(), processRunner = runner)
 

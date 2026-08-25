@@ -33,17 +33,29 @@ class ApiScriptBuilderTest {
     }
 
     @Test
-    fun `interpolate turns placeholders into saved shell variables`() {
-        assert(ApiScriptBuilder.interpolate("/items/{{item_id}}") == "/items/\${SAVED_item_id}")
-        assert(ApiScriptBuilder.interpolate("{{ a }}-{{b}}") == "\${SAVED_a}-\${SAVED_b}")
+    fun `interpolate resolves a placeholder to a saved value then an injected credential`() {
+        // Credentials reach the container as plain env vars while `save` writes SAVED_*; one syntax
+        // covers both, so the reference must try each in turn and end in an empty default rather
+        // than an unset variable, which `set -u` would treat as fatal.
+        assert(ApiScriptBuilder.interpolate("/items/{{item_id}}") == "/items/\${SAVED_item_id:-\${item_id:-}}")
+        assert(ApiScriptBuilder.interpolate("{{ a }}") == "\${SAVED_a:-\${a:-}}")
         assert(ApiScriptBuilder.interpolate("no placeholder") == "no placeholder")
+    }
+
+    @Test
+    fun `a credential reference never expands to an unset variable`() {
+        val rendered = ApiScriptBuilder.interpolate("Bearer {{API_TOKEN}}")
+
+        // Every ${...} in the result carries a :- default, so nothing can be unset at run time.
+        assert(rendered == "Bearer \${SAVED_API_TOKEN:-\${API_TOKEN:-}}")
+        assert(!Regex("""\$\{[A-Za-z_][A-Za-z0-9_]*\}""").containsMatchIn(rendered))
     }
 
     @Test
     fun `interpolate keeps literal shell syntax around a placeholder inert`() {
         val rendered = ApiScriptBuilder.interpolate("\$PATH {{tok}} `id`")
 
-        assert(rendered == "\\\$PATH \${SAVED_tok} \\`id\\`")
+        assert(rendered == "\\\$PATH \${SAVED_tok:-\${tok:-}} \\`id\\`")
     }
 
     @Test
@@ -86,9 +98,9 @@ class ApiScriptBuilderTest {
             )
         )
 
-        assert(command.contains("\"\$TARGET_URL/api/items/\${SAVED_item_id}\""))
-        assert(command.contains("-H \"Authorization: Bearer \${SAVED_API_TOKEN}\""))
-        assert(command.contains("\${SAVED_user}"))
+        assert(command.contains("\"\$TARGET_URL/api/items/\${SAVED_item_id:-\${item_id:-}}\""))
+        assert(command.contains("-H \"Authorization: Bearer \${SAVED_API_TOKEN:-\${API_TOKEN:-}}\""))
+        assert(command.contains("\${SAVED_user:-\${user:-}}"))
     }
 
     @Test

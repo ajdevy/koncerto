@@ -18,6 +18,7 @@ import com.flexsentlabs.koncerto.core.config.ProjectConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.config.TrackerConfig
 import com.flexsentlabs.koncerto.core.config.WorkspaceConfig
+import com.flexsentlabs.koncerto.agent.FreeModelCycler
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.model.UserRef
 import com.flexsentlabs.koncerto.core.result.EmptyResult
@@ -121,6 +122,48 @@ class AutoReviewOrchestratorTest {
             }
         )
         return gen to { callCount }
+    }
+
+    private val validApiScenarioYaml = """
+        api_scenario:
+          description: "Items API"
+          steps:
+            - action: request
+              method: GET
+              path: /api/items
+              expect_status: 200
+    """.trimIndent()
+
+    /**
+     * A generator that answers whichever scenario kind it was asked for, so a test can assert which
+     * path the orchestrator took. [apiSucceeds] models a model that never produces a usable API
+     * scenario, which must leave the browser path intact.
+     */
+    private fun dualScenarioGenerator(apiSucceeds: Boolean = true): Triple<DemoScenarioGenerator, () -> Int, () -> Int> {
+        var browserCalls = 0
+        var apiCalls = 0
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { command, _, _ ->
+                if (command.last().contains("api_scenario")) {
+                    apiCalls++
+                    if (apiSucceeds) validApiScenarioYaml else "the model rambled and produced nothing"
+                } else {
+                    browserCalls++
+                    validScenarioYaml
+                }
+            }
+        )
+        return Triple(gen, { browserCalls }, { apiCalls })
+    }
+
+    /** Removes anything a test staged in the shared scenario dir. */
+    private fun clearStaging(id: String, identifier: String) {
+        listOf(
+            "$id-scenario.yaml", "$identifier-scenario.yaml",
+            "$id-api-scenario.yaml", "$identifier-api-scenario.yaml"
+        ).forEach { java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/$it").delete() }
     }
 
     private fun fakeRunner(succeed: Boolean = true): AgentRunner = object : AgentRunner {
@@ -2838,5 +2881,379 @@ class AutoReviewOrchestratorTest {
         method.invoke(orchestrator, issue(), ws, 1, null, null)
 
         assertThat(commentCalled).isFalse()
+    }
+
+    @Test
+    fun `an API-only deployment stages an API scenario and clears the browser one`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
+        var probedUrl: String? = null
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { url -> probedUrl = url; """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(probedUrl).isEqualTo("http://demo-c:5000")
+            assertThat(apiCalls()).isEqualTo(1)
+            assertThat(browserCalls()).isEqualTo(1)
+            // The staged kind is what routes the recorder, so the API file must exist and the
+            // browser file must be gone.
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml").exists()).isEqualTo(true)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-scenario.yaml").exists()).isEqualTo(false)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/T-1-scenario.yaml").exists()).isEqualTo(false)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a browsable UI keeps the browser path even when the app also publishes a spec`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> """[{"route":"/login","testids":["send-code-button"]}]""" },
+                fetchOpenApiInventory = { _ -> """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(apiCalls()).isEqualTo(0)
+            // Pre-deploy generate plus the DOM-grounded regenerate, exactly as before this change.
+            assertThat(browserCalls()).isEqualTo(2)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml").exists()).isEqualTo(false)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a deployment publishing no spec keeps the browser path`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> null },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(apiCalls()).isEqualTo(0)
+            assertThat(browserCalls()).isEqualTo(1)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a throwing OpenAPI probe is treated as no spec`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> throw RuntimeException("probe boom") },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(apiCalls()).isEqualTo(0)
+            assertThat(browserCalls()).isEqualTo(1)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a failed API generation leaves the browser scenario in place`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, _, apiCalls) = dualScenarioGenerator(apiSucceeds = false)
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(apiCalls()).isEqualTo(FreeModelCycler.DEFAULT_FREE_MODELS.size * 3)
+            // No API scenario was produced, so the pre-deploy browser scenario must survive —
+            // otherwise the ticket would be left with no scenario at all.
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml").exists()).isEqualTo(false)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-scenario.yaml").exists()).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a failed deploy never probes for a spec`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, _, apiCalls) = dualScenarioGenerator()
+        var probed = false
+        try {
+            AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(DeployResult.failure("boom")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> probed = true; "{}" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(probed).isEqualTo(false)
+            assertThat(apiCalls()).isEqualTo(0)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a throwing API generator falls back to the browser path`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        // Throws rather than returning null: generation is an out-of-process call, so it can fail
+        // hard, and that must not take the ticket down with it.
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { command, _, _ ->
+                if (command.last().contains("api_scenario")) throw RuntimeException("generator boom")
+                validScenarioYaml
+            }
+        )
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> null },
+                fetchOpenApiInventory = { _ -> """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml").exists()).isEqualTo(false)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-scenario.yaml").exists()).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a signalless crawl of a spec-publishing app routes to API`(@TempDir tmpDir: Path) = runTest {
+        // The crawler emits a '/' entry unconditionally, so a REST service still yields a non-blank
+        // inventory. Only the absence of UI *signal* may route to API.
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, _, apiCalls) = dualScenarioGenerator()
+        try {
+            val decision = AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> """[{"route":"/","headings":[],"testids":[],"fields":[],"buttons":[]}]""" },
+                fetchOpenApiInventory = { _ -> """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+            assertThat(apiCalls()).isEqualTo(1)
+            assertThat(java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml").exists()).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `a BROWSER verdict clears a stale API scenario from an earlier pass`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val (gen, _, _) = dualScenarioGenerator()
+        val staleApi = java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/issue-1-api-scenario.yaml")
+        val staleApiByIdent = java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/T-1-api-scenario.yaml")
+        try {
+            staleApi.parentFile.mkdirs()
+            staleApi.writeText("api_scenario:\n  steps: []\n")
+            staleApiByIdent.writeText("api_scenario:\n  steps: []\n")
+
+            AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> """[{"route":"/login","testids":["send-code-button"]}]""" },
+                fetchOpenApiInventory = { _ -> null },
+                onReviewPassed = { _, _ -> "http://demo.example/rec.webm" }
+            ).onCodingComplete(issue())
+
+            // Otherwise the reader keeps routing this issue to the API recorder forever, silently
+            // overriding today's verdict with last pass's leftover state.
+            assertThat(staleApi.exists()).isEqualTo(false)
+            assertThat(staleApiByIdent.exists()).isEqualTo(false)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
+    }
+
+    @Test
+    fun `an API recording failure repairs the API scenario, not the browser one`(@TempDir tmpDir: Path) = runTest {
+        val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
+        Files.writeString(issueDir.resolve(".review-status"), "pass")
+        val prompts = mutableListOf<String>()
+        val gen = DemoScenarioGenerator(
+            opencodeCommand = "opencode",
+            logger = noopLogger(),
+            processRunner = { command, _, _ ->
+                val prompt = command.last()
+                prompts.add(prompt)
+                if (prompt.contains("api_scenario")) validApiScenarioYaml else validScenarioYaml
+            }
+        )
+        var recordAttempts = 0
+        try {
+            AutoReviewOrchestrator(
+                agentRunner = fakeRunner(),
+                workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
+                linearClient = fakeTracker(),
+                projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
+                projectSlug = "p",
+                runtimeState = RuntimeState(),
+                notifier = noopNotifier(),
+                logger = noopLogger(),
+                demoScenarioGenerator = gen,
+                targetProjectDeployer = RecordingProjectDeployer(
+                    DeployResult.success("http://localhost:8080", internalUrl = "http://demo-c:5000")),
+                deployRepoFullName = "acme/widget",
+                crawlDomInventory = { _ -> """[{"route":"/","testids":[],"fields":[],"buttons":[]}]""" },
+                fetchOpenApiInventory = { _ -> """{"routes":[{"method":"GET","path":"/api/items"}]}""" },
+                onReviewPassed = { _, _ -> recordAttempts++; throw IllegalStateException("api_recording_failed") }
+            ).onCodingComplete(issue())
+
+            assertThat(recordAttempts > 1).isEqualTo(true)
+            // Every repair prompt after the first recording failure must target api_scenario. Running
+            // the browser repair here re-created the scenario the API path deleted and re-ran the
+            // identical failing one until the cycle cap.
+            val repairPrompts = prompts.filter { it.contains("FAILED to record") }
+            assertThat(repairPrompts.isNotEmpty()).isEqualTo(true)
+            assertThat(repairPrompts.all { it.contains("corrected `api_scenario`") }).isEqualTo(true)
+            assertThat(repairPrompts.none { it.contains("corrected `demo_scenario`") }).isEqualTo(true)
+        } finally {
+            clearStaging("issue-1", "T-1")
+        }
     }
 }

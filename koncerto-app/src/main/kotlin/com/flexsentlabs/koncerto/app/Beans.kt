@@ -426,6 +426,14 @@ class Beans {
                         ticketCredentialExtractor = TicketCredentialExtractor(logger = logger),
                         crawlDomInventory = { internalUrl ->
                             com.flexsentlabs.koncerto.demo.recorder.DomInventoryCrawler(logger).crawl(internalUrl)
+                        },
+                        // Compaction happens here, on the koncerto-demo side of the seam, so the
+                        // orchestrator receives a ready-to-prompt inventory and stays free of a
+                        // dependency on this module.
+                        fetchOpenApiInventory = { internalUrl ->
+                            com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher(logger)
+                                .fetch(internalUrl)
+                                ?.let { com.flexsentlabs.koncerto.demo.recorder.api.OpenApiInventory.compact(it) }
                         }
                     )
                 }
