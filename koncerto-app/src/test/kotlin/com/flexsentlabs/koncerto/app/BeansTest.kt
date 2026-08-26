@@ -31,7 +31,7 @@ import com.flexsentlabs.koncerto.core.errors.DefaultErrorTracker
 import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
 import com.flexsentlabs.koncerto.core.ratelimit.DefaultRateLimitMonitor
 import com.flexsentlabs.koncerto.demo.config.DemoConfig
-import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AndroidRecorder
 import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
 import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
 import com.flexsentlabs.koncerto.demo.recorder.PlaywrightRecorder
@@ -1016,7 +1016,7 @@ class BeansTest {
     fun `recorder beans create instances`() {
         assertThat(beans.playwrightRecorder()).isInstanceOf(PlaywrightRecorder::class)
         assertThat(beans.asciinemaRecorder()).isInstanceOf(AsciinemaRecorder::class)
-        assertThat(beans.adbRecorder()).isInstanceOf(AdbRecorder::class)
+        assertThat(beans.androidRecorder()).isInstanceOf(AndroidRecorder::class)
         assertThat(beans.xcrunRecorder()).isInstanceOf(XcrunRecorder::class)
         assertThat(beans.ffmpegRecorder()).isInstanceOf(FfmpegRecorder::class)
     }
@@ -1026,7 +1026,7 @@ class BeansTest {
         val recorders = listOf(
             beans.playwrightRecorder(),
             beans.asciinemaRecorder(),
-            beans.adbRecorder()
+            beans.androidRecorder()
         )
         assertThat(beans.recorderFactory(recorders)).isNotNull()
     }

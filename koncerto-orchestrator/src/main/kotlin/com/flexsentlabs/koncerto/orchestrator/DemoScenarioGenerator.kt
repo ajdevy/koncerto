@@ -32,6 +32,300 @@ class DemoScenarioGenerator(
     }
 
     /**
+     * Generates a SERVER-SIDE demo scenario: the `api_scenario` YAML the API recorder executes as
+     * real curl calls against the deployed target.
+     *
+     * Used when the deployment turns out to have no browsable UI, where a browser recording would
+     * only show an app with nothing to look at. [openApiInventory] is the compacted route inventory
+     * read from the running service and is the strongest ground truth available — it is what stops
+     * the model inventing endpoints, exactly as the DOM inventory does for the browser path.
+     *
+     * Returns the staged scenario path, or null when no model produced a usable scenario. A null
+     * return leaves the browser scenario untouched, so the caller can fall back to it.
+     */
+    fun generateApi(
+        issue: Issue,
+        workspace: Workspace,
+        credentialKeys: List<String> = emptyList(),
+        openApiInventory: String? = null
+    ): String? {
+        val prompt = buildApiPrompt(issue, workspace, credentialKeys, openApiInventory)
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id, API_ROOT_KEY) ?: return null
+        if (!carriesRequest(block)) {
+            // Staging is what makes the caller delete the browser scenario, so a block that merely
+            // has the right root key must not count as success — that would trade a working browser
+            // demo for a scenario the recorder cannot execute.
+            logger.warn("demo_api_scenario_unusable", mapOf("issue_id" to issue.id))
+            return null
+        }
+        return saveApiScenario(issue, block)
+    }
+
+    /**
+     * Regenerates an API scenario after a failed recording — the API counterpart of [repair].
+     *
+     * Without this, recovery on an API ticket ran the browser repair, which re-created the browser
+     * scenario the API path had just removed, left the failing API scenario untouched, and re-ran it
+     * unchanged until the cycle cap blocked the ticket.
+     */
+    fun repairApi(
+        issue: Issue,
+        workspace: Workspace,
+        priorScenario: String,
+        failureReason: String,
+        credentialKeys: List<String> = emptyList(),
+        openApiInventory: String? = null
+    ): String? {
+        val prompt = buildString {
+            appendLine("The previous API demo scenario FAILED to record. Produce a corrected `api_scenario` YAML block.")
+            appendLine()
+            appendLine("## Why it failed")
+            appendLine(failureReason.take(1500))
+            appendLine()
+            appendLine("## The scenario that failed")
+            appendLine(priorScenario.take(3000))
+            appendLine()
+            appendLine("Fix the cause: use only paths and methods the endpoint inventory below declares,")
+            appendLine("assert the status the endpoint actually returns, and keep the steps that clearly")
+            appendLine("worked. Then re-emit the full corrected scenario.")
+            appendLine()
+            append(buildApiPrompt(issue, workspace, credentialKeys, openApiInventory))
+        }
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id, API_ROOT_KEY) ?: return null
+        if (!carriesRequest(block)) {
+            logger.warn("demo_api_scenario_unusable", mapOf("issue_id" to issue.id))
+            return null
+        }
+        logger.info("demo_api_scenario_repaired", mapOf("issue_id" to issue.id))
+        return saveApiScenario(issue, block)
+    }
+
+    /**
+     * Generates an ANDROID demo scenario: the `android_scenario` YAML the mobile recorder turns into
+     * a Maestro flow and drives through the app on a device.
+     *
+     * [applicationId] is the id detected from the repository. It is injected into the prompt rather
+     * than left to the model, because a wrong appId is the one error Maestro cannot recover from —
+     * it fails before the first step and the recording shows nothing.
+     */
+    fun generateAndroid(
+        issue: Issue,
+        workspace: Workspace,
+        applicationId: String? = null,
+        credentialKeys: List<String> = emptyList()
+    ): String? {
+        val prompt = buildAndroidPrompt(issue, workspace, applicationId, credentialKeys)
+        val block = runWithFallback(prompt, workspace.path.toFile(), issue.id, ANDROID_ROOT_KEY) ?: return null
+        if (!carriesAndroidStep(block)) {
+            logger.warn("demo_android_scenario_unusable", mapOf("issue_id" to issue.id))
+            return null
+        }
+        return saveAndroidScenario(issue, block)
+    }
+
+    internal fun buildAndroidPrompt(
+        issue: Issue,
+        workspace: Workspace,
+        applicationId: String? = null,
+        credentialKeys: List<String> = emptyList()
+    ): String {
+        val systemPromptFile = workflowCache?.workflowDir?.resolve("prompts/demo-scenario-android.md")?.toFile()
+            ?: workspace.path.resolve("prompts/demo-scenario-android.md").toFile()
+        val systemPrompt = if (systemPromptFile.exists()) systemPromptFile.readText() else ""
+        val diff = (runGitDiff(workspace.path.toFile()) ?: "").take(8000)
+
+        return buildString {
+            if (systemPrompt.isNotBlank()) {
+                appendLine(systemPrompt)
+                appendLine()
+            }
+            appendLine("## Issue")
+            appendLine("${issue.title}: ${issue.description ?: ""}")
+            appendLine()
+            if (!applicationId.isNullOrBlank()) {
+                appendLine("## Application id (detected from the repository)")
+                appendLine("Use exactly this as `appId` — do not infer another one:")
+                appendLine(applicationId)
+                appendLine()
+            }
+            if (diff.isNotBlank()) {
+                appendLine("## PR Changes")
+                appendLine("Author steps against the ids and visible strings introduced here. An element that")
+                appendLine("does not appear in this diff or in the app's existing screens will not be found.")
+                appendLine(diff)
+                appendLine()
+            }
+            if (credentialKeys.isNotEmpty()) {
+                appendLine("## Available test credentials")
+                appendLine("These credential KEYS are available to the recorder (values are injected at run time):")
+                credentialKeys.forEach { appendLine("- $it") }
+                appendLine("Never write a literal secret into the scenario.")
+                appendLine()
+            }
+            append("Generate the android_scenario YAML now.")
+        }
+    }
+
+    /** Whether an extracted `android_scenario` block has an appId and something to do. */
+    internal fun carriesAndroidStep(block: String): Boolean {
+        if (!block.lineSequence().any { it.trim().startsWith("appId:") && it.trim().length > "appId:".length }) return false
+        return block.lineSequence().any { line ->
+            val t = line.trim()
+            t.startsWith("- action:") && !t.endsWith("wait")
+        }
+    }
+
+    private fun saveAndroidScenario(issue: Issue, block: String): String? =
+        stageScenario(issue, block, ANDROID_SCENARIO_SUFFIX, "demo_android_scenario_saved")
+
+    /** Removes the Android scenario staged for this issue, mirroring the other two kinds. */
+    fun deleteAndroidScenario(issue: Issue) {
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.id}$ANDROID_SCENARIO_SUFFIX")) }
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}$ANDROID_SCENARIO_SUFFIX")) }
+    }
+
+    /** Whether an extracted `api_scenario` block actually contains an executable request step. */
+    internal fun carriesRequest(block: String): Boolean {
+        if (!block.lineSequence().any { it.trim().startsWith("steps:") }) return false
+        return block.lineSequence().any { line ->
+            val t = line.trim()
+            t.startsWith("path:") || (t.startsWith("- ") && t.contains("path:"))
+        }
+    }
+
+    internal fun buildApiPrompt(
+        issue: Issue,
+        workspace: Workspace,
+        credentialKeys: List<String> = emptyList(),
+        openApiInventory: String? = null
+    ): String {
+        // Same resolution rule as the browser prompt: this template is koncerto's own, so it must
+        // resolve against koncerto's workflow dir, not the target project's workspace.
+        val systemPromptFile = workflowCache?.workflowDir?.resolve("prompts/demo-scenario-api.md")?.toFile()
+            ?: workspace.path.resolve("prompts/demo-scenario-api.md").toFile()
+        val systemPrompt = if (systemPromptFile.exists()) systemPromptFile.readText() else ""
+        val diff = (runGitDiff(workspace.path.toFile()) ?: "").take(8000)
+
+        return buildString {
+            if (systemPrompt.isNotBlank()) {
+                appendLine(systemPrompt)
+                appendLine()
+            }
+            appendLine("## Issue")
+            appendLine("${issue.title}: ${issue.description ?: ""}")
+            appendLine()
+            if (!openApiInventory.isNullOrBlank()) {
+                appendLine("## Live Endpoint Inventory (read from the actually-deployed service)")
+                appendLine("These are the endpoints the running service declares, with their parameters, request")
+                appendLine("body fields and documented status codes. Author requests using ONLY these paths and")
+                appendLine("methods. If a path is not listed here it does not exist — do not invent it. For")
+                appendLine("`expect_status`, use the SUCCESS code the operation documents (2xx) unless the ticket")
+                appendLine("explicitly calls for an error case — asserting a documented 4xx on the happy path")
+                appendLine("produces a green demo that only proves the endpoint rejects input.")
+                appendLine(openApiInventory.trim().take(MAX_INVENTORY_CHARS))
+                appendLine()
+            }
+            if (diff.isNotBlank()) {
+                appendLine("## PR Changes")
+                appendLine(diff)
+                appendLine()
+            }
+            if (credentialKeys.isNotEmpty()) {
+                appendLine("## Available test credentials")
+                appendLine("These credential KEYS are available to the recorder as environment variables (the")
+                appendLine("VALUES are injected at run time and are NOT shown here):")
+                credentialKeys.forEach { appendLine("- $it") }
+                appendLine()
+                appendLine("Reference one in a header or body the same way you reference a saved value, e.g.")
+                appendLine("    - action: request")
+                appendLine("      method: GET")
+                appendLine("      path: /api/me")
+                appendLine("      headers:")
+                appendLine("        Authorization: \"Bearer {{API_TOKEN}}\"")
+                appendLine("Never write a literal secret into the scenario — only the {{KEY}} reference.")
+                appendLine()
+            }
+            append("Generate the api_scenario YAML now.")
+        }
+    }
+
+    /**
+     * Stages an API scenario under both keys the recorder looks for.
+     *
+     * Each file is written to a temp path and moved into place atomically: the reader decides the
+     * platform purely on a file's existence, so a half-written file would route a run to the API
+     * recorder and then fail to parse. If the second write fails, the first is rolled back — the
+     * caller treats null as "nothing staged" and keeps the browser scenario, which would otherwise
+     * leave both kinds present and the two sides disagreeing about the platform.
+     */
+    private fun saveApiScenario(issue: Issue, block: String): String? =
+        stageScenario(issue, block, API_SCENARIO_SUFFIX, "demo_api_scenario_saved")
+
+    private fun stageScenario(issue: Issue, block: String, suffix: String, event: String): String? {
+        val scenarioDir = java.nio.file.Paths.get(SCENARIO_DIR)
+        val written = mutableListOf<java.nio.file.Path>()
+        return try {
+            java.nio.file.Files.createDirectories(scenarioDir)
+            listOf(issue.id, issue.identifier).forEach { key ->
+                val target = scenarioDir.resolve("$key$suffix")
+                writeAtomically(target, block)
+                written.add(target)
+            }
+            logger.info(event, mapOf(
+                "issue_id" to issue.id,
+                "issue_identifier" to issue.identifier
+            ))
+            written.first().toString()
+        } catch (e: Exception) {
+            written.forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
+            logger.warn("${event.removeSuffix("_saved")}_save_failed", mapOf(
+                "issue_id" to issue.id, "error" to (e.message ?: "unknown")))
+            null
+        }
+    }
+
+    private fun writeAtomically(target: java.nio.file.Path, content: String) {
+        // Temp file and target share a directory, so ATOMIC_MOVE is supported on every filesystem
+        // this runs on. If it ever were not, the caller's catch rolls back and reports nothing
+        // staged — which is the correct outcome anyway.
+        val tmp = target.resolveSibling("${target.fileName}.tmp")
+        java.nio.file.Files.writeString(tmp, content)
+        java.nio.file.Files.move(
+            tmp, target,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING
+        )
+    }
+
+    /**
+     * Removes the API scenario staged for this issue.
+     *
+     * The reader checks for an API scenario first and unconditionally routes to the API recorder
+     * when it finds one, so a file left by an earlier pass outranks a freshly generated browser
+     * scenario for the rest of the issue's life. Cleanup has to run in both directions.
+     */
+    fun deleteApiScenario(issue: Issue) {
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.id}$API_SCENARIO_SUFFIX")) }
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}$API_SCENARIO_SUFFIX")) }
+    }
+
+    /**
+     * Removes the browser scenario staged for this issue.
+     *
+     * Called only after an API scenario has been written: the recorder picks its platform from which
+     * scenario kind is present, so leaving a stale browser scenario behind is harmless for routing
+     * but misleading when debugging a run, and removing it before the API scenario exists would
+     * strand the ticket with no scenario at all.
+     */
+    fun deleteBrowserScenario(issue: Issue) {
+        val dir = java.nio.file.Paths.get(SCENARIO_DIR)
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.id}$BROWSER_SCENARIO_SUFFIX")) }
+        runCatching { java.nio.file.Files.deleteIfExists(dir.resolve("${issue.identifier}$BROWSER_SCENARIO_SUFFIX")) }
+    }
+
+    /**
      * Regenerates a scenario after a failed recording, feeding the model the scenario that just
      * failed plus why it failed so it can correct selectors/navigation/steps. This is the cheap,
      * scenario-first recovery step — it does not touch target code and needs no re-review.
@@ -78,7 +372,12 @@ class DemoScenarioGenerator(
         }
     }
 
-    private fun runWithFallback(prompt: String, workDir: File, issueId: String): String? {
+    private fun runWithFallback(
+        prompt: String,
+        workDir: File,
+        issueId: String,
+        rootKey: String = "demo_scenario"
+    ): String? {
         val models = FreeModelCycler.DEFAULT_FREE_MODELS
         // A custom scenario is mandatory (no demo is ever recorded without one), and real
         // free-tier latency for this prompt is highly bimodal in practice — anywhere from ~8s
@@ -96,7 +395,7 @@ class DemoScenarioGenerator(
                     logger.warn("demo_scenario_model_failed", mapOf("model" to model, "pass" to pass.toString()))
                     continue
                 }
-                val block = extractScenarioBlock(output)
+                val block = extractScenarioBlock(output, rootKey)
                 if (block == null) {
                     // The model responded but didn't produce a parseable scenario — try the
                     // next model rather than giving up on the very first response we got.
@@ -374,17 +673,24 @@ class DemoScenarioGenerator(
         null
     }
 
-    internal fun extractScenarioBlock(raw: String): String? {
-        // Format A: ```yaml demo_scenario\n<content without the demo_scenario: wrapper>\n``` —
+    /**
+     * Pulls the scenario YAML out of a model response.
+     *
+     * [rootKey] selects which kind of scenario to look for — `demo_scenario` for the browser
+     * recorder, `api_scenario` for the server-side one. The three tolerated shapes are identical
+     * for both, so the API path reuses this rather than growing a second, differently-buggy parser.
+     */
+    internal fun extractScenarioBlock(raw: String, rootKey: String = "demo_scenario"): String? {
+        // Format A: ```yaml <rootKey>\n<content without the <rootKey>: wrapper>\n``` —
         // the label is on the fence line itself, so the content needs wrapping/reindenting.
         val labeledFenceMatch = Regex(
-            """```(?:yaml|yml)\s+demo_scenario\s*\n(.*?)\n```""",
+            """```(?:yaml|yml)\s+${Regex.escape(rootKey)}\s*\n(.*?)\n```""",
             RegexOption.DOT_MATCHES_ALL
         ).findAll(raw).lastOrNull()
         if (labeledFenceMatch != null) {
             val yamlContent = labeledFenceMatch.groupValues[1].trim()
             if (yamlContent.isBlank()) return null
-            return "demo_scenario:\n" + yamlContent.lines().joinToString("\n") { line ->
+            return "$rootKey:\n" + yamlContent.lines().joinToString("\n") { line ->
                 if (line.startsWith("  ") || line.isBlank()) line else "  $line"
             }
         }
@@ -398,18 +704,18 @@ class DemoScenarioGenerator(
             RegexOption.DOT_MATCHES_ALL
         ).findAll(raw)
             .map { it.groupValues[1] }
-            .filter { it.trimStart().startsWith("demo_scenario:") }
+            .filter { it.trimStart().startsWith("$rootKey:") }
             .lastOrNull()
         if (plainFenceMatch != null) {
             return plainFenceMatch.trim().ifBlank { null }
         }
 
-        // Format C: unfenced "demo_scenario:\n  ..." — tolerate blank lines *within* the block
+        // Format C: unfenced "<rootKey>:\n  ..." — tolerate blank lines *within* the block
         // (models routinely add them for readability) without swallowing unrelated trailing
         // prose once genuine non-indented, non-blank content appears.
-        val rawMatch = Regex("""demo_scenario:\s*\n(?:(?:[ \t]+.*)?\n)*""")
+        val rawMatch = Regex("""(?m)^${Regex.escape(rootKey)}:\s*\n(?:(?:[ \t]+.*)?\n)*""")
             .findAll(raw)
-            .lastOrNull { it.value.trim() != "demo_scenario:" }
+            .lastOrNull { it.value.trim() != "$rootKey:" }
         if (rawMatch != null) {
             return rawMatch.value.trimEnd()
         }
@@ -419,6 +725,18 @@ class DemoScenarioGenerator(
     companion object {
         /** Conventional staging dir the recorder resolves scenario + credentials from, keyed by issue. */
         const val SCENARIO_DIR = "/tmp/koncerto-demo"
+
+        // Must match DemoScenarioFiles in koncerto-demo, which is the reader side of this
+        // convention. Duplicated rather than shared because the orchestrator deliberately does not
+        // depend on koncerto-demo; the suffixes are pinned by tests on both sides.
+        const val BROWSER_SCENARIO_SUFFIX = "-scenario.yaml"
+        const val API_SCENARIO_SUFFIX = "-api-scenario.yaml"
+        private const val API_ROOT_KEY = "api_scenario"
+        private const val ANDROID_ROOT_KEY = "android_scenario"
+        const val ANDROID_SCENARIO_SUFFIX = "-android-scenario.yaml"
+        // Mirrors the 8000-char diff cap: a service with hundreds of routes would otherwise
+        // push the prompt past every free model's context and fail generation outright.
+        private const val MAX_INVENTORY_CHARS = 8000
 
         /** Base refs tried in order for the grounding diff: local `main` first, then the
          *  remote-tracking `origin/main` that PR-branch clones actually have. */

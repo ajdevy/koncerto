@@ -14,7 +14,9 @@ data class RecordingConfig(
     val targetUrl: String = "",
     val captureInputIndex: String = "1",
     val scenarioPath: String = "",
-    val credentialsPath: String = ""
+    val credentialsPath: String = "",
+    val issueIdentifier: String = "",
+    val apkPath: String = ""
 ) {
     val maxDuration: kotlin.time.Duration get() = maxDurationSeconds.seconds
 }

@@ -484,7 +484,7 @@ class DemoRecordingServiceTest {
     }
 
     @Test
-    fun `requestRecording falls back to asciinema when playwright fails`() = runTest {
+    fun `requestRecording falls back to the API recorder when playwright fails`() = runTest {
         val asciinema = FakeAsciinemaRecorder()
         val failPlaywright = FailingRecorder()
         val fallbackService = DemoRecordingService(
@@ -494,7 +494,7 @@ class DemoRecordingServiceTest {
                 maxRetries = 0, retryDelayMs = 1
             ),
             taskRepository = taskRepository,
-            recorderFactory = RecorderFactory(listOf(failPlaywright, asciinema)),
+            recorderFactory = RecorderFactory(listOf(failPlaywright, FakeApiRecorder())),
             storage = storage,
             reporter = reporter,
             reportGenerator = reportGenerator,
@@ -505,7 +505,7 @@ class DemoRecordingServiceTest {
             "issue-fallback", "KONC-FB", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
         )
         assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.API)
     }
 
     @Test
@@ -915,8 +915,9 @@ class DemoRecordingServiceTest {
     }
 
     @Test
-    fun `requestRecording falls back from adb to asciinema`() = runTest {
-        val asciinema = FakeAsciinemaRecorder()
+    fun `requestRecording does not fall back when adb fails`() = runTest {
+        // adb, xcrun and ffmpeg used to degrade to an asciinema cast of an idle shell — an artifact
+        // that proves nothing. Failing outright surfaces the real problem to the recovery loop.
         val failAdb = object : DemoRecorder {
             override val platform = DemoPlatform.ADB
             override suspend fun isAvailable(): Boolean = true
@@ -932,7 +933,7 @@ class DemoRecordingServiceTest {
                 retryDelayMs = 1
             ),
             taskRepository = taskRepository,
-            recorderFactory = RecorderFactory(listOf(failAdb, asciinema)),
+            recorderFactory = RecorderFactory(listOf(failAdb, FakeAsciinemaRecorder())),
             storage = storage,
             reporter = reporter,
             reportGenerator = reportGenerator,
@@ -942,8 +943,7 @@ class DemoRecordingServiceTest {
         val result = adbService.requestRecording(
             "issue-adb", "KONC-ADB", "test", DemoPlatform.ADB, DemoTrigger.MANUAL
         )
-        assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+        assert(result is DemoResult.Failure)
     }
 
     @Test
@@ -971,8 +971,7 @@ class DemoRecordingServiceTest {
     }
 
     @Test
-    fun `requestRecording falls back from ffmpeg to asciinema`() = runTest {
-        val asciinema = FakeAsciinemaRecorder()
+    fun `requestRecording does not fall back when ffmpeg fails`() = runTest {
         val failFfmpeg = object : DemoRecorder {
             override val platform = DemoPlatform.FFMPEG
             override suspend fun isAvailable(): Boolean = true
@@ -988,7 +987,7 @@ class DemoRecordingServiceTest {
                 retryDelayMs = 1
             ),
             taskRepository = taskRepository,
-            recorderFactory = RecorderFactory(listOf(failFfmpeg, asciinema)),
+            recorderFactory = RecorderFactory(listOf(failFfmpeg, FakeAsciinemaRecorder())),
             storage = storage,
             reporter = reporter,
             reportGenerator = reportGenerator,
@@ -998,13 +997,11 @@ class DemoRecordingServiceTest {
         val result = ffmpegService.requestRecording(
             "issue-ffmpeg", "KONC-FF", "test", DemoPlatform.FFMPEG, DemoTrigger.MANUAL
         )
-        assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+        assert(result is DemoResult.Failure)
     }
 
     @Test
-    fun `requestRecording falls back from xcrun to asciinema`() = runTest {
-        val asciinema = FakeAsciinemaRecorder()
+    fun `requestRecording does not fall back when xcrun fails`() = runTest {
         val failXcrun = object : DemoRecorder {
             override val platform = DemoPlatform.XCRUN
             override suspend fun isAvailable(): Boolean = true
@@ -1020,7 +1017,7 @@ class DemoRecordingServiceTest {
                 retryDelayMs = 1
             ),
             taskRepository = taskRepository,
-            recorderFactory = RecorderFactory(listOf(failXcrun, asciinema)),
+            recorderFactory = RecorderFactory(listOf(failXcrun, FakeAsciinemaRecorder())),
             storage = storage,
             reporter = reporter,
             reportGenerator = reportGenerator,
@@ -1030,8 +1027,7 @@ class DemoRecordingServiceTest {
         val result = xcrunService.requestRecording(
             "issue-xcrun", "KONC-XC", "test", DemoPlatform.XCRUN, DemoTrigger.MANUAL
         )
-        assert(result is DemoResult.Success)
-        assert((result as DemoResult.Success).value.platform == DemoPlatform.ASCIINEMA)
+        assert(result is DemoResult.Failure)
     }
 
     @Test
@@ -1581,6 +1577,138 @@ class DemoRecordingServiceTest {
         assert((result as DemoResult.Success).value.platform == DemoPlatform.PLAYWRIGHT)
     }
 
+    @Test
+    fun `a staged API scenario selects the API recorder over the configured default`() = runTest {
+        // Scenario kind is how the orchestrator communicates that a ticket is server-side: staging an
+        // API scenario must beat the configured browser default, or the demo records a browser
+        // looking at an app that has no UI.
+        val stagingDir = createTempDir(prefix = "api-scenario-staging-")
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles
+            .apiScenario(stagingDir.absolutePath, "issue-api")
+            .writeText("api_scenario:\n  steps:\n    - action: request\n      path: /health\n")
+
+        val apiService = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = stagingDir.absolutePath,
+                targetUrl = "http://target:8080",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(FakeRecorder2(), FakeApiRecorder())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = apiService.requestRecording(
+            "issue-api", "KONC-API", "test", null, DemoTrigger.MANUAL
+        )
+
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.API)
+        stagingDir.deleteRecursively()
+    }
+
+    @Test
+    fun `a staged API scenario is ignored when no API recorder is available`() = runTest {
+        val stagingDir = createTempDir(prefix = "api-scenario-no-recorder-")
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles
+            .apiScenario(stagingDir.absolutePath, "KONC-NOAPI")
+            .writeText("api_scenario:\n  steps:\n    - action: request\n      path: /health\n")
+
+        val browserOnly = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = stagingDir.absolutePath,
+                targetUrl = "http://target:8080",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(FakeRecorder2())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = browserOnly.requestRecording(
+            "issue-noapi", "KONC-NOAPI", "test", null, DemoTrigger.MANUAL
+        )
+
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.PLAYWRIGHT)
+        stagingDir.deleteRecursively()
+    }
+
+    @Test
+    fun `fallback reports the original failure when the fallback task cannot be created`() = runTest {
+        val failingAfterFirst = SaveFailingRepository(failFromSave = 2)
+        val failPlaywright = FailingRecorder()
+        val svc = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = System.getProperty("java.io.tmpdir"),
+                targetUrl = "http://localhost:3000",
+                maxRetries = 0,
+                retryDelayMs = 1
+            ),
+            taskRepository = failingAfterFirst,
+            recorderFactory = RecorderFactory(listOf(failPlaywright, FakeApiRecorder())),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = svc.requestRecording(
+            "issue-fbcreate", "KONC-FBC", "test", DemoPlatform.PLAYWRIGHT, DemoTrigger.MANUAL
+        )
+
+        assert(result is DemoResult.Failure)
+    }
+
+    @Test
+    fun `a staged Android scenario selects the ADB recorder`() = runTest {
+        val stagingDir = createTempDir(prefix = "android-scenario-staging-")
+        com.flexsentlabs.koncerto.demo.recorder.api.DemoScenarioFiles
+            .androidScenario(stagingDir.absolutePath, "issue-droid")
+            .writeText("android_scenario:\n  appId: com.x\n  steps: []\n")
+
+        val androidRecorder = object : DemoRecorder {
+            override val platform: DemoPlatform = DemoPlatform.ADB
+            override suspend fun isAvailable(): Boolean = true
+            override suspend fun record(
+                config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+            ): DemoResult<DemoRecorder.RecordingResult> {
+                outputFile.writeText("android demo video")
+                return DemoResult.Success(DemoRecorder.RecordingResult(
+                    outputFile, 1000L, outputFile.length(), config.outputFormat))
+            }
+        }
+        val svc = DemoRecordingService(
+            config = DemoConfig(
+                tempDir = stagingDir.absolutePath,
+                targetUrl = "http://target:8080",
+                defaultPlatform = "playwright"
+            ),
+            taskRepository = taskRepository,
+            recorderFactory = RecorderFactory(listOf(FakeRecorder2(), androidRecorder)),
+            storage = storage,
+            reporter = reporter,
+            reportGenerator = reportGenerator,
+            metrics = metrics,
+            auditLogger = auditLogger
+        )
+
+        val result = svc.requestRecording("issue-droid", "KONC-DROID", "test", null, DemoTrigger.MANUAL)
+
+        assert(result is DemoResult.Success)
+        assert((result as DemoResult.Success).value.platform == DemoPlatform.ADB)
+        stagingDir.deleteRecursively()
+    }
+
     private suspend fun invokePerformIntegrityCheck(task: DemoTask, file: File): DemoResult<Unit> {
         val method = DemoRecordingService::class.java.getDeclaredMethod(
             "performIntegrityCheck",
@@ -1716,6 +1844,36 @@ class FakeAsciinemaRecorder : DemoRecorder {
         config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
     ): DemoResult<DemoRecorder.RecordingResult> {
         outputFile.writeText("asciinema cast")
+        return DemoResult.Success(DemoRecorder.RecordingResult(
+            file = outputFile, durationMs = 1000L, fileSizeBytes = outputFile.length(), format = config.outputFormat
+        ))
+    }
+}
+
+/** Delegates to [FakeDemoTaskRepository] but starts throwing at the [failFromSave]-th save, so a
+ *  test can fail the fallback task's creation while letting the original task be created. */
+class SaveFailingRepository(private val failFromSave: Int) : DemoTaskRepository by FakeDemoTaskRepository() {
+    private val delegate = FakeDemoTaskRepository()
+    private var saves = 0
+
+    override suspend fun save(task: DemoTask) {
+        saves++
+        if (saves >= failFromSave) throw RuntimeException("db unavailable")
+        delegate.save(task)
+    }
+
+    override suspend fun findById(taskId: String): DemoTask? = delegate.findById(taskId)
+    override suspend fun updateStatus(taskId: String, status: DemoStatus, errorMessage: String?) =
+        delegate.updateStatus(taskId, status, errorMessage)
+}
+
+class FakeApiRecorder : DemoRecorder {
+    override val platform: DemoPlatform = DemoPlatform.API
+    override suspend fun isAvailable(): Boolean = true
+    override suspend fun record(
+        config: com.flexsentlabs.koncerto.demo.model.RecordingConfig, outputFile: File
+    ): DemoResult<DemoRecorder.RecordingResult> {
+        outputFile.writeText("api demo video")
         return DemoResult.Success(DemoRecorder.RecordingResult(
             file = outputFile, durationMs = 1000L, fileSizeBytes = outputFile.length(), format = config.outputFormat
         ))

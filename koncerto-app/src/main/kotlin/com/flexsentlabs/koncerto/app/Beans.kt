@@ -48,7 +48,9 @@ import com.flexsentlabs.koncerto.demo.config.DemoConfig
 import com.flexsentlabs.koncerto.demo.integration.DemoEventListener
 import com.flexsentlabs.koncerto.demo.observability.DemoAuditLogger
 import com.flexsentlabs.koncerto.demo.observability.DemoMetricsRecorder
-import com.flexsentlabs.koncerto.demo.recorder.AdbRecorder
+import com.flexsentlabs.koncerto.demo.recorder.AndroidRecorder
+import com.flexsentlabs.koncerto.demo.recorder.ApiRecorder
+import com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher
 import com.flexsentlabs.koncerto.demo.recorder.AsciinemaRecorder
 import com.flexsentlabs.koncerto.demo.recorder.DemoRecorder
 import com.flexsentlabs.koncerto.demo.recorder.FfmpegRecorder
@@ -435,6 +437,14 @@ class Beans {
                         crawlDomInventory = { internalUrl ->
                             com.flexsentlabs.koncerto.demo.recorder.DomInventoryCrawler(logger).crawl(internalUrl)
                         },
+                        // Compaction happens here, on the koncerto-demo side of the seam, so the
+                        // orchestrator receives a ready-to-prompt inventory and stays free of a
+                        // dependency on this module.
+                        fetchOpenApiInventory = { internalUrl ->
+                            com.flexsentlabs.koncerto.demo.recorder.OpenApiSpecFetcher(logger)
+                                .fetch(internalUrl)
+                                ?.let { com.flexsentlabs.koncerto.demo.recorder.api.OpenApiInventory.compact(it) }
+                        },
                         reviewMetrics = metricsRepository as? com.flexsentlabs.koncerto.metrics.ReviewMetricsRepository
                     )
                 }
@@ -480,10 +490,13 @@ class Beans {
     fun playwrightRecorder(): DemoRecorder = PlaywrightRecorder()
 
     @Bean
+    fun apiRecorder(logger: StructuredLogger): DemoRecorder = ApiRecorder(OpenApiSpecFetcher(logger))
+
+    @Bean
     fun asciinemaRecorder(): DemoRecorder = AsciinemaRecorder()
 
     @Bean
-    fun adbRecorder(): DemoRecorder = AdbRecorder()
+    fun androidRecorder(): DemoRecorder = AndroidRecorder()
 
     @Bean
     fun xcrunRecorder(): DemoRecorder = XcrunRecorder()

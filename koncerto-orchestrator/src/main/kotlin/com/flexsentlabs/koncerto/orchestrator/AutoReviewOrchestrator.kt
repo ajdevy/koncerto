@@ -60,6 +60,11 @@ class AutoReviewOrchestrator(
     // koncerto-demo; wired in Beans to DomInventoryCrawler.crawl. Best-effort — returns null when
     // crawling is impossible or yields nothing.
     private val crawlDomInventory: (suspend (internalUrl: String) -> String?)? = null,
+    // Reads the deployed app's published OpenAPI document and returns a COMPACTED route inventory.
+    // Same suspend-fn seam style as crawlDomInventory, so the orchestrator needn't depend on
+    // koncerto-demo (both the fetch and the compaction live there); wired in Beans. Best-effort —
+    // returns null when the app publishes no spec we can reach.
+    private val fetchOpenApiInventory: (suspend (internalUrl: String) -> String?)? = null,
     private val ghProcessRunner: GhProcessRunner = defaultGhProcessRunner,
     // Review-quality pipeline (Epics 18-22). Null metrics → telemetry is a no-op, behavior unchanged.
     private val reviewMetrics: com.flexsentlabs.koncerto.metrics.ReviewMetricsRepository? = null,
@@ -683,7 +688,77 @@ class AutoReviewOrchestrator(
                     "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
                 .getOrNull()
         } else null
-        if (!domInventory.isNullOrBlank() && workspace != null && generator0 != null) {
+        // A server-side ticket has nothing to look at in a browser. Probe the deployment for a
+        // published OpenAPI document; when it has one and no browsable UI, record the API instead.
+        // Best-effort in exactly the same way as the crawl — a failed probe reads as "no spec".
+        val specFetcher = fetchOpenApiInventory
+        val openApiInventory = if (recordingUrl != null && specFetcher != null) {
+            runCatching { specFetcher.invoke(recordingUrl) }
+                .onFailure { e -> logger.warn("openapi_inventory_failed", mapOf(
+                    "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
+                .getOrNull()
+        } else null
+
+        // An Android app is detected from the repository, not the deployment — it has no URL to
+        // crawl or probe.
+        val androidApp = workspace?.let { AndroidProjectDetector.isAndroidApp(it.path) } == true
+        val verdict = DemoPlatformDecision.decide(domInventory, openApiInventory, androidApp)
+
+        val androidScenarioPath = if (verdict.kind == DemoPlatformKind.ANDROID && workspace != null && generator0 != null) {
+            runCatching {
+                generator0.generateAndroid(
+                    issue, workspace,
+                    AndroidProjectDetector.applicationId(workspace.path),
+                    credentialKeys
+                )
+            }.onFailure { e -> logger.warn("demo_scenario_android_failed", mapOf(
+                "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
+                .getOrNull()
+        } else null
+
+        val apiScenarioPath = if (verdict.kind == DemoPlatformKind.API && workspace != null && generator0 != null) {
+            runCatching { generator0.generateApi(issue, workspace, credentialKeys, openApiInventory) }
+                .onFailure { e -> logger.warn("demo_scenario_api_failed", mapOf(
+                    "issue_id" to issue.id, "error" to (e.message ?: "unknown"))) }
+                .getOrNull()
+        } else null
+
+        var apiDemoUnavailable = false
+        if (androidScenarioPath != null) {
+            // Same contract as the API path: the staged kind is what routes the recorder, so the
+            // other kinds go only once this one is safely written.
+            generator0?.deleteBrowserScenario(issue)
+            generator0?.deleteApiScenario(issue)
+            scenarioPath = androidScenarioPath
+            logger.info("demo_scenario_android", mapOf("issue_id" to issue.id, "reason" to verdict.reason))
+            traceReviewStep(workspace, issue, "demo_scenario", "android", mapOf("reason" to verdict.reason))
+        } else if (verdict.kind == DemoPlatformKind.ANDROID) {
+            generator0?.deleteAndroidScenario(issue)
+            logger.warn("demo_scenario_android_exhausted", mapOf("issue_id" to issue.id))
+            traceReviewStep(workspace, issue, "demo_scenario", "android_exhausted")
+        } else if (apiScenarioPath != null) {
+            // The recorder chooses its platform from which scenario kind is staged, so clearing the
+            // browser scenario is what actually routes this ticket to the API recorder. Only done
+            // once the API scenario is safely written — never leaving the ticket with neither.
+            generator0?.deleteBrowserScenario(issue)
+            scenarioPath = apiScenarioPath
+            logger.info("demo_scenario_api", mapOf("issue_id" to issue.id, "reason" to verdict.reason))
+            traceReviewStep(workspace, issue, "demo_scenario", "api", mapOf("reason" to verdict.reason))
+        } else if (verdict.kind == DemoPlatformKind.API) {
+            // Verdict was API but no scenario could be produced. Previously this fell silently into
+            // the branch below and was logged as `dom_inventory_empty`, which actively misattributed
+            // the failure. We keep recording the browser demo (it is all we have) but say so, and
+            // the PR comment carries a note that the API demo could not be produced.
+            apiDemoUnavailable = true
+            generator0?.deleteApiScenario(issue)
+            logger.warn("demo_scenario_api_exhausted", mapOf("issue_id" to issue.id, "reason" to verdict.reason))
+            traceReviewStep(workspace, issue, "demo_scenario", "api_exhausted", mapOf("reason" to verdict.reason))
+        } else if (!domInventory.isNullOrBlank() && workspace != null && generator0 != null) {
+            // The verdict is BROWSER, so any API scenario staged by an earlier pass must go: the
+            // recorder checks for one first and would keep routing this issue to the API recorder
+            // forever, silently overriding today's verdict with last pass's leftover state.
+            generator0.deleteApiScenario(issue)
+            generator0.deleteAndroidScenario(issue)
             val grounded = runCatching {
                 generator0.generate(issue, workspace, credentialKeys, domInventory)
             }.getOrNull()
@@ -693,6 +768,8 @@ class AutoReviewOrchestrator(
                 traceReviewStep(workspace, issue, "demo_scenario", "dom_grounded")
             }
         } else if (recordingUrl != null && crawler != null) {
+            generator0?.deleteApiScenario(issue)
+            generator0?.deleteAndroidScenario(issue)
             logger.info("dom_inventory_empty", mapOf("issue_id" to issue.id))
         }
 
@@ -714,7 +791,15 @@ class AutoReviewOrchestrator(
                 // If a recording was produced, flag any positive scenario the browser recorder can't
                 // exercise end-to-end (e.g. reading an emailed login code) so a partial recording is
                 // not mistaken for a fully-verified scenario. Never changes the Pass outcome.
-                val coverageNote = if (demoUrl != null) buildCoverageNote(issue) else null
+                val apiNote = if (apiDemoUnavailable) {
+                    "⚠️ **API demo unavailable** — this deployment exposes no browsable UI, but an API " +
+                        "demo scenario could not be generated, so the recording below is a browser " +
+                        "capture of a UI-less app and does not demonstrate the endpoints."
+                } else null
+                val coverageNote = listOfNotNull(
+                    if (demoUrl != null) buildCoverageNote(issue) else null,
+                    apiNote
+                ).joinToString("\n\n").takeIf { it.isNotBlank() }
                 if (coverageNote != null) traceReviewStep(workspace, issue, "demo_coverage", "flagged")
                 runCatching { postDetailedReviewAsPrComment(issue, workspace, reviewSequence, demoUrl, coverageNote) }
                     .onFailure { e ->
@@ -757,11 +842,25 @@ class AutoReviewOrchestrator(
             // Scenario-first repair: re-record against the SAME deployment, no re-review.
             val priorScenario = scenarioPath?.let { runCatching { java.io.File(it).readText() }.getOrNull() }
             val generator = demoScenarioGenerator
+            // Repair the kind that is actually staged. Running the browser repair on an API ticket
+            // re-created the browser scenario the API path had just deleted, left the failing API
+            // scenario untouched, and re-recorded it unchanged every cycle until the cap.
+            val repairingApi = scenarioPath?.endsWith(DemoScenarioGenerator.API_SCENARIO_SUFFIX) == true
             val repaired = if (workspace != null && generator != null && priorScenario != null && deployUrl != null) {
-                runCatching { generator.repair(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys, domInventory) }.getOrNull()
+                runCatching {
+                    if (repairingApi) {
+                        generator.repairApi(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys, openApiInventory)
+                    } else {
+                        generator.repair(issue, workspace, priorScenario, demoRecordingError!!, credentialKeys, domInventory)
+                    }
+                }.getOrNull()
             } else null
             if (repaired != null) {
-                traceReviewStep(workspace, issue, "demo_scenario", "repaired", mapOf("cycle" to cycle.toString()))
+                // Follow the repaired file: the browser path happens to overwrite the same path, but
+                // the API path writes a different one, so not reassigning re-ran the stale scenario.
+                scenarioPath = repaired
+                traceReviewStep(workspace, issue, "demo_scenario", "repaired", mapOf(
+                    "cycle" to cycle.toString(), "kind" to if (repairingApi) "api" else "browser"))
                 continue
             }
 

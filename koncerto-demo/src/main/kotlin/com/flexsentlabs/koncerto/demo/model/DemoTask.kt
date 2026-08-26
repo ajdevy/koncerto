@@ -28,7 +28,7 @@ data class DemoTask(
 
 @Serializable
 enum class DemoPlatform {
-    PLAYWRIGHT, ASCIINEMA, ADB, XCRUN, FFMPEG
+    PLAYWRIGHT, API, ASCIINEMA, ADB, XCRUN, FFMPEG
 }
 
 @Serializable
