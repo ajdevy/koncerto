@@ -2,7 +2,7 @@
 title: 'API demo scenario generation and platform routing'
 type: 'feature'
 created: '2026-08-25'
-status: 'in-review' # draft | ready-for-dev | in-progress | in-review | done
+status: 'done' # draft | ready-for-dev | in-progress | in-review | done
 context: []
 baseline_commit: '23da048f5fcf8c74bcc75deba19e3529680f9ddb'
 ---
