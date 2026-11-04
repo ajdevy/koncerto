@@ -5,7 +5,6 @@ import com.flexsentlabs.koncerto.metrics.ReviewBaseline
 import com.flexsentlabs.koncerto.metrics.ReviewFindingRecord
 import com.flexsentlabs.koncerto.metrics.ReviewMetricsRepository
 import com.flexsentlabs.koncerto.metrics.ReviewRunRecord
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
@@ -20,7 +19,7 @@ import org.springframework.web.bind.annotation.RestController
  */
 @RestController
 @RequestMapping("/api/v1/review")
-class ReviewController @Autowired constructor(
+class ReviewController(
     private val reviewMetrics: ReviewMetricsRepository? = null
 ) {
 

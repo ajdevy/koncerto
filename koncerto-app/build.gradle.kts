@@ -23,6 +23,7 @@ dependencies {
     implementation(project(":koncerto-demo"))
     implementation(project(":koncerto-deploy"))
 
+    implementation(kotlin("reflect"))
     implementation(libs.spring.boot.starter.webflux)
     implementation(libs.spring.boot.starter.actuator)
     implementation(libs.kotlinx.coroutines.core)
@@ -42,6 +43,8 @@ dependencies {
 }
 
 tasks.named<Test>("test") {
+    dependsOn(tasks.named("bootJar"))
+    systemProperty("koncerto.test.bootJar", tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar").get().archiveFile.get().asFile.absolutePath)
     useJUnitPlatform {
         excludeTags("ui")
     }
