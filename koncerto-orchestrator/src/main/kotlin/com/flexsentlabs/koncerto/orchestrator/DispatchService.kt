@@ -535,6 +535,7 @@ class DispatchService(
         state.removeOutput(issue.id)
         logger.info("dispatch_completed", mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier))
         transitionOnComplete(issue, stageConfig)
+        if (state.isBlocked(issue.id)) return
         if (notificationsConfig?.onCompleted == true && notifier != null) {
             notifier.send(NotificationEvent.AgentCompleted(
                 projectSlug = projectConfig.tracker.projectSlug,
@@ -1104,9 +1105,17 @@ class DispatchService(
                 "attempts" to attempt.toString(),
                 "max" to maxAttempts.toString()
             ))
-            runCatching { Files.deleteIfExists(statusFile) }
-            runCatching { Files.deleteIfExists(attemptFile) }
-            onComplete
+            // Keep the failed verdict for diagnosis and prevent a failed review from
+            // being recorded as completed, even if Linear is temporarily unavailable.
+            state.completed.remove(issue.id)
+            state.addBlocked(issue.id)
+            try {
+                linear.createComment(issue.id, "Blocked: review gate failed after $attempt attempt(s)")
+            } catch (e: Exception) {
+                logger.warn("blocked_comment_failed", mapOf("issue_id" to issue.id))
+                return null
+            }
+            projectConfig.tracker.blockedState
         } else {
             onFailure
         }
@@ -1138,7 +1147,9 @@ class DispatchService(
             return
         }
 
-        val followUp = stageConfig?.followUp ?: return
+        // Follow-up work belongs only to a successful stage, never a retry or block.
+        if (targetState != config.onCompleteState) return
+        val followUp = config.followUp ?: return
         val renderedTitle = FollowUpRenderer.render(followUp.titleTemplate, issue)
         val renderedDescription = followUp.descriptionTemplate?.let { FollowUpRenderer.render(it, issue) }
 
