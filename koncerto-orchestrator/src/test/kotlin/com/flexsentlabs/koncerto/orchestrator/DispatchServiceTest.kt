@@ -588,6 +588,77 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `exhausted failed review blocks instead of completing`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val testIssue = issue("a", "ENG-1", "In Review")
+        val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+        Files.writeString(workspace.path.resolve(".review-status"), "fail")
+        Files.writeString(workspace.path.resolve(".review-attempt"), "3")
+        val linear = TrackingLinearClient()
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done",
+            onFailureState = "Needs Fix", maxReviewAttempts = 3
+        )
+        val svc = createService(linear = linear, workspaces = workspaces)
+
+        runBlocking { svc.transitionOnComplete(testIssue, stage) }
+
+        assertThat(linear.resolvedStateHistory).containsExactly("Blocked")
+        assertThat(linear.commentedIssueId).isEqualTo(testIssue.id)
+        assertThat(Files.readString(workspace.path.resolve(".review-status"))).isEqualTo("fail")
+    }
+
+    @Test
+    fun `exhausted review does not create follow up`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val testIssue = issue("a", "ENG-1", "In Review")
+        val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+        Files.writeString(workspace.path.resolve(".review-status"), "fail")
+        Files.writeString(workspace.path.resolve(".review-attempt"), "3")
+        val linear = TrackingLinearClient()
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done",
+            onFailureState = "Needs Fix", maxReviewAttempts = 3,
+            followUp = FollowUpConfig(titleTemplate = "Follow up", state = "Todo")
+        )
+        val svc = createService(linear = linear, workspaces = workspaces)
+        runBlocking { svc.transitionOnComplete(testIssue, stage) }
+        assertThat(linear.createdIssueTitle).isNull()
+    }
+
+    @Test
+    fun `exhausted review does not send a completion notification`(@TempDir root: Path) {
+        val workspaces = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val testIssue = issue("a", "ENG-1", "In Review")
+        val workspace = workspaces.ensureWorkspace(testIssue.identifier)
+        Files.writeString(workspace.path.resolve(".review-status"), "fail")
+        Files.writeString(workspace.path.resolve(".review-attempt"), "3")
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = null, command = null, onCompleteState = "Done",
+            onFailureState = "Needs Fix", maxReviewAttempts = 3
+        )
+        val base = config(stages = mapOf("in review" to stage))
+        val cfg = base.copy(tracker = base.tracker.copy(activeStates = listOf("In Review")))
+        val state = RuntimeState()
+        val linear = TrackingLinearClient().also { it.addIssue(testIssue) }
+        var completedNotification = false
+        val notifier = CompositeNotifier(listOf(object : com.flexsentlabs.koncerto.notifications.Notifier {
+            override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
+                if (event is com.flexsentlabs.koncerto.notifications.NotificationEvent.AgentCompleted) completedNotification = true
+            }
+        }))
+        val svc = createService(projectConfig = cfg, state = state, linear = linear, workspaces = workspaces,
+            candidates = listOf(testIssue), notifier = notifier, notificationsConfig = NotificationsConfig(onCompleted = true))
+        runDispatchAwait(svc)
+        assertThat(state.isBlocked(testIssue.id)).isTrue()
+        assertThat(state.completed.containsKey(testIssue.id)).isFalse()
+        assertThat(completedNotification).isFalse()
+    }
+
+    @Test
     fun `advisory review mode transitions to on_complete_state ignoring on_failure_state`() {
         // Epic 21: in advisory mode a failing verdict never routes to on_failure_state — the
         // issue always advances to on_complete_state (findings are still published/persisted).
@@ -1909,7 +1980,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `transitionOnComplete clears review files when max attempts reached`(@TempDir root: Path) = runBlocking {
+    fun `transitionOnComplete keeps failed review files when max attempts reached`(@TempDir root: Path) = runBlocking {
         val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
         ws.ensureWorkspace("T-1")
         val workspace = root.resolve("T-1")
@@ -1929,7 +2000,7 @@ class DispatchServiceTest {
             workspaces = ws
         )
         svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
-        assertThat(Files.exists(workspace.resolve(".review-status"))).isFalse()
+        assertThat(Files.exists(workspace.resolve(".review-status"))).isTrue()
     }
 
     @Test
@@ -2080,7 +2151,7 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `transitionOnComplete uses onComplete when review fail exceeds max attempts`(@TempDir root: Path) = runBlocking {
+    fun `transitionOnComplete blocks when review fail exceeds max attempts`(@TempDir root: Path) = runBlocking {
         val workspace = root.resolve("T-1")
         Files.createDirectories(workspace)
         Files.writeString(workspace.resolve(".review-status"), "fail")
@@ -2100,8 +2171,8 @@ class DispatchServiceTest {
             candidates = emptyList()
         )
         svc.transitionOnComplete(issue("1", "T-1", "Todo"), stage)
-        assertThat(linear.transitionedStateId).isEqualTo("done-id")
-        assertThat(Files.exists(workspace.resolve(".review-status"))).isFalse()
+        assertThat(linear.resolvedStateHistory).containsExactly("Blocked")
+        assertThat(Files.exists(workspace.resolve(".review-status"))).isTrue()
     }
 
     @Test
