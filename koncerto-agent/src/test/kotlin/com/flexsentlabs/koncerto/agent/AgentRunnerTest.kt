@@ -98,6 +98,7 @@ class AgentRunnerTest {
         val root = Files.createTempDirectory("agent-runner-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()
@@ -188,6 +189,7 @@ class AgentRunnerTest {
         val root = Files.createTempDirectory("agent-runner-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()
@@ -409,7 +411,7 @@ class AgentRunnerTest {
     @Test
     fun `runner completes codex exec command via writeRaw path`() = runBlocking {
         val root = Files.createTempDirectory("ar-codex-exec-")
-        val script = root.resolve("fake-codex.sh")
+        val script = root.resolve("codex")
         Files.writeString(
             script,
             """
@@ -506,6 +508,7 @@ class AgentRunnerTest {
         Files.createDirectories(clarification.parent)
         Files.writeString(clarification, "Need more detail")
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()
@@ -592,6 +595,34 @@ class AgentRunnerTest {
             turnTimeoutMs = 5000, stallTimeoutMs = 5000
         )
         assertThat(result.exceptionOrNull()?.message.orEmpty()).contains("startup_failed")
+    }
+
+    @Test
+    fun `runner fails when agent reports turn failure`() = runBlocking {
+        val root = Files.createTempDirectory("ar-turn-failure-")
+        val manager = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val factory = mockk<AgentRuntimeFactory>()
+        val runtime = mockk<AgentRuntime>(relaxed = true)
+        val output = MutableSharedFlow<String>(extraBufferCapacity = 8)
+        val events = kotlinx.coroutines.channels.Channel<AgentEvent>(8)
+        every { factory.create(any(), any(), any(), any(), any(), any(), any(), any()) } returns runtime
+        coEvery { runtime.start(any()) } returns true
+        every { runtime.isAlive() } returns true
+        every { runtime.output } returns output.asSharedFlow()
+        every { runtime.events() } returns events.receiveAsFlow()
+        coEvery { runtime.send(any(), any()) } coAnswers {
+            if (firstArg<String>() == "turn/start") {
+                events.send(AgentEvent.TurnFailed("t1", "u1", "test failure", null))
+            }
+            "1"
+        }
+        val runner = DefaultAgentRunner(sampleConfig(), manager, noopLogger(), runtimeFactory = factory, maxRetries = 1)
+        val result = runner.run(
+            sampleIssue(), attempt = 1, prompt = "Hi", commandOverride = "ignored",
+            turnTimeoutMs = 5000, stallTimeoutMs = 5000
+        )
+        assertThat(result.exceptionOrNull()).isNotNull()
+        Unit
     }
 
     @Test
@@ -690,6 +721,7 @@ class AgentRunnerTest {
         val root = Files.createTempDirectory("ar-output-cb-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()
@@ -768,6 +800,7 @@ class AgentRunnerTest {
         ProcessBuilder("git", "commit", "--allow-empty", "-m", "initial")
             .directory(wsPath.toFile()).start().waitFor()
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
         """.trimIndent()

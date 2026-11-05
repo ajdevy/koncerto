@@ -332,9 +332,12 @@ class DefaultAgentRunner(
                                 is AgentEvent.SessionStarted -> {
                                     event.pid?.let { processId.set(it) }
                                 }
-                                is AgentEvent.TurnCompleted, is AgentEvent.TurnFailed -> {
+                                is AgentEvent.TurnCompleted -> {
                                     healthChecker?.reportHeartbeat(agentKey, processId.get())
                                     turnDone.complete(Unit)
+                                }
+                                is AgentEvent.TurnFailed -> {
+                                    turnDone.completeExceptionally(IllegalStateException("agent_turn_failed"))
                                 }
                                 else -> {}
                             }

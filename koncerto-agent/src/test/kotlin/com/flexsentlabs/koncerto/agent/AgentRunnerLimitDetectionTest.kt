@@ -31,6 +31,7 @@ class AgentRunnerLimitDetectionTest {
         val root = Files.createTempDirectory("ar-limit-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo "rate limit exceeded" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
@@ -61,6 +62,7 @@ class AgentRunnerLimitDetectionTest {
         val root = Files.createTempDirectory("ar-auth-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo "Unauthorized: invalid API key" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
@@ -91,6 +93,7 @@ class AgentRunnerLimitDetectionTest {
         val root = Files.createTempDirectory("ar-normal-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val script = """
+            read -r _; read -r _; read -r _
             echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
             echo "normal diagnostic info" >&2
             echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
@@ -119,7 +122,8 @@ class AgentRunnerLimitDetectionTest {
         val root = Files.createTempDirectory("ar-exc-")
         Files.createDirectories(root.resolve("ABC-1"))
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
-        val config = sampleConfig(command = "false", agentKind = "opencode")
+        val command = "read -r _; read -r _; read -r _; exit 1"
+        val config = sampleConfig(command = command, agentKind = "opencode")
         val classifier = PatternErrorClassifier(
             PatternErrorClassifier.DEFAULT_PATTERNS + PatternErrorClassifier.ClassificationPattern(
                 regex = Regex("agent_process_died"),
@@ -141,7 +145,7 @@ class AgentRunnerLimitDetectionTest {
             try {
                 runner.run(
                     sampleIssue(), attempt = null, prompt = "Hi",
-                    agentKindOverride = "opencode", commandOverride = "false",
+                    agentKindOverride = "opencode", commandOverride = command,
                     turnTimeoutMs = 5_000, stallTimeoutMs = 5_000
                 )
             } catch (_: Exception) {
