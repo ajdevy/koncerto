@@ -944,7 +944,7 @@ class DispatchServiceTest {
             val workspace = workspaces.ensureWorkspace(testIssue.identifier)
             Files.writeString(workspace.path.resolve(".env.example"), "BREVO_API_KEY=\n")
             val secretsFile = root.resolve("secrets.env")
-            Files.writeString(secretsFile, "SAMPLE_API_KEY=example-placeholder")
+            Files.writeString(secretsFile, "BREVO_API_KEY=example-placeholder")
 
             val state = RuntimeState()
             val runner = CollectingAgentRunner()
