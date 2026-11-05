@@ -244,7 +244,7 @@ class DefaultAgentRunner(
         } else null
         val containerId = containerManager?.createContainer()
         if (useDocker && containerId == null) {
-            logger.warn("docker_container_creation_failed_fallback", mapOf("issue" to issue.identifier))
+            throw IllegalStateException("docker_container_creation_failed")
         }
 
         val factory = runtimeFactory ?: AgentRuntimeFactory(logger)

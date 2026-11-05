@@ -361,19 +361,22 @@ class AgentRunnerTest {
     }
 
     @Test
-    fun `runner falls back gracefully when docker container creation fails`() = runTest {
+    fun `runner refuses local execution when docker container creation fails`() = runTest {
         val root = Files.createTempDirectory("agent-runner-docker-")
         val mgr = WorkspaceManager(root, HookExecutor { _, _ -> })
         val config = sampleConfig(command = "false")
         val dockerConfig = DockerConfig(enabled = true)
-        val runner = DefaultAgentRunner(
-            config, mgr, noopLogger(),
-            dockerConfig = dockerConfig,
-            maxConcurrentAgents = 2
-        )
-        val issue = sampleIssue()
-        val result = runner.run(issue, attempt = null, prompt = "Hi", commandOverride = "false")
-        assertThat(result).isNotNull()
+        val factory = mockk<AgentRuntimeFactory>(relaxed = true)
+        DockerContainerManager.testBashOverride.set("/bin/false")
+        try {
+            val runner = DefaultAgentRunner(config, mgr, noopLogger(), runtimeFactory = factory,
+                dockerConfig = dockerConfig, maxConcurrentAgents = 2, maxRetries = 1)
+            val result = runner.run(sampleIssue(), attempt = null, prompt = "Hi", commandOverride = "false")
+            assertThat(result.exceptionOrNull()).isNotNull()
+            io.mockk.verify(exactly = 0) { factory.create(any(), any(), any(), any(), any(), any(), any(), any()) }
+        } finally {
+            DockerContainerManager.testBashOverride.set(null)
+        }
     }
 
     @Test
@@ -793,11 +796,18 @@ private object AgentDockerFake {
         val docker = binDir.resolve("docker")
         Files.writeString(docker, script)
         docker.toFile().setExecutable(true)
+        val shell = binDir.resolve("shell")
+        Files.writeString(shell, "#!/bin/sh\nexport PATH='${binDir}':\"${'$'}PATH\"\nexec /bin/bash -c \"${'$'}1\"\n")
+        shell.toFile().setExecutable(true)
         val originalPath = System.getenv("PATH") ?: ""
+        val previousShell = DockerContainerManager.testBashOverride.getAndSet(shell.toString())
+        val previousDocker = DockerRuntime.testDockerOverride.getAndSet(docker.toString())
         try {
             prependPath("$binDir:$originalPath")
             block()
         } finally {
+            DockerContainerManager.testBashOverride.set(previousShell)
+            DockerRuntime.testDockerOverride.set(previousDocker)
             prependPath(originalPath)
             binDir.toFile().deleteRecursively()
         }
@@ -830,6 +840,7 @@ case "${'$'}1" in
       if [ "${'$'}1" = "-lc" ]; then
         echo '{"jsonrpc":"2.0","method":"session/started","params":{"thread_id":"t1","turn_id":"u1"}}'
         echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"thread_id":"t1","turn_id":"u1"}}'
+        cat >/dev/null
         exit 0
       fi
       shift
