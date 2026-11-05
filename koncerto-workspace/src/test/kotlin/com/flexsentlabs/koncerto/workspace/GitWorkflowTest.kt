@@ -633,7 +633,7 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `createBranch falls back to local init when remote fetch fails`() {
+    fun `createBranch fails when configured remote fetch fails`() {
         val newDir = Files.createTempDirectory("bad-remote-ws-")
         val config = GitConfig(
             enabled = true,
@@ -642,11 +642,9 @@ class GitWorkflowTest {
         )
         val workflow = GitWorkflow(config, noopLogger())
 
-        workflow.createBranch(newDir, "FALLBACK-1")
-
-        val branch = runGitIn(newDir, "rev-parse", "--abbrev-ref", "HEAD")
-        assertThat(branch).isEqualTo("feature/FALLBACK-1")
-        assertThat(newDir.resolve("README.md").toFile().exists()).isTrue()
+        val result = runCatching { workflow.createBranch(newDir, "FALLBACK-1") }
+        assertThat(result.isFailure).isTrue()
+        assertThat(newDir.resolve("README.md").toFile().exists()).isFalse()
     }
 
     @Test
@@ -676,8 +674,11 @@ class GitWorkflowTest {
             remoteUrl = "https://github.com/acme/widget.git",
             prBase = "main"
         )
+        runGitIn(dir, "init", "--initial-branch=main")
         val workflow = GitWorkflow(config, noopLogger())
-        workflow.createBranch(dir, "ORIGIN-1")
+        val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
+        method.isAccessible = true
+        method.invoke(workflow, dir)
         val remote = runGitIn(dir, "remote", "get-url", "origin")
         assertThat(remote).isEqualTo("https://github.com/acme/widget.git")
     }
@@ -847,9 +848,13 @@ class GitWorkflowTest {
         runGitIn(tmpDir, "add", "-A")
         runGitIn(tmpDir, "commit", "-m", "parent initial")
 
+        val remote = tmpDir.resolve("remote.git")
+        runGitIn(tmpDir, "init", "--bare", remote.toString())
+        runGitIn(tmpDir, "remote", "add", "origin", remote.toString())
+        runGitIn(tmpDir, "push", "origin", "main")
         val workspace = tmpDir.resolve("FLE-52")
         Files.createDirectories(workspace)
-        val config = GitConfig(enabled = true, remoteUrl = "https://github.com/acme/target.git")
+        val config = GitConfig(enabled = true, remoteUrl = remote.toString())
         val workflow = GitWorkflow(config, noopLogger())
         workflow.createBranch(workspace, "FLE-52")
 
@@ -857,7 +862,7 @@ class GitWorkflowTest {
         assertThat(runGitIn(tmpDir, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main")
         assertThat(runGitIn(workspace, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("feature/FLE-52")
         assertThat(runGitIn(workspace, "remote", "get-url", "origin"))
-            .isEqualTo("https://github.com/acme/target.git")
+            .isEqualTo(remote.toString())
     }
 
     @Test
