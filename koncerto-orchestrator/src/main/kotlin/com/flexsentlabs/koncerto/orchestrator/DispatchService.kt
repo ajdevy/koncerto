@@ -93,6 +93,49 @@ class DispatchService(
     val messageStore = AgentMessageStore(logger)
 
     private val agentIdToIssueId = ConcurrentHashMap<String, String>()
+    private val pendingReviewBlocks = ConcurrentHashMap.newKeySet<String>()
+    private val reviewBlockJournal by lazy {
+        val root = System.getenv("KONCERTO_REVIEW_BLOCK_DIR")?.let { Path.of(it) }
+            ?: (workspaces?.absoluteRoot ?: error("review block storage unavailable")).resolve(".koncerto-review-gates")
+        require(root.isAbsolute && root.normalize() == root)
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(projectConfig.tracker.projectSlug.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        ReviewBlockJournal(root.resolve(projectKey).toAbsolutePath().normalize())
+    }
+
+    private suspend fun reconcileReviewBlocks(): Set<String>? {
+        val entries = try { reviewBlockJournal.entries() } catch (_: Exception) {
+            logger.warn("review_block_journal_read_failed", emptyMap())
+            shutdownRequested = true
+            return null
+        }
+        val blockedThisCycle = entries.map { it.issueId }.toSet()
+        for (entry in entries) {
+            pendingReviewBlocks.add(entry.issueId)
+            val current = try { linear.fetchIssueById(entry.issueId) } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) { null } ?: continue
+            if (!current.state.equals(entry.originState, ignoreCase = true)) {
+                try { reviewBlockJournal.remove(entry.issueId) } catch (_: Exception) {
+                    shutdownRequested = true
+                    return null
+                }
+                pendingReviewBlocks.remove(entry.issueId)
+                continue
+            }
+            if (entry.sent) continue
+            val sent = try {
+                val blockedId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
+                if (blockedId == null) false else { linear.updateIssueState(entry.issueId, blockedId); true }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e } catch (_: Exception) { false }
+            if (sent) try { reviewBlockJournal.put(entry.copy(sent = true)) } catch (_: Exception) {
+                shutdownRequested = true
+                return null
+            }
+        }
+        return blockedThisCycle
+    }
     @Volatile
     var shutdownRequested = false
 
@@ -111,9 +154,14 @@ class DispatchService(
             return
         }
 
+        val journalBlocked = if (workspaces != null || System.getenv("KONCERTO_REVIEW_BLOCK_DIR") != null) {
+            reconcileReviewBlocks() ?: return
+        } else emptySet()
         val graph = DependencyGraph.build(candidates, projectConfig.tracker.terminalStates)
         val sorted = graph.frontier
             .filter { !state.running.containsKey(it.id) && !state.isClaimed(it.id) }
+            .filter { it.id !in pendingReviewBlocks }
+            .filter { it.id !in journalBlocked }
             .filter { !state.limitPauses.containsKey(it.id) }
             .filter { matchesRequiredLabels(it) }
             .filter { it.children.isEmpty() }
@@ -138,6 +186,7 @@ class DispatchService(
             state.removeBlocked(frontierId)
         }
         val candidateIds = candidates.map { it.id }.toSet()
+        pendingReviewBlocks.retainAll(candidateIds)
         for (id in state.blockedKeys.toTypedArray()) {
             scope.coroutineContext.ensureActive()
             if (id !in candidateIds) state.removeBlocked(id)
@@ -510,7 +559,7 @@ class DispatchService(
                     val reviewStageConfig = projectConfig.agent.stages["in review"]
                         ?: projectConfig.agent.stages["review"]
                     val effectiveStageConfig = reviewStageConfig ?: stageConfig
-                    completeIssue(issue, effectiveStageConfig, entry)
+                    completeIssue(issue, effectiveStageConfig, entry, reviewVerified = true)
                 }
                 is AutoReviewOrchestrator.ReviewDecision.RetryWithCoding -> {
                     if (decision.rerouteToState != null) {
@@ -530,11 +579,11 @@ class DispatchService(
         }
     }
 
-    private suspend fun completeIssue(issue: Issue, stageConfig: StageAgentConfig?, entry: RunningEntry?) {
+    private suspend fun completeIssue(issue: Issue, stageConfig: StageAgentConfig?, entry: RunningEntry?, reviewVerified: Boolean = false) {
         state.completed[issue.id] = true
         state.removeOutput(issue.id)
         logger.info("dispatch_completed", mapOf("issue_id" to issue.id, "issue_identifier" to issue.identifier))
-        transitionOnComplete(issue, stageConfig)
+        transitionOnComplete(issue, stageConfig, reviewVerified)
         if (state.isBlocked(issue.id)) return
         if (notificationsConfig?.onCompleted == true && notifier != null) {
             notifier.send(NotificationEvent.AgentCompleted(
@@ -824,14 +873,21 @@ class DispatchService(
         issueProjectMap[issue.id] = projectConfig.tracker.projectSlug
         agentIdToIssueId[data.threadId] = issue.id
 
-        val result = agentRunner.run(
+        val reviewStage = data.stageName.lowercase() in setOf("in review", "review") || data.stageConfig?.review != null
+        val verdictReady = if (reviewStage) runCatching {
+            val manager = workspaces ?: error("review workspace unavailable")
+            val workspace = manager.ensureWorkspace(issue.identifier)
+            Files.deleteIfExists(workspace.path.resolve(".review-status"))
+            true
+        }.getOrDefault(false) else true
+        val result = if (verdictReady) agentRunner.run(
             issue, data.attempt, data.prompt, data.resolved.kind, data.resolved.command,
             modelOverride = data.resolved.model,
             effortOverride = data.resolved.effort,
             turnTimeoutMs = projectConfig.agent.turnTimeoutMs,
             stallTimeoutMs = projectConfig.agent.stallTimeoutMs,
             gitWorkflowOverride = gitWorkflow
-        )
+        ) else Result.Failure(IllegalStateException("review_verdict_reset_failed"))
 
         val eventCollectorJob = scope.launch {
             agentRunner.events()
@@ -1085,15 +1141,62 @@ class DispatchService(
             return onComplete
         }
 
-        if (onFailure == null) return onComplete
+        val reviewStage = issue.normalizedState in setOf("in review", "review") || stageConfig.review != null
+        if (onFailure == null) {
+            if (!reviewStage) return onComplete
+            val status = runCatching {
+                val workspace = workspaces?.ensureWorkspace(issue.identifier) ?: return@runCatching null
+                Files.readString(workspace.path.resolve(".review-status")).trim().lowercase()
+            }.getOrNull()
+            if (status == "pass") return onComplete
+            state.completed.remove(issue.id)
+            pendingReviewBlocks.add(issue.id)
+            val newlyBlocked = state.addBlocked(issue.id)
+            val journalEntry = ReviewBlockJournal.Entry(issue.id, issue.state, false)
+            try {
+                reviewBlockJournal.put(journalEntry)
+            } catch (_: Exception) {
+                logger.warn("review_block_journal_write_failed", mapOf("issue_id" to issue.id))
+                shutdownRequested = true
+                return null
+            }
+            logger.warn("review_missing_or_failed_verdict", mapOf("issue_id" to issue.id))
+            if (newlyBlocked) {
+                try {
+                    linear.createComment(issue.id, "Blocked: review did not produce a passing verdict")
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    logger.warn("review_blocked_comment_failed", mapOf("issue_id" to issue.id))
+                }
+            }
+            try {
+                val blockedId = linear.resolveStateId(projectConfig.tracker.projectSlug, projectConfig.tracker.blockedState)
+                if (blockedId != null) {
+                    linear.updateIssueState(issue.id, blockedId)
+                    try { reviewBlockJournal.put(journalEntry.copy(sent = true)) } catch (e: Exception) {
+                        shutdownRequested = true
+                        throw e
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                logger.warn("review_blocked_transition_failed", mapOf("issue_id" to issue.id))
+            }
+            return null
+        }
 
-        val ws = workspaces ?: return onComplete
-        val workspace = runCatching { ws.ensureWorkspace(issue.identifier) }.getOrNull() ?: return onComplete
+        val missingVerdictTarget = if (reviewStage) onFailure else onComplete
+        val ws = workspaces ?: return missingVerdictTarget
+        val workspace = runCatching { ws.ensureWorkspace(issue.identifier) }.getOrNull() ?: return missingVerdictTarget
         val statusFile = workspace.path.resolve(".review-status")
         val attemptFile = workspace.path.resolve(".review-attempt")
 
-        if (!Files.exists(statusFile)) return onComplete
-        val status = runCatching { Files.readString(statusFile) }.getOrNull()?.trim()?.lowercase() ?: return onComplete
+        if (!Files.exists(statusFile)) return missingVerdictTarget
+        val status = runCatching { Files.readString(statusFile) }.getOrNull()?.trim()?.lowercase() ?: return missingVerdictTarget
+
+        if (reviewStage && status != "pass" && status != "fail") return onFailure
 
         if (status != "fail") return onComplete
 
@@ -1121,9 +1224,12 @@ class DispatchService(
         }
     }
 
-    internal suspend fun transitionOnComplete(issue: Issue, stageConfig: StageAgentConfig?) {
+    internal suspend fun transitionOnComplete(issue: Issue, stageConfig: StageAgentConfig?, reviewVerified: Boolean = false) {
         val config = stageConfig ?: return
-        val targetState = resolveReviewTargetState(issue, config) ?: return
+        val targetState = (if (reviewVerified) config.onCompleteState else resolveReviewTargetState(issue, config)) ?: return
+        if (targetState != config.onCompleteState) {
+            state.completed.remove(issue.id)
+        }
         try {
             val stateId = linear.resolveStateId(projectConfig.tracker.projectSlug, targetState)
             if (stateId == null) {

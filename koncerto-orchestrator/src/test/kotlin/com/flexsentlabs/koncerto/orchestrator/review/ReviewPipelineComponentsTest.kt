@@ -2,6 +2,7 @@ package com.flexsentlabs.koncerto.orchestrator.review
 
 import assertk.assertThat
 import assertk.assertions.isEqualTo
+import assertk.assertions.isFalse
 import assertk.assertions.isGreaterThan
 import assertk.assertions.isNotNull
 import assertk.assertions.isNull
@@ -210,7 +211,7 @@ class ReviewPipelineComponentsTest {
     }
 
     @Test
-    fun `specialist coordinator skips specialists that fail`() = runBlocking<Unit> {
+    fun `specialist coordinator fails when a specialist is missing`() = runBlocking<Unit> {
         val coordinator = SpecialistReviewCoordinator { path ->
             if (path.contains("security")) {
                 ReviewParseResult(
@@ -223,7 +224,7 @@ class ReviewPipelineComponentsTest {
         val result = coordinator.run(listOf("review-security.md", "review-reliability.md"))
         assertThat(result.specialistCount).isEqualTo(1)
         assertThat(result.findings.size).isEqualTo(1)
-        assertThat(result.verdictPass).isTrue()
+        assertThat(result.verdictPass).isFalse()
     }
 
     // ---- ReviewContextBuilder ----
@@ -360,11 +361,11 @@ class ReviewPipelineComponentsTest {
     // ---- SpecialistReviewCoordinator empty ----
 
     @Test
-    fun `specialist coordinator with no specialists returns empty`() = runBlocking<Unit> {
+    fun `specialist coordinator with no specialists cannot approve`() = runBlocking<Unit> {
         val result = SpecialistReviewCoordinator { null }.run(emptyList())
         assertThat(result.specialistCount).isEqualTo(0)
         assertThat(result.findings.size).isEqualTo(0)
-        assertThat(result.verdictPass).isTrue()
+        assertThat(result.verdictPass).isFalse()
     }
 
     // ---- ReviewDiffInspector against a real git repo (default runner) ----

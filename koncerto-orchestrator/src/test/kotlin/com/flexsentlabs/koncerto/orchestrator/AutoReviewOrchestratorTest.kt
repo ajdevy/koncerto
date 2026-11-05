@@ -166,7 +166,7 @@ class AutoReviewOrchestratorTest {
         ).forEach { java.io.File("${DemoScenarioGenerator.SCENARIO_DIR}/$it").delete() }
     }
 
-    private fun fakeRunner(succeed: Boolean = true): AgentRunner = object : AgentRunner {
+    private fun fakeRunner(succeed: Boolean = true, verdictDir: Path? = null): AgentRunner = object : AgentRunner {
         private val flow = MutableSharedFlow<AgentEvent>()
         override fun events() = flow.asSharedFlow()
         override suspend fun run(
@@ -176,8 +176,10 @@ class AutoReviewOrchestratorTest {
             turnTimeoutMs: Long?, stallTimeoutMs: Long?,
         gitWorkflowOverride: GitWorkflow?
         ): EmptyResult<IllegalStateException> =
-            if (succeed) Result.Success(Unit)
-            else Result.Failure(IllegalStateException("runner failed"))
+            if (succeed) {
+                verdictDir?.let { Files.writeString(it.resolve(".review-status"), "pass") }
+                Result.Success(Unit)
+            } else Result.Failure(IllegalStateException("runner failed"))
     }
 
     private fun failingRunner(): AgentRunner = object : AgentRunner {
@@ -209,7 +211,7 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `returns Pass when review status file contains pass`(@TempDir tmpDir: Path) = runTest {
+    fun `auto review does not reuse a previous pass verdict`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-status"), "pass")
@@ -231,8 +233,36 @@ class AutoReviewOrchestratorTest {
             logger = noopLogger()
         )
         val decision = orchestrator.onCodingComplete(issue())
-        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
-        assertThat((decision as AutoReviewOrchestrator.ReviewDecision.Pass).transitionToState).isEqualTo("Done")
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+    }
+
+    @Test
+    fun `auto review rejects pass written by failed runner`(@TempDir tmpDir: Path) = runTest {
+        val workspace = WorkspaceManager(tmpDir, HookExecutor { _, _ -> })
+        val runner = object : AgentRunner by fakeRunner() {
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                Files.writeString(workspace.ensureWorkspace(issue.identifier).path.resolve(".review-status"), "pass")
+                return Result.Failure(IllegalStateException("review failed"))
+            }
+        }
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = runner, workspaceManager = workspace, linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = tmpDir.toString()),
+            projectSlug = "p", runtimeState = RuntimeState(), notifier = noopNotifier(), logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
     }
 
     @Test
@@ -809,7 +839,7 @@ class AutoReviewOrchestratorTest {
             maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
         )
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
@@ -868,7 +898,7 @@ class AutoReviewOrchestratorTest {
         )
         val (gen, callCount) = trackingScenarioGenerator()
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
@@ -927,7 +957,7 @@ class AutoReviewOrchestratorTest {
         val deployer = RecordingProjectDeployer()
         var recordingCalled = false
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -953,7 +983,7 @@ class AutoReviewOrchestratorTest {
         val (gen, callCount) = trackingScenarioGenerator()
         var crawledUrl: String? = null
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -982,7 +1012,7 @@ class AutoReviewOrchestratorTest {
         Files.writeString(issueDir.resolve(".review-status"), "pass")
         val (gen, callCount) = trackingScenarioGenerator()
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1010,7 +1040,7 @@ class AutoReviewOrchestratorTest {
         Files.writeString(issueDir.resolve(".review-status"), "pass")
         val (gen, callCount) = trackingScenarioGenerator()
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1107,7 +1137,7 @@ class AutoReviewOrchestratorTest {
             maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
         )
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
@@ -1274,7 +1304,7 @@ class AutoReviewOrchestratorTest {
         val deployer = RecordingProjectDeployer()
         var recorded = false
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = tracker,
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString(), demoSecretsFile = null),
@@ -1305,7 +1335,7 @@ class AutoReviewOrchestratorTest {
 
         val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString(), demoSecretsFile = secretsFile.toString()),
@@ -1337,7 +1367,7 @@ class AutoReviewOrchestratorTest {
 
         val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(
@@ -1374,7 +1404,7 @@ class AutoReviewOrchestratorTest {
         val runtimeState = RuntimeState()
         runtimeState.demoRecoveryAttempts["issue-1"] = 2   // pretend prior cycles happened
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1402,7 +1432,7 @@ class AutoReviewOrchestratorTest {
 
         val runtimeState = RuntimeState()
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1433,7 +1463,7 @@ class AutoReviewOrchestratorTest {
         }
         val runtimeState = RuntimeState()
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = tracker,
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1486,7 +1516,7 @@ class AutoReviewOrchestratorTest {
 
         var recordCalls = 0
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1548,7 +1578,7 @@ class AutoReviewOrchestratorTest {
         Files.createDirectories(issueDir)
         Files.writeString(issueDir.resolve(".review-status"), "pass")
         return AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -1703,6 +1733,43 @@ class AutoReviewOrchestratorTest {
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat(metrics.recordedRuns.single().eligibility).isEqualTo("skipped_artifact_only")
         assertThat(metrics.recordedRuns.single().verdict).isEqualTo("skipped")
+    }
+
+    @Test
+    fun `failed specialist cannot approve with a written pass`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        initGitRepo(issueDir)
+        Files.writeString(issueDir.resolve("README.md"), "x\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "init", "--no-verify")
+        Files.createDirectories(issueDir.resolve("src"))
+        Files.writeString(issueDir.resolve("src/Auth.kt"), "class Auth\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "auth", "--no-verify")
+        val policy = com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+            criticalGlobs = listOf("**/Auth.kt"),
+            specialists = listOf("prompts/review-security.md", "prompts/review-reliability.md")
+        )
+        var calls = 0
+        val runner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                calls++
+                Files.writeString(issueDir.resolve(".review-status"), "pass")
+                Files.writeString(issueDir.resolve(".review-findings.json"),
+                    """{"verdictPass":true,"findings":[],"usage":{"isError":false},"humanText":"ok"}""")
+                return if (calls == 1) Result.Success(Unit) else Result.Failure(IllegalStateException("review failed"))
+            }
+        }
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+        val decision = reviewMetricsOrchestrator(ws, metrics, stage = reviewStage().copy(review = policy), runner = runner)
+            .onCodingComplete(issue())
+        assertThat(calls).isEqualTo(2)
+        assertThat(decision is AutoReviewOrchestrator.ReviewDecision.Pass).isEqualTo(false)
     }
 
     @Test
@@ -1917,6 +1984,35 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `auto review accepts pass written by successful runner`(@TempDir tmpDir: Path) = runTest {
+        val workspace = WorkspaceManager(tmpDir, HookExecutor { _, _ -> })
+        val runner = object : AgentRunner by fakeRunner() {
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                Files.writeString(workspace.ensureWorkspace(issue.identifier).path.resolve(".review-status"), "pass")
+                return Result.Success(Unit)
+            }
+        }
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = runner, workspaceManager = workspace, linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = tmpDir.toString()),
+            projectSlug = "p", runtimeState = RuntimeState(), notifier = noopNotifier(), logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
+    }
+
+    @Test
     fun `deployTargetProject tolerates cleanup failure when deploy throws`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
@@ -1987,7 +2083,7 @@ class AutoReviewOrchestratorTest {
         }
         val reviewStage = reviewStage().copy(prompt = "review.md")
         val orchestrator = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage), workspaceRoot = workspaceDir.toString()),
@@ -2590,7 +2686,7 @@ class AutoReviewOrchestratorTest {
             }
         }
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -2621,7 +2717,7 @@ class AutoReviewOrchestratorTest {
             }
         }))
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -2662,7 +2758,7 @@ class AutoReviewOrchestratorTest {
         val deployer = RecordingProjectDeployer(deployResult = DeployResult.failure("boom", logs = "stack"))
         val reporter = com.flexsentlabs.koncerto.deploy.DemoFailureReporter(noopLogger())
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -2763,7 +2859,7 @@ class AutoReviewOrchestratorTest {
             processRunner = { _, _, _ -> scenarioYaml }
         )
         val decision = AutoReviewOrchestrator(
-            agentRunner = fakeRunner(),
+            agentRunner = fakeRunner(verdictDir = issueDir),
             workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
             linearClient = fakeTracker(),
             projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3005,7 +3101,7 @@ class AutoReviewOrchestratorTest {
         var probedUrl: String? = null
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3044,7 +3140,7 @@ class AutoReviewOrchestratorTest {
         val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3079,7 +3175,7 @@ class AutoReviewOrchestratorTest {
         val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3112,7 +3208,7 @@ class AutoReviewOrchestratorTest {
         val (gen, browserCalls, apiCalls) = dualScenarioGenerator()
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3145,7 +3241,7 @@ class AutoReviewOrchestratorTest {
         val (gen, _, apiCalls) = dualScenarioGenerator(apiSucceeds = false)
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3182,7 +3278,7 @@ class AutoReviewOrchestratorTest {
         var probed = false
         try {
             AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3222,7 +3318,7 @@ class AutoReviewOrchestratorTest {
         )
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3257,7 +3353,7 @@ class AutoReviewOrchestratorTest {
         val (gen, _, apiCalls) = dualScenarioGenerator()
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3296,7 +3392,7 @@ class AutoReviewOrchestratorTest {
             staleApiByIdent.writeText("api_scenario:\n  steps: []\n")
 
             AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3340,7 +3436,7 @@ class AutoReviewOrchestratorTest {
         var recordAttempts = 0
         try {
             AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3415,7 +3511,7 @@ class AutoReviewOrchestratorTest {
             staleApi.writeText("api_scenario:\n  steps: []\n")
 
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),
@@ -3455,7 +3551,7 @@ class AutoReviewOrchestratorTest {
         val (gen, _) = androidScenarioGenerator(succeeds = false)
         try {
             val decision = AutoReviewOrchestrator(
-                agentRunner = fakeRunner(),
+                agentRunner = fakeRunner(verdictDir = issueDir),
                 workspaceManager = WorkspaceManager(workspaceDir, HookExecutor { _, _ -> }),
                 linearClient = fakeTracker(),
                 projectConfig = projectConfig(stages = mapOf("in review" to reviewStage()), workspaceRoot = workspaceDir.toString()),

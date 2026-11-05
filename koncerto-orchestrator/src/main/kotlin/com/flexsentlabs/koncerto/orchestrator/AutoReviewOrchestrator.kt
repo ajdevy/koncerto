@@ -4,6 +4,7 @@ import com.flexsentlabs.koncerto.agent.AgentRunner
 import com.flexsentlabs.koncerto.core.config.ProjectConfig
 import com.flexsentlabs.koncerto.core.config.StageAgentConfig
 import com.flexsentlabs.koncerto.core.errors.PatternErrorClassifier
+import com.flexsentlabs.koncerto.core.result.Result
 import com.flexsentlabs.koncerto.core.model.Issue
 import com.flexsentlabs.koncerto.core.tracker.TrackerClient
 import com.flexsentlabs.koncerto.deploy.DeployConfig
@@ -146,22 +147,33 @@ class AutoReviewOrchestrator(
         val reviewKind = stage.agentKind ?: "claude"
         val reviewCommand = stage.command
 
+        val verdictReady = workspace?.let { ws ->
+            runCatching { Files.deleteIfExists(ws.path.resolve(".review-status")); true }.getOrDefault(false)
+        } ?: false
         // Epic 23: critical-tier diffs get specialist reviewers instead of the generalist.
-        val ranSpecialists = runSpecialistsIfCritical(
+        val ranSpecialists = verdictReady && runSpecialistsIfCritical(
             issue, workspace, stage, currentAttempt, diff, reviewKind, reviewCommand
         )
 
-        if (!ranSpecialists) {
-            agentRunner.run(
-                issue = issue,
-                attempt = currentAttempt,
-                prompt = reviewPrompt,
-                agentKindOverride = reviewKind,
-                commandOverride = reviewCommand
-            )
+        val reviewSucceeded = when {
+            !verdictReady -> false
+            ranSpecialists -> true
+            else -> {
+                // A failed specialist may have left a verdict; the generalist must write its own.
+                val reset = workspace?.let { ws ->
+                    runCatching { Files.deleteIfExists(ws.path.resolve(".review-status")); true }.getOrDefault(false)
+                } ?: false
+                reset && agentRunner.run(
+                    issue = issue,
+                    attempt = currentAttempt,
+                    prompt = reviewPrompt,
+                    agentKindOverride = reviewKind,
+                    commandOverride = reviewCommand
+                ) is Result.Success
+            }
         }
 
-        val passed = workspace?.let { readReviewStatus(it.path) } ?: false
+        val passed = reviewSucceeded && (workspace?.let { readReviewStatus(it.path) } ?: false)
 
         recordReviewTelemetry(issue, workspace, stage, currentAttempt)
 
@@ -333,18 +345,22 @@ class AutoReviewOrchestrator(
                     // Specialists share one workspace and one handoff file. Clear it first so a
                     // specialist that fails to emit findings reads as empty rather than silently
                     // inheriting the previous specialist's results.
-                    runCatching { Files.deleteIfExists(ws.path.resolve(".review-findings.json")) }
-                    agentRunner.run(
+                    val reset = runCatching {
+                        Files.deleteIfExists(ws.path.resolve(".review-findings.json")); true
+                    }.getOrDefault(false)
+                    val result = if (reset) agentRunner.run(
                         issue = issue,
                         attempt = attempt,
                         prompt = prompt,
                         agentKindOverride = reviewKind,
                         commandOverride = reviewCommand,
                         modelOverride = policy.modelForTier(tier)
-                    )
-                    com.flexsentlabs.koncerto.orchestrator.review.ReviewTelemetryRecorder
-                        .readParseResult(ws.path)
-                        ?.also { tokensSpent += it.usage.totalTokens }
+                    ) else null
+                    if (result is Result.Success) {
+                        com.flexsentlabs.koncerto.orchestrator.review.ReviewTelemetryRecorder
+                            .readParseResult(ws.path)
+                            ?.also { tokensSpent += it.usage.totalTokens }
+                    } else null
                 }
             }
 
