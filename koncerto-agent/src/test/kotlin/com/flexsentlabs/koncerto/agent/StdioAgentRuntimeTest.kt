@@ -221,20 +221,20 @@ class StdioAgentRuntimeTest {
     }
 
     @Test
-    fun `JSONL stream ending without turn completed emits synthetic TurnCompleted`() {
-        val ws = Files.createTempDirectory("stdio-jsonl-synthetic-")
+    fun `Codex JSONL stream ending without turn completed fails the turn`() {
+        val ws = Files.createTempDirectory("stdio-jsonl-incomplete-")
         val script = """
             printf '%s\n' '{"type":"turn.started"}'
-            sleep 0.5
+            exit 1
         """.trimIndent()
-        val runtime = OpencodeRuntime(script, ws, noopLogger())
-
+        val runtime = CodexRuntime(script, ws, noopLogger())
         val collected = AgentRuntimeTestSupport.collectEventsDuring(runtime) {
             runtime.start()
         }
         runtime.stop()
 
-        assertThat(collected.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()).isNotNull()
+        assertThat(collected.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()).isNotNull()
+        assertThat(collected.filterIsInstance<AgentEvent.TurnCompleted>().isEmpty()).isTrue()
     }
 
     @Test
@@ -281,7 +281,7 @@ class StdioAgentRuntimeTest {
     }
 
     @Test
-    fun `jsonl stream end emits synthetic turn completed`() = runBlocking {
+    fun `jsonl stream end emits turn failure`() = runBlocking {
         val ws = Files.createTempDirectory("stdio-jsonl-end-")
         val runtime = OpencodeRuntime("sleep 0.1", ws, noopLogger())
         val setJsonlMode = StdioAgentRuntime::class.java.getDeclaredField("jsonlMode")
@@ -299,7 +299,7 @@ class StdioAgentRuntimeTest {
         kotlinx.coroutines.delay(50)
         runtime.stop()
         job.cancel()
-        assertThat(events.filterIsInstance<AgentEvent.TurnCompleted>().firstOrNull()).isNotNull()
+        assertThat(events.filterIsInstance<AgentEvent.TurnFailed>().firstOrNull()).isNotNull()
     }
 
     @Test

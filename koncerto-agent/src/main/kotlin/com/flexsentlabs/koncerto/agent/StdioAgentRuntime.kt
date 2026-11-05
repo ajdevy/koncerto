@@ -95,9 +95,9 @@ abstract class StdioAgentRuntime(
             logger.warn("${logTag}_stdout_read_failed", mapOf("error" to (e.message ?: "unknown"), "total_lines" to lineCount.toString()))
         }
         if (jsonlMode && !turnCompletedEmitted) {
-            logger.info("${logTag}_stdout_turn_completed_synthetic", mapOf("reason" to "stream ended before turn.completed"))
-            _output.tryEmit("[jsonl] stream ended")
-            events.trySend(AgentEvent.TurnCompleted("?", "?", null, pid))
+            logger.warn("${logTag}_stdout_turn_incomplete", mapOf("reason" to "stream ended before turn.completed"))
+            _output.tryEmit("[jsonl] stream ended before turn.completed")
+            events.trySend(AgentEvent.TurnFailed("?", "?", "agent_stream_ended_without_turn_completed", pid))
         }
         logger.info("${logTag}_stdout_reader_finished", mapOf("lineCount" to lineCount.toString(), "jsonlMode" to jsonlMode.toString(), "turnCompletedEmitted" to turnCompletedEmitted.toString()))
     }
