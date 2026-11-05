@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development or executing-plans to implement task-by-task.
 
-**Goal:** Auto-detect or create Docker config for the target project (PromoMesh) and spin it up for demo recording after successful review.
+**Goal:** Auto-detect or create Docker config for the target project (sample-app) and spin it up for demo recording after successful review.
 
 **Architecture:** Add a `TargetProjectDeployer` service that (1) detects existing Docker config or AI-generates one in a PR, (2) builds and runs the container on a free port, (3) exposes the URL to the demo recorder. Integrates as a new stage between review pass and demo recording.
 

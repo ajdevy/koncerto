@@ -1095,18 +1095,18 @@ class LinearClientTest {
 
         @Test
         fun `fetchCandidateIssues maps blockedBy from inverseRelations nested issue shape`() = runTest {
-            val blockerNode = makeIssueNode("b1", "FLE-52", "In Progress")
-            val blockedNode = makeNodeWithBlocker("b2", "FLE-53", "Todo", "b1", "FLE-52", "In Progress")
+            val blockerNode = makeIssueNode("b1", "DEMO-52", "In Progress")
+            val blockedNode = makeNodeWithBlocker("b2", "DEMO-53", "Todo", "b1", "DEMO-52", "In Progress")
             val response = makeCandidatesPage(blockerNode, blockedNode)
             val graphql = FakeGraphqlClient(mutableListOf(response))
             val sut = DefaultLinearClient(graphql, "proj")
 
             val issues = sut.fetchCandidateIssues("proj", listOf("Todo", "In Progress"))
 
-            val blocked = issues.first { it.identifier == "FLE-53" }
+            val blocked = issues.first { it.identifier == "DEMO-53" }
             assertThat(blocked.blockedBy.size).isEqualTo(1)
             assertThat(blocked.blockedBy[0].id).isEqualTo("b1")
-            assertThat(blocked.blockedBy[0].identifier).isEqualTo("FLE-52")
+            assertThat(blocked.blockedBy[0].identifier).isEqualTo("DEMO-52")
             assertThat(blocked.blockedBy[0].state).isEqualTo("In Progress")
         }
 
@@ -1114,7 +1114,7 @@ class LinearClientTest {
         fun `fetchCandidateIssues non-blocks relation is excluded from blockedBy`() = runTest {
             val nodeWithDuplicate = buildJsonObject {
                 put("id", JsonPrimitive("b2"))
-                put("identifier", JsonPrimitive("FLE-53"))
+                put("identifier", JsonPrimitive("DEMO-53"))
                 put("title", JsonPrimitive("T"))
                 put("description", JsonNull)
                 put("priority", JsonNull)
@@ -1131,7 +1131,7 @@ class LinearClientTest {
                             put("type", JsonPrimitive("relates to"))
                             put("issue", buildJsonObject {
                                 put("id", JsonPrimitive("b1"))
-                                put("identifier", JsonPrimitive("FLE-52"))
+                                put("identifier", JsonPrimitive("DEMO-52"))
                                 put("state", buildJsonObject { put("name", JsonPrimitive("In Progress")) })
                             })
                         })
@@ -1144,7 +1144,7 @@ class LinearClientTest {
 
             val issues = sut.fetchCandidateIssues("proj", listOf("Todo", "In Progress"))
 
-            val issue = issues.first { it.identifier == "FLE-53" }
+            val issue = issues.first { it.identifier == "DEMO-53" }
             assertThat(issue.blockedBy.isEmpty()).isTrue()
         }
     }

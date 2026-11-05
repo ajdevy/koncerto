@@ -41,15 +41,25 @@ node_modules/
 
 # Local secrets (bot tokens, API keys)
 local.properties
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
 
 # ngrok config (contains OAuth email/domain allowlists)
 config/ngrok.yml
 
-# Env file (contains secrets)
-.env
-
 # Cloudflare Wrangler local cache
 .wrangler/
+
+# Local agent settings and installed personal skills
+/.claude/settings.json
+/.aionrs/
+/graphify-out/
 
 # Koncerto pipeline artifacts (local dev / e2e workspaces)
 .koncerto/

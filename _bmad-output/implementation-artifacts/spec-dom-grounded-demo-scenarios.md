@@ -11,7 +11,7 @@ baseline_commit: '694ce9c13e1f2ee8ff5dd7a847b226b1018a4c0f'
 
 ## Intent
 
-**Problem:** `DemoScenarioGenerator` authors browser scenarios from the ticket text alone, before the target app is deployed, so it hallucinates selectors, CTA text, and routes. On FLE-52 the first step clicked `text=Начать бесплатно` (real CTA is `Начать настройку`, a `mailto:` link); the real form lives at `GET /login` with testids `send-code-button`/`verify-button`/`code-input`. Nothing matched, the recorder sat on the landing page for 120s, and the emailed-code login was never performed on camera.
+**Problem:** `DemoScenarioGenerator` authors browser scenarios from the ticket text alone, before the target app is deployed, so it hallucinates selectors, CTA text, and routes. On DEMO-52 the first step clicked `text=Начать бесплатно` (real CTA is `Начать настройку`, a `mailto:` link); the real form lives at `GET /login` with testids `send-code-button`/`verify-button`/`code-input`. Nothing matched, the recorder sat on the landing page for 120s, and the emailed-code login was never performed on camera.
 
 **Approach:** After the target app deploys and its URL is known, crawl the live app to extract a compact DOM inventory (reachable routes and, per route, `data-testid`s, form fields, button/link text, headings). Feed that inventory into scenario generation so the LLM uses only real selectors and navigates to real routes. Generation moves to after deploy+crawl; if the crawl yields nothing, generation proceeds ungrounded exactly as today.
 
@@ -65,7 +65,7 @@ baseline_commit: '694ce9c13e1f2ee8ff5dd7a847b226b1018a4c0f'
 
 ## Spec Change Log
 
-- **2026-07-12 — root-cause finding during implementation:** The generator already grounds on real selectors/routes via `git diff main...HEAD`, but that command fails in target workspaces (`fatal: ambiguous argument 'main...HEAD'` — only `origin/main` exists), so `runGitDiff` returns null and grounding silently no-ops. This is the actual cause of the FLE-52 hallucination. **Amendment (human-approved scope add):** fix `runGitDiff` to fall back to `origin/main`, alongside the DOM crawl. The DOM crawl remains the durable live-DOM grounding; the git fix restores the cheap pre-deploy grounding. KEEP: both grounding sources feed the same prompt sections (Real Selectors / Real Routes / DOM inventory).
+- **2026-07-12 — root-cause finding during implementation:** The generator already grounds on real selectors/routes via `git diff main...HEAD`, but that command fails in target workspaces (`fatal: ambiguous argument 'main...HEAD'` — only `origin/main` exists), so `runGitDiff` returns null and grounding silently no-ops. This is the actual cause of the DEMO-52 hallucination. **Amendment (human-approved scope add):** fix `runGitDiff` to fall back to `origin/main`, alongside the DOM crawl. The DOM crawl remains the durable live-DOM grounding; the git fix restores the cheap pre-deploy grounding. KEEP: both grounding sources feed the same prompt sections (Real Selectors / Real Routes / DOM inventory).
 
 ## Design Notes
 
@@ -73,7 +73,7 @@ Two-pass, honoring the frozen "ungrounded exactly as today" fallback: the pre-de
 
 Inventory shape (compact, capped ~4KB), example:
 ```json
-[{"route":"/login","headings":["Вход в PromoMesh"],
+[{"route":"/login","headings":["Вход в sample-app"],
   "testids":["email-input","send-code-button","code-input","verify-button"],
   "fields":[{"name":"email","type":"email"}],
   "buttons":["Отправить код","Подтвердить"]}]
@@ -86,4 +86,4 @@ Inventory shape (compact, capped ~4KB), example:
 - `python3 scripts/coverage-badge.py` -- expected: `Lines: N/N = 100.0%`.
 
 **Manual checks:**
-- Re-run FLE-52 through koncerto; inspect the saved scenario at `/tmp/koncerto-demo/FLE-52-scenario.yaml` — first interactive step is `navigate` to `/login` and every selector appears in the crawl inventory. Recording shows the code entered and the logged-in heading reached.
+- Re-run DEMO-52 through koncerto; inspect the saved scenario at `/tmp/koncerto-demo/DEMO-52-scenario.yaml` — first interactive step is `navigate` to `/login` and every selector appears in the crawl inventory. Recording shows the code entered and the logged-in heading reached.

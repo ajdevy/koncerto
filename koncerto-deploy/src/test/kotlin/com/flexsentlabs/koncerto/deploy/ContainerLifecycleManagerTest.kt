@@ -33,13 +33,13 @@ class ContainerLifecycleManagerTest {
             network = "net",
             hostPort = 32768,
             containerPort = 8080,
-            image = "koncerto-demo-fle-52",
+            image = "koncerto-demo-DEMO-52",
             envVars = linkedMapOf("BREVO_API_KEY" to "xkeysib-secret", "DEBUG_TOKEN" to "tok")
         )
         assertThat(cmd).contains("BREVO_API_KEY=xkeysib-secret")
         assertThat(cmd).contains("DEBUG_TOKEN=tok")
         // Image must be the final argument so the -e flags apply to it.
-        assertThat(cmd.last()).isEqualTo("koncerto-demo-fle-52")
+        assertThat(cmd.last()).isEqualTo("koncerto-demo-DEMO-52")
         // Exactly two -e flags for two env entries.
         assertThat(cmd.count { it == "-e" }).isEqualTo(2)
     }

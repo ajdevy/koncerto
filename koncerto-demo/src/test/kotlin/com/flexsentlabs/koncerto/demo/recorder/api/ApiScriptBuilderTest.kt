@@ -108,12 +108,12 @@ class ApiScriptBuilderTest {
         val script = ApiScriptBuilder.build(
             ApiScenario("Items API", listOf(request())),
             resultPath = "/work/api-result.jsonl",
-            issueIdentifier = "FLE-99"
+            issueIdentifier = "DEMO-99"
         )
 
         assert(script.startsWith("#!/bin/bash"))
         assert(script.contains("RESULT_FILE='/work/api-result.jsonl'"))
-        assert(script.contains("=== FLE-99 — Items API ==="))
+        assert(script.contains("=== DEMO-99 — Items API ==="))
         assert(script.contains("type_out \"\$(render_cmd \"\${CMD[@]}\")\""))
         assert(script.contains("\"\${CMD[@]}\" > /tmp/response.txt 2>&1"))
         assert(script.trimEnd().endsWith("exit 0"))
@@ -281,7 +281,7 @@ class ApiScriptBuilderTest {
                 )
             ),
             resultPath = "/work/api-result.jsonl",
-            issueIdentifier = "FLE-1 `x` \$y"
+            issueIdentifier = "DEMO-1 `x` \$y"
         )
 
         val file = File.createTempFile("api-demo-", ".sh").apply { deleteOnExit(); writeText(script) }

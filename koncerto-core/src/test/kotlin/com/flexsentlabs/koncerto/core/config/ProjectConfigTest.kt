@@ -20,10 +20,10 @@ class ProjectConfigTest {
             tracker = tracker,
             workspace = WorkspaceConfig(root = "/tmp/ws"),
             agent = AgentProjectConfig(),
-            gitRemoteUrl = "https://github.com/acme/promomesh.git"
+            gitRemoteUrl = "https://github.com/acme/sample-app.git"
         )
         val global = GitConfig(remoteUrl = "https://github.com/ajdevy/koncerto.git")
-        assertThat(global.forProject(project).remoteUrl).isEqualTo("https://github.com/acme/promomesh.git")
+        assertThat(global.forProject(project).remoteUrl).isEqualTo("https://github.com/acme/sample-app.git")
     }
 
     @Test

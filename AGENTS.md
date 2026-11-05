@@ -6,9 +6,9 @@
 - **Counted scope**: Non-excluded production classes after lambda/test-seam adjustment (`$default`, `invokeSuspend`, `getTest`/`setTest`).
 - **Integration exclusions** (`_INTEGRATION_CLASS_EXCLUSIONS`): Docker deploy/runtime, Spring `Beans`, API login flows, `Orchestrator` tick loop, etc. — OS/process wiring not suited to unit coverage.
 - **Other exclusions**: CLI entrypoints, Playwright/OS recorders, compiler-generated synthetics (`$lambda$`, `DefaultAgentRunner$`, …), serialization DTO companions.
-- **History**: #15 raised coverage to 99%; remaining gaps closed in #16 (combined with FLE-52). This PR documents the 100% policy explicitly.
+- **History**: #15 raised coverage to 99%; remaining gaps closed in #16 (combined with DEMO-52). This PR documents the 100% policy explicitly.
 
-## Prompt Resolution Fix (FLE-51 e2e)
+## Prompt Resolution Fix (DEMO-51 e2e)
 - **Root cause**: Stage `prompt` field stores a file path (`prompts/implement.md`) but is never resolved — codex receives the literal string `"prompts/implement.md"` as its prompt.
 - **Fix**: Added `WorkflowCache.resolvePrompt()` that reads prompt file content if the prompt value resolves to an existing file.
 - **Files**: `WorkflowCache.kt` (added `workflowDir`, `setWorkflowDir()`, `resolvePrompt()`), `DispatchService.kt` (resolves prompt before rendering), `AutoReviewOrchestrator.kt` (resolves review prompt), `Beans.kt` (wires cache).
@@ -59,7 +59,7 @@
 - **Flow**: review_passed → demo recording (120s Playwright capture + R2 upload) → PR comment with review + demo link → state transition
 
 ## Target Project Auto-Deploy for Demo Recording
-- **Goal**: Auto-detect or create Docker config for the target project (PromoMesh) and spin it up after review passes for demo recording.
+- **Goal**: Auto-detect or create Docker config for the target project (sample-app) and spin it up after review passes for demo recording.
 - **Components** (new `koncerto-deploy` module):
   - `DockerConfigDetector` — detects `docker-compose.yml` or `Dockerfile` in project root
   - `FrameworkDetector` — detects Spring Boot (build.gradle/pom.xml), Node (package.json), Python (requirements.txt), Go (go.mod)
@@ -91,7 +91,7 @@
 - **Docker tag uppercase** — Added `.lowercase()` to tag generation for branch names with uppercase
 - **Compose structured log pollution** — `resolveComposeNetwork()` filters `time="..."` lines, uses `HostConfig.NetworkMode`
 
-### Verified End-to-End (FLE-75 PR#31)
+### Verified End-to-End (DEMO-75 PR#31)
 ```
 dispatch → codex → PR → review_passed → deploy_compose_infra_only
 → docker_build_ok → container_started(32768) → deploy_success
@@ -113,7 +113,7 @@ dispatch → codex → PR → review_passed → deploy_compose_infra_only
 3. After removing tagging header → 403 SignatureDoesNotMatch (bucket resolved to literal `$R2_BUCKET`)
 4. After adding `resolveEnvRef()` for bucket → HTTP 200, upload succeeds
 
-### Verified End-to-End (FLE-51 PR#23)
+### Verified End-to-End (DEMO-51 PR#23)
 ```
 dispatch → codex → review_passed → deploy(port=32772)
 → Playwright recording(15s test) → ffmpeg → SigV4 upload to R2 → 200 OK
@@ -138,7 +138,7 @@ dispatch → codex → review_passed → deploy(port=32772)
 ### Files
 - `koncerto-demo/.../recorder/PlaywrightRecorder.kt` — main changes (rewrote record(), buildShellScript(), runCleanup(), PLAYWRIGHT_SCRIPT, isAvailable())
 
-### Verified End-to-End (FLE-51 re-dispatch)
+### Verified End-to-End (DEMO-51 re-dispatch)
 ```
 dispatch → codex → PR → review_passed → deploy(32774)
 → Playwright recording Xvfb:99 + Chromium → ffmpeg 120s capture
@@ -152,7 +152,7 @@ dispatch → codex → PR → review_passed → deploy(32774)
 
 ## Pipeline Artifact Gitignore Fix (Session 2026-07-01)
 ### Problem
-- `GitWorkflow.commitAndPush()` ran `git add -A`, staging Koncerto pipeline files (`.koncerto/*-trace-*.jsonl`, `.review-*`) into target-project PRs — e.g. PromoMesh PR#35 showed only orchestration artifacts, no app code.
+- `GitWorkflow.commitAndPush()` ran `git add -A`, staging Koncerto pipeline files (`.koncerto/*-trace-*.jsonl`, `.review-*`) into target-project PRs — e.g. sample-app PR#35 showed only orchestration artifacts, no app code.
 - `.review-*` files were deleted after review but `.koncerto/*.jsonl` trace logs remained tracked once committed.
 
 ### Fix
@@ -165,7 +165,7 @@ dispatch → codex → PR → review_passed → deploy(32774)
 ## gh pr comment Ghost Posting Fix (Session 2026-06-24)
 ### Root cause
 - `postDetailedReviewAsPrComment` ran `gh pr comment --body` *without* `--repo` or PR number, relying on the current git branch to infer the target. On at least one run (15:06), exit code 0 was returned but the comment never appeared on the PR — the git state in the workspace didn't match what `gh` expected for branch-based inference.
-- The `deployRepoFullName` resolved by `parseRepoFullName(config)` returned the **koncerto** repo (from `GIT_REMOTE_URL`), not the target project (PromoMesh).
+- The `deployRepoFullName` resolved by `parseRepoFullName(config)` returned the **koncerto** repo (from `GIT_REMOTE_URL`), not the target project (sample-app).
 
 ### Fixes
 - **`resolveRepoFullName(workspacePath)`** — new helper that reads `<workspace>/.git/config` to extract `owner/repo` from the origin remote URL (the actual target project)

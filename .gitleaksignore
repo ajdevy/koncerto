@@ -1,0 +1,6 @@
+# Historical test fixtures are synthetic; current fixtures use obvious placeholders.
+57b8037e69ca1dc2ae9202597dec3a59b71f6f83:koncerto-e2e/src/test/kotlin/com/flexsentlabs/koncerto/e2e/FreeModelReviewE2eTest.kt:generic-api-key:133
+e06a77dc470d677fce7b449aa62b7530654762a1:koncerto-deploy/src/test/kotlin/com/flexsentlabs/koncerto/deploy/SecretsFileTest.kt:generic-api-key:19
+e06a77dc470d677fce7b449aa62b7530654762a1:koncerto-orchestrator/src/test/kotlin/com/flexsentlabs/koncerto/orchestrator/DispatchServiceTest.kt:generic-api-key:848
+e06a77dc470d677fce7b449aa62b7530654762a1:koncerto-orchestrator/src/test/kotlin/com/flexsentlabs/koncerto/orchestrator/AutoReviewOrchestratorTest.kt:generic-api-key:873
+4b2bf1370bd489427ca50d956c6efd9f33a7ae28:koncerto-workspace/src/test/kotlin/com/flexsentlabs/koncerto/workspace/GitCredentialSafetyTest.kt:generic-api-key:34

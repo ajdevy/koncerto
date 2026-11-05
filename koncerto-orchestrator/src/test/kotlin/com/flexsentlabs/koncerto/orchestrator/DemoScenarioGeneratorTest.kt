@@ -935,7 +935,7 @@ class DemoScenarioGeneratorTest {
 
     @Test
     fun `ensureNavigatesToRealRoute injects a navigate step when the model's scenario never leaves the root`() {
-        // Regression test: a real free-tier scenario for FLE-52 used correct real selectors
+        // Regression test: a sample free-tier scenario for DEMO-52 used correct real selectors
         // (data-testid=send-code-button etc.) but never included a navigate step to /login at
         // all — it just asserted on #email-step from the landing page, which doesn't have it.
         // Every subsequent click/type/assert then silently failed to find its target, and the
@@ -987,7 +987,7 @@ class DemoScenarioGeneratorTest {
 
     @Test
     fun `buildPrompt lists real selectors even when they fall past the truncated diff display`(@TempDir tmpDir: Path) {
-        // Regression test: a real ~87KB diff for FLE-52 had its login form's data-testid
+        // Regression test: a real ~87KB diff for DEMO-52 had its login form's data-testid
         // attributes starting at byte offset ~8171 — just past the old 8000-char display
         // cutoff — so the model never saw them in the raw "## PR Changes" text and invented
         // non-existent selectors instead. extractRealSelectors must run on the FULL diff so

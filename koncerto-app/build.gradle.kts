@@ -60,7 +60,7 @@ tasks.register<Test>("uiTest") {
 
 tasks.register<JavaExec>("recordDemo") {
     group = "demo"
-    description = "Record a demo for the given issue identifier (e.g. FLE-51)"
+    description = "Record a demo for the given issue identifier (e.g. DEMO-51)"
     mainClass.set("com.flexsentlabs.koncerto.app.DemoRecordingTrigger")
     classpath = sourceSets.main.get().runtimeClasspath
     systemProperty("spring.main.web-application-type", "none")

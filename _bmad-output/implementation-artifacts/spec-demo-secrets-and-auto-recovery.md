@@ -102,7 +102,7 @@ Preflight, blocking, and cycle-count all mirror `story-blocked-state-comment`: c
 
 Recovery control flow (as implemented): `runDemoWithRecovery` deploys once, then loops on the recording call. A recording failure increments the per-issue `demoRecoveryAttempts` counter. Scenario-first repair re-records against the SAME deployment in-loop (no re-deploy, no re-review). When scenario repair can't help, it escalates to a code fix WITHOUT recursion: it writes the failure to `.demo-fix-request` and returns `ReviewDecision.RetryWithCoding`, so the normal DispatchService coding+review loop re-runs (that loop is what actually invokes `AgentRunner.run`, and `prepareDispatch` folds the `.demo-fix-request` content into the coding prompt one-shot so the agent knows what to fix), and on a fresh review pass the pipeline re-enters `runDemoWithRecovery`. The persisted counter caps the whole thing at `MAX_DEMO_RECOVERY` = 3, after which `handleDemoRecordingFailure` posts a comment and blocks; the counter is cleared on both Pass and block. Masking helper: values under 8 chars are hidden entirely, otherwise first 4 chars + `…`. Per-project secrets path lives on `ProjectConfig.demoSecretsFile`. The missing-secret gate runs both at dispatch start (best-effort; a no-op until the repo is checked out) and — reliably — at the demo stage where the workspace is populated.
 
-Known limitation: a pure-compose web app (served directly by a compose service, not `docker run`) doesn't receive `-e` injection — logged as `deploy_compose_env_not_injected`. Env injection covers Dockerfile builds and the compose-infra→app-build path (which PromoMesh uses).
+Known limitation: a pure-compose web app (served directly by a compose service, not `docker run`) doesn't receive `-e` injection — logged as `deploy_compose_env_not_injected`. Env injection covers Dockerfile builds and the compose-infra→app-build path (which sample-app uses).
 
 ## Verification
 
@@ -112,7 +112,7 @@ Known limitation: a pure-compose web app (served directly by a compose service, 
 - coverage task -- expected: 100% on new code
 
 **Manual checks:**
-- Configure the PromoMesh secrets file with `BREVO_API_KEY`; re-run FLE-52; confirm (a) preflight passes, (b) the recorded video shows the code-send step succeeding (no "Не удалось отправить код"), (c) the key is masked in logs/traces.
+- Configure the sample-app secrets file with `BREVO_API_KEY`; re-run DEMO-52; confirm (a) preflight passes, (b) the recorded video shows the code-send step succeeding (no "Не удалось отправить код"), (c) the key is masked in logs/traces.
 - Remove the key; re-run; confirm dispatch blocks immediately with a comment naming `BREVO_API_KEY` and no agent runs.
 
 ## Suggested Review Order

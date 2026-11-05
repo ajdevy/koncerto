@@ -2,7 +2,7 @@
 
 ## Problem
 
-Every demo recording of FLE-52 (PromoMesh's email-code login) showed a generic "Не удалось отправить код" error, across many attempts, no matter what was fixed on the Brevo/secrets side. Root-cause investigation (reproducing Koncerto's exact deploy conditions in a throwaway container) traced it to two chained gaps:
+Every demo recording of DEMO-52 (sample-app's email-code login) showed a generic "Не удалось отправить код" error, across many attempts, no matter what was fixed on the Brevo/secrets side. Root-cause investigation (reproducing Koncerto's exact deploy conditions in a throwaway container) traced it to two chained gaps:
 
 1. `DB_URL`/`REDIS_URL` defaulted to `localhost`, unreachable from inside the app's own container — fixed as pure config (added to the existing `demoSecretsFile`, no code change).
 2. Even with networking fixed, the database had no tables: **migrations had never been run** against the fresh postgres instance. Nothing in Koncerto's deploy flow runs a setup command after a container starts.

@@ -73,7 +73,7 @@ class KoncertoArtifactIgnoreTest {
                 override fun write(line: String) { logs.add(line) }
             })
         ))
-        workflow.createBranch(repoDir, "FLE-52")
+        workflow.createBranch(repoDir, "DEMO-52")
 
         val koncertoDir = repoDir.resolve(".koncerto")
         Files.createDirectories(koncertoDir)
@@ -82,7 +82,7 @@ class KoncertoArtifactIgnoreTest {
         repoDir.resolve(".review-status").writeText("pass")
         repoDir.resolve("app.py").writeText("print('hello')")
 
-        workflow.commitAndPush(repoDir, "FLE-52", "Register with email", labels = listOf("feat"))
+        workflow.commitAndPush(repoDir, "DEMO-52", "Register with email", labels = listOf("feat"))
 
         val tracked = runGit("ls-files")
         assertThat(tracked).contains("app.py")
@@ -106,9 +106,9 @@ class KoncertoArtifactIgnoreTest {
             autoPush = false
         )
         val workflow = GitWorkflow(config, com.flexsentlabs.koncerto.logging.StructuredLogger(emptyList()))
-        workflow.createBranch(repoDir, "FLE-52")
+        workflow.createBranch(repoDir, "DEMO-52")
         repoDir.resolve("feature.py").writeText("# feature")
-        workflow.commitAndPush(repoDir, "FLE-52", "Actual feature", labels = emptyList())
+        workflow.commitAndPush(repoDir, "DEMO-52", "Actual feature", labels = emptyList())
 
         val tracked = runGit("ls-files")
         assertThat(tracked).contains("feature.py")
