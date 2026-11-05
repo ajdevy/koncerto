@@ -74,7 +74,7 @@ open class GitWorkflow(
         // Remove only that known generated file so a tracked remote .gitignore can be checked out.
         val ignore = workspacePath.resolve(".gitignore")
         if (isNewRepo && Files.isRegularFile(ignore) && !Files.isSymbolicLink(ignore) &&
-            Files.readString(ignore) == KoncertoArtifactIgnore.GITIGNORE_BLOCK + "\n") {
+            Files.readString(ignore) in setOf(KoncertoArtifactIgnore.GITIGNORE_BLOCK, KoncertoArtifactIgnore.GITIGNORE_BLOCK + "\n")) {
             Files.delete(ignore)
         }
 
@@ -82,33 +82,29 @@ open class GitWorkflow(
         // remote branch — adding it beforehand leaves an untracked .gitignore in the working
         // tree that collides with the remote branch's own tracked .gitignore, aborting checkout.
         try {
-            if (isNewRepo && config.remoteUrl.isNotBlank()) {
-                val branch = branchName(issueIdentifier)
-                val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
-                if (fetchResult != null) {
-                    if (remoteBranchExists(branch, workspacePath)) {
-                        runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
-                    } else {
-                        runGitSafe(workspacePath, "checkout", "-b", branch, "origin/${config.prBase}")
-                    }
-                    return
-                }
-                // Fall through to local init if fetch fails
-                val readme = workspacePath.resolve("README.md")
-                if (!readme.toFile().exists()) {
-                    readme.toFile().writeText("# ${workspacePath.fileName}\n")
-                }
-                runGitSafe(workspacePath, "add", "-A")
-                runGitSafe(workspacePath, "commit", "--allow-empty", "-m", "initial")
-            }
-
             val branch = branchName(issueIdentifier)
-            if (!isNewRepo && config.remoteUrl.isNotBlank()) {
-                runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
+            val remoteBranchExists = if (config.remoteUrl.isNotBlank()) {
+                check(runGitSafe(workspacePath, "fetch", "origin", config.prBase) != null) {
+                    "git_fetch_base_failed"
+                }
+                val remoteHead = checkNotNull(runGitSafe(workspacePath, "ls-remote", "--heads", "origin", branch)) {
+                    "git_query_remote_branch_failed"
+                }
+                if (remoteHead.isNotBlank()) {
+                    check(runGitSafe(workspacePath, "fetch", "origin", branch) != null) { "git_fetch_branch_failed" }
+                    true
+                } else false
+            } else remoteBranchExists(branch, workspacePath)
+
+            if (isNewRepo && config.remoteUrl.isNotBlank()) {
+                val startPoint = if (remoteBranchExists) "origin/$branch" else "origin/${config.prBase}"
+                check(runGitSafe(workspacePath, "checkout", "-b", branch, startPoint) != null) {
+                    "git_checkout_failed"
+                }
+                return
             }
 
             val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
-            val remoteBranchExists = remoteBranchExists(branch, workspacePath)
             if (branchExists && remoteBranchExists) {
                 check(runGitSafe(workspacePath, "checkout", branch) != null) { "git_checkout_failed" }
                 check(runGitSafe(workspacePath, "merge", "--ff-only", "origin/$branch") != null) {
