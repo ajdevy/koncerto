@@ -2869,6 +2869,137 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `independent QA cannot reuse an old pass`(@TempDir root: Path) = runBlocking {
+        val review = StageAgentConfig(
+            prompt = "review", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = "codex", onCompleteState = "Ready for Human Review",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val qa = review.copy(prompt = "qa", onCompleteState = "Done",
+            review = com.flexsentlabs.koncerto.core.review.ReviewPolicy())
+        val cfg = config(stages = mapOf("in review" to review, "ready for human review" to qa)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("Ready for Human Review")))
+        Files.createDirectories(root.resolve("T-1"))
+        Files.writeString(root.resolve("T-1/.review-status"), "pass")
+        val qaRunner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                return Result.Success(Unit)
+            }
+        }
+        val reviewRunner = CollectingAgentRunner()
+        val linear = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "Ready for Human Review")) }
+        val state = RuntimeState()
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = reviewRunner, workspaceManager = ws, linearClient = linear,
+            projectConfig = cfg, projectSlug = "p", runtimeState = state,
+            notifier = null, logger = StructuredLogger(emptyList())
+        )
+        val svc = createService(projectConfig = cfg, linear = linear, state = state,
+            runner = qaRunner, workspaces = ws, autoReviewOrchestrator = autoReview)
+        runDispatchAwait(svc)
+        assertThat(reviewRunner.dispatched.size).isEqualTo(0)
+        assertThat(linear.resolvedStateHistory).contains("In Progress")
+        assertThat(state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `independent QA stage transitions only after its own pass`(@TempDir root: Path) = runBlocking {
+        val review = StageAgentConfig(
+            prompt = "review", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = "codex", onCompleteState = "Ready for Human Review",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val qa = review.copy(prompt = "qa", onCompleteState = "Done",
+            review = com.flexsentlabs.koncerto.core.review.ReviewPolicy())
+        val cfg = config(stages = mapOf("in review" to review, "ready for human review" to qa)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("Ready for Human Review")))
+        var qaCalls = 0
+        val qaRunner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                qaCalls++
+                val dir = root.resolve(issue.identifier)
+                Files.createDirectories(dir)
+                Files.writeString(dir.resolve(".review-status"), "pass")
+                return Result.Success(Unit)
+            }
+        }
+        val reviewRunner = CollectingAgentRunner()
+        val linear = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "Ready for Human Review")) }
+        val state = RuntimeState()
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = reviewRunner, workspaceManager = ws, linearClient = linear,
+            projectConfig = cfg, projectSlug = "p", runtimeState = state,
+            notifier = null, logger = StructuredLogger(emptyList())
+        )
+        val svc = createService(projectConfig = cfg, linear = linear, state = state,
+            runner = qaRunner, workspaces = ws, autoReviewOrchestrator = autoReview)
+        runDispatchAwait(svc)
+        assertThat(qaCalls).isEqualTo(1)
+        assertThat(reviewRunner.dispatched.size).isEqualTo(0)
+        assertThat(linear.resolvedStateHistory).contains("Done")
+        assertThat(state.completed.containsKey("1")).isTrue()
+    }
+
+    @Test
+    fun `independent QA failure returns issue for work`(@TempDir root: Path) = runBlocking {
+        val review = StageAgentConfig(
+            prompt = "review", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = "codex", onCompleteState = "Ready for Human Review",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val qa = review.copy(prompt = "qa", onCompleteState = "Done",
+            review = com.flexsentlabs.koncerto.core.review.ReviewPolicy())
+        val cfg = config(stages = mapOf("in review" to review, "ready for human review" to qa)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("Ready for Human Review")))
+        val qaRunner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                val dir = root.resolve(issue.identifier)
+                Files.createDirectories(dir)
+                Files.writeString(dir.resolve(".review-status"), "fail")
+                return Result.Success(Unit)
+            }
+        }
+        val reviewRunner = CollectingAgentRunner()
+        val linear = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "Ready for Human Review")) }
+        val state = RuntimeState()
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val autoReview = AutoReviewOrchestrator(
+            agentRunner = reviewRunner, workspaceManager = ws, linearClient = linear,
+            projectConfig = cfg, projectSlug = "p", runtimeState = state,
+            notifier = null, logger = StructuredLogger(emptyList())
+        )
+        val svc = createService(projectConfig = cfg, linear = linear, state = state,
+            runner = qaRunner, workspaces = ws, autoReviewOrchestrator = autoReview)
+        runDispatchAwait(svc)
+        assertThat(reviewRunner.dispatched.size).isEqualTo(0)
+        assertThat(linear.resolvedStateHistory).contains("In Progress")
+        assertThat(state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
     fun `handleNormalCompletion with auto review pass completes issue`(@TempDir root: Path) = runBlocking {
         val reviewStage = StageAgentConfig(
             prompt = null, model = null, effort = null, maxConcurrent = null,

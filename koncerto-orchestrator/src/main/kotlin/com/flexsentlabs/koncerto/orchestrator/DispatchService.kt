@@ -546,6 +546,14 @@ class DispatchService(
             return
         }
         val completedReviewStage = stageName?.equals("in review", ignoreCase = true) == true
+        val independentVerification = stageName != null && stageConfig?.review != null &&
+            stageName.lowercase() !in setOf("todo", "in progress", "in review", "review")
+        if (independentVerification) {
+            // This stage is itself a verification pass; its fresh verdict must gate
+            // its own transition instead of starting the general review again.
+            completeIssue(issue, stageConfig, entry)
+            return
+        }
         if (autoReviewOrchestrator != null) {
             val decision = if (completedReviewStage) {
                 autoReviewOrchestrator.onReviewStageComplete(issue)
