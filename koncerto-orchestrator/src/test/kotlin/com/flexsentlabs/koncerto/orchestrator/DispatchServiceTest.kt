@@ -644,6 +644,17 @@ class DispatchServiceTest {
         val cfg = base.copy(tracker = base.tracker.copy(activeStates = listOf("In Review")))
         val state = RuntimeState()
         val linear = TrackingLinearClient().also { it.addIssue(testIssue) }
+        val verdictRunner = object : AgentRunner by CollectingAgentRunner() {
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                Files.writeString(workspace.path.resolve(".review-status"), "fail")
+                return Result.Success(Unit)
+            }
+        }
         var completedNotification = false
         val notifier = CompositeNotifier(listOf(object : com.flexsentlabs.koncerto.notifications.Notifier {
             override suspend fun send(event: com.flexsentlabs.koncerto.notifications.NotificationEvent) {
@@ -651,7 +662,7 @@ class DispatchServiceTest {
             }
         }))
         val svc = createService(projectConfig = cfg, state = state, linear = linear, workspaces = workspaces,
-            candidates = listOf(testIssue), notifier = notifier, notificationsConfig = NotificationsConfig(onCompleted = true))
+            candidates = listOf(testIssue), runner = verdictRunner, notifier = notifier, notificationsConfig = NotificationsConfig(onCompleted = true))
         runDispatchAwait(svc)
         assertThat(state.isBlocked(testIssue.id)).isTrue()
         assertThat(state.completed.containsKey(testIssue.id)).isFalse()
@@ -2408,7 +2419,171 @@ class DispatchServiceTest {
     }
 
     @Test
-    fun `transitionOnComplete uses onComplete when review status file missing`(@TempDir root: Path) = runBlocking {
+    fun `review without failure state blocks when verdict missing`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "blocked-id"
+        val state = RuntimeState()
+        state.completed["1"] = true
+        val svc = createService(linear = linear, state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+        assertThat(linear.resolvedStateHistory).contains("Blocked")
+        assertThat(linear.transitionedStateId).isEqualTo("blocked-id")
+    }
+
+    @Test
+    fun `review remains locally blocked when Linear update fails`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.resolveStateIdResult = "blocked-id"
+        linear.throwOnStateUpdate = true
+        val state = RuntimeState()
+        state.completed["1"] = true
+        val svc = createService(linear = linear, state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(linear.resolvedStateHistory).contains("Blocked")
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+        assertThat(linear.transitionedStateId).isNull()
+    }
+
+    @Test
+    fun `failed review is not dispatched again across poll and restart`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val cfg = config(stages = mapOf("in review" to stage)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("In Review"))
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        linear.throwOnStateUpdate = true
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner, workspaces = ws)
+        runDispatchAwait(svc)
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+
+        val afterRestartRunner = CollectingAgentRunner()
+        val afterRestart = createService(projectConfig = cfg, linear = linear,
+            runner = afterRestartRunner, workspaces = ws)
+        runDispatchAwait(afterRestart)
+        assertThat(afterRestartRunner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `manual state change clears a pending review block`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val cfg = config(stages = mapOf("in review" to stage)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("Todo", "In Review"))
+        )
+        val firstLinear = TrackingLinearClient()
+        firstLinear.addIssue(issue("1", "T-1", "In Review"))
+        firstLinear.throwOnStateUpdate = true
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val first = createService(projectConfig = cfg, linear = firstLinear,
+            runner = CollectingAgentRunner(), workspaces = ws)
+        runDispatchAwait(first)
+
+        val manuallyChanged = TrackingLinearClient()
+        manuallyChanged.addIssue(issue("1", "T-1", "Todo"))
+        val runner = CollectingAgentRunner()
+        val restarted = createService(projectConfig = cfg, linear = manuallyChanged,
+            runner = runner, workspaces = ws)
+        runDispatchAwait(restarted)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        runDispatchAwait(restarted)
+        assertThat(runner.dispatched.size).isEqualTo(1)
+        assertThat(manuallyChanged.resolvedStateHistory.contains("Blocked")).isFalse()
+    }
+
+    @Test
+    fun `pending review block is delivered once and cleared after confirmation`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val cfg = config(stages = mapOf("in review" to stage)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("In Review"))
+        )
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val offline = TrackingLinearClient()
+        offline.addIssue(issue("1", "T-1", "In Review"))
+        offline.throwOnStateUpdate = true
+        runDispatchAwait(createService(projectConfig = cfg, linear = offline,
+            runner = CollectingAgentRunner(), workspaces = ws))
+
+        val online = TrackingLinearClient()
+        online.addIssue(issue("1", "T-1", "In Review"))
+        val runner = CollectingAgentRunner()
+        val recovered = createService(projectConfig = cfg, linear = online, runner = runner, workspaces = ws)
+        runDispatchAwait(recovered)
+        val secondRunner = CollectingAgentRunner()
+        val secondRestart = createService(projectConfig = cfg, linear = online, runner = secondRunner, workspaces = ws)
+        runDispatchAwait(secondRestart)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(secondRunner.dispatched.size).isEqualTo(0)
+        assertThat(online.resolvedStateHistory.count { it == "Blocked" }).isEqualTo(1)
+
+        val confirmed = TrackingLinearClient()
+        confirmed.addIssue(issue("1", "T-1", "Blocked"))
+        runDispatchAwait(createService(projectConfig = cfg, linear = confirmed,
+            runner = CollectingAgentRunner(), workspaces = ws))
+        val reopened = TrackingLinearClient()
+        reopened.addIssue(issue("1", "T-1", "In Review"))
+        val reopenedRunner = CollectingAgentRunner()
+        runDispatchAwait(createService(projectConfig = cfg, linear = reopened,
+            runner = reopenedRunner, workspaces = ws))
+        assertThat(reopenedRunner.dispatched.size).isEqualTo(1)
+    }
+
+    @Test
+    fun `corrupt review journal stops dispatch`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("Todo")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journalDir = root.resolve(".koncerto-review-gates").resolve(projectKey)
+        val journal = ReviewBlockJournal(journalDir)
+        journal.put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val marker = Files.list(journalDir).use { it.filter { p -> p.fileName.toString().endsWith(".gate") }.findFirst().orElseThrow() }
+        Files.writeString(marker, "corrupt")
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "Todo"))
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        runDispatchAwait(svc)
+        assertThat(svc.shutdownRequested).isTrue()
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `transitionOnComplete uses onFailure when review status file missing`(@TempDir root: Path) = runBlocking {
         val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
         Files.createDirectories(root.resolve("T-1"))
         val stage = StageAgentConfig(
@@ -2421,7 +2596,7 @@ class DispatchServiceTest {
         linear.addIssue(issue("1", "T-1", "In Review"))
         val svc = createService(linear = linear, workspaces = ws, candidates = emptyList())
         svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
-        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+        assertThat(linear.resolvedStateHistory).contains("In Progress")
     }
 
     @Test
@@ -2599,6 +2774,34 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `review cannot reuse a previous pass verdict`(@TempDir root: Path) = runBlocking {
+        val reviewStage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val pcfg = config(stages = mapOf("in review" to reviewStage)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("In Review"))
+        )
+        val state = RuntimeState()
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        val workspace = ws.ensureWorkspace("T-1")
+        Files.writeString(workspace.path.resolve(".review-status"), "pass")
+        val svc = createService(
+            runner = ReviewWritingAgentRunner(root, null), linear = linear, state = state,
+            workspaces = ws, projectConfig = pcfg,
+            candidates = listOf(issue("1", "T-1", "In Review"))
+        )
+        runDispatchAwait(svc)
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+        assertThat(linear.resolvedStateHistory).contains("Blocked")
+    }
+
+    @Test
     fun `in-review stage completion skips autoReview and completes directly`(@TempDir root: Path) = runBlocking {
         // Regression: when the "in review" stage itself completes, handleNormalCompletion used to call
         // onCodingComplete() again, running a redundant nested review.
@@ -2621,6 +2824,8 @@ class DispatchServiceTest {
             gitWorkflowOverride: GitWorkflow?
             ): com.flexsentlabs.koncerto.core.result.EmptyResult<IllegalStateException> {
                 runCount++
+                val workspace = WorkspaceManager(root, HookExecutor { _, _ -> }).ensureWorkspace(issue.identifier)
+                Files.writeString(workspace.path.resolve(".review-status"), "pass")
                 return Result.Success(Unit)
             }
         }

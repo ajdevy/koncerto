@@ -46,7 +46,9 @@ class SpecialistReviewCoordinator(
             )
         }
         // Any critical finding from any specialist fails the combined verdict.
-        val pass = merged.none { it.severity == com.flexsentlabs.koncerto.core.review.Severity.CRITICAL }
+        val pass = specialistPromptPaths.isNotEmpty() && results.size == specialistPromptPaths.size &&
+            results.all { it.first.verdictPass && !it.first.usage.isError } &&
+            merged.none { it.severity == com.flexsentlabs.koncerto.core.review.Severity.CRITICAL }
         return SpecialistResult(merged, totalUsage, pass, results.size)
     }
 
