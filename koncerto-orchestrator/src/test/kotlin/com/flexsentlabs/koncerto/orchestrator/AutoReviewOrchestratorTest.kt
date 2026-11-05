@@ -1736,6 +1736,43 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `all failed specialists cannot be replaced with a generalist pass`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        initGitRepo(issueDir)
+        Files.writeString(issueDir.resolve("README.md"), "x\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "init", "--no-verify")
+        Files.createDirectories(issueDir.resolve("src"))
+        Files.writeString(issueDir.resolve("src/Auth.kt"), "class Auth\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "auth", "--no-verify")
+        val policy = com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+            criticalGlobs = listOf("**/Auth.kt"),
+            specialists = listOf("prompts/review-security.md", "prompts/review-reliability.md")
+        )
+        var calls = 0
+        val runner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                calls++
+                Files.writeString(issueDir.resolve(".review-status"), "pass")
+                Files.writeString(issueDir.resolve(".review-findings.json"),
+                    """{"verdictPass":true,"findings":[],"usage":{"isError":false},"humanText":"ok"}""")
+                return if (calls <= 2) Result.Failure(IllegalStateException("review failed")) else Result.Success(Unit)
+            }
+        }
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+        val decision = reviewMetricsOrchestrator(ws, metrics, stage = reviewStage().copy(review = policy), runner = runner)
+            .onCodingComplete(issue())
+        assertThat(calls).isEqualTo(2)
+        assertThat(decision is AutoReviewOrchestrator.ReviewDecision.Pass).isEqualTo(false)
+    }
+
+    @Test
     fun `failed specialist cannot approve with a written pass`(@TempDir tmpDir: Path) = runTest {
         val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }

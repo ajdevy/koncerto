@@ -308,9 +308,9 @@ class AutoReviewOrchestrator(
      * lane-restricted specialists (security / reliability / architecture), merging their
      * findings into the standard handoff files so the rest of the pipeline is unchanged.
      *
-     * Returns true when specialists ran (caller then skips the generalist review), false to
-     * fall through to the normal single review — including on any failure, so a specialist
-     * problem degrades to an ordinary review rather than losing review entirely.
+     * Returns true when specialist review applies, including unsuccessful specialist runs.
+     * Returns false only when the policy does not select specialists. Errors propagate so
+     * a critical-tier review cannot be replaced by a generalist approval.
      */
     private suspend fun runSpecialistsIfCritical(
         issue: Issue,
@@ -365,7 +365,6 @@ class AutoReviewOrchestrator(
             }
 
             val result = coordinator.run(policy.specialists)
-            if (result.specialistCount == 0) return@runCatching false
 
             // Rewrite the handoff files with the merged result so readReviewStatus() and the
             // telemetry recorder see one combined review rather than the last specialist's.
@@ -394,7 +393,7 @@ class AutoReviewOrchestrator(
             logger.warn("review_specialists_failed", mapOf(
                 "issue_id" to issue.id, "error" to (it.message ?: "?")
             ))
-            false
+            throw it
         }
     }
 
