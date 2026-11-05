@@ -1773,6 +1773,44 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
+    fun `specialist handoff filesystem error cannot approve review`(@TempDir tmpDir: Path) = runTest {
+        val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
+        val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }
+        initGitRepo(issueDir)
+        Files.writeString(issueDir.resolve("README.md"), "x\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "init", "--no-verify")
+        Files.createDirectories(issueDir.resolve("src"))
+        Files.writeString(issueDir.resolve("src/Auth.kt"), "class Auth\n")
+        runGit(issueDir, "add", "-A"); runGit(issueDir, "commit", "-q", "-m", "auth", "--no-verify")
+        val findings = issueDir.resolve(".review-findings.json")
+        Files.createDirectories(findings)
+        Files.writeString(findings.resolve("held"), "occupied")
+        val policy = com.flexsentlabs.koncerto.core.review.ReviewPolicy(
+            criticalGlobs = listOf("**/Auth.kt"), specialists = listOf("prompts/review-security.md")
+        )
+        var calls = 0
+        val runner = object : AgentRunner {
+            private val flow = MutableSharedFlow<AgentEvent>()
+            override fun events() = flow.asSharedFlow()
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String, agentKindOverride: String?,
+                commandOverride: String?, modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                calls++
+                return Result.Success(Unit)
+            }
+        }
+        val metrics = com.flexsentlabs.koncerto.orchestrator.review.FakeReviewMetrics()
+        val failure = runCatching {
+            reviewMetricsOrchestrator(ws, metrics, stage = reviewStage().copy(review = policy), runner = runner)
+                .onCodingComplete(issue())
+        }.exceptionOrNull()
+        assertThat(failure != null).isEqualTo(true)
+        assertThat(calls).isEqualTo(0)
+    }
+
+    @Test
     fun `failed specialist cannot approve with a written pass`(@TempDir tmpDir: Path) = runTest {
         val ws = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = ws.resolve("T-1").also { Files.createDirectories(it) }

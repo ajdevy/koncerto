@@ -158,19 +158,13 @@ class AutoReviewOrchestrator(
         val reviewSucceeded = when {
             !verdictReady -> false
             ranSpecialists -> true
-            else -> {
-                // A failed specialist may have left a verdict; the generalist must write its own.
-                val reset = workspace?.let { ws ->
-                    runCatching { Files.deleteIfExists(ws.path.resolve(".review-status")); true }.getOrDefault(false)
-                } ?: false
-                reset && agentRunner.run(
-                    issue = issue,
-                    attempt = currentAttempt,
-                    prompt = reviewPrompt,
-                    agentKindOverride = reviewKind,
-                    commandOverride = reviewCommand
-                ) is Result.Success
-            }
+            else -> agentRunner.run(
+                issue = issue,
+                attempt = currentAttempt,
+                prompt = reviewPrompt,
+                agentKindOverride = reviewKind,
+                commandOverride = reviewCommand
+            ) is Result.Success
         }
 
         val passed = reviewSucceeded && (workspace?.let { readReviewStatus(it.path) } ?: false)

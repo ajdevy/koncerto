@@ -2419,6 +2419,275 @@ class DispatchServiceTest {
     }
 
     @Test
+    fun `review remains blocked when Linear comment and transition fail`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val state = RuntimeState().also { it.completed["1"] = true }
+        val svc = createService(linear = ThrowingLinearClient(), state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+        assertThat(svc.shutdownRequested).isFalse()
+    }
+
+    @Test
+    fun `review shuts down if the block journal fails after Linear update`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(config().tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journalDir = root.resolve(".koncerto-review-gates").resolve(projectKey)
+        val linear = object : LinearClient by TrackingLinearClient() {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                Files.move(journalDir, journalDir.resolveSibling("moved-gates"))
+                Files.writeString(journalDir, "unavailable")
+            }
+        }
+        val state = RuntimeState().also { it.completed["1"] = true }
+        val svc = createService(linear = linear, state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(svc.shutdownRequested).isTrue()
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `review preserves cancellation while writing a blocked comment`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = object : LinearClient by TrackingLinearClient() {
+            override suspend fun createComment(issueId: String, body: String) {
+                throw kotlinx.coroutines.CancellationException("cancel comment")
+            }
+        }
+        val state = RuntimeState().also { it.completed["1"] = true }
+        val svc = createService(linear = linear, state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        val error = runCatching { svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage) }.exceptionOrNull()
+        assertThat(error is kotlinx.coroutines.CancellationException).isTrue()
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `review preserves cancellation while transitioning to blocked`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done", onFailureState = null,
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = object : LinearClient by TrackingLinearClient() {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                throw kotlinx.coroutines.CancellationException("cancel update")
+            }
+        }
+        val state = RuntimeState().also { it.completed["1"] = true }
+        val svc = createService(linear = linear, state = state,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }), candidates = emptyList())
+        val error = runCatching { svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage) }.exceptionOrNull()
+        assertThat(error is kotlinx.coroutines.CancellationException).isTrue()
+        assertThat(state.isBlocked("1")).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `pending block survives Linear fetch outage`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journal = ReviewBlockJournal(root.resolve(".koncerto-review-gates").resolve(projectKey))
+        journal.put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val base = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val linear = object : LinearClient by base {
+            override suspend fun fetchIssueById(issueId: String): Issue? = throw RuntimeException("Linear offline")
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(journal.entries().size).isEqualTo(1)
+    }
+
+    @Test
+    fun `pending block preserves cancellation during Linear fetch`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journal = ReviewBlockJournal(root.resolve(".koncerto-review-gates").resolve(projectKey))
+        journal.put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val base = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val linear = object : LinearClient by base {
+            override suspend fun fetchIssueById(issueId: String): Issue? =
+                throw kotlinx.coroutines.CancellationException("cancel fetch")
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        val error = runCatching { svc.fetchAndDispatch(CoroutineScope(coroutineContext)) }.exceptionOrNull()
+        assertThat(error is kotlinx.coroutines.CancellationException).isTrue()
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(journal.entries().size).isEqualTo(1)
+    }
+
+    @Test
+    fun `review does not run if old verdict cannot be removed`(@TempDir root: Path) = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done", onFailureState = "In Progress",
+            maxReviewAttempts = 3, agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val cfg = config(stages = mapOf("in review" to stage)).copy(
+            tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val oldVerdict = root.resolve("T-1/.review-status")
+        Files.createDirectories(oldVerdict)
+        Files.writeString(oldVerdict.resolve("held"), "old")
+        val linear = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        runDispatchAwait(svc)
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(svc.state.completed.containsKey("1")).isFalse()
+    }
+
+    @Test
+    fun `pending block preserves cancellation during retry transition`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journal = ReviewBlockJournal(root.resolve(".koncerto-review-gates").resolve(projectKey))
+        journal.put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val base = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val linear = object : LinearClient by base {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                throw kotlinx.coroutines.CancellationException("cancel retry")
+            }
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        val error = runCatching { svc.fetchAndDispatch(CoroutineScope(coroutineContext)) }.exceptionOrNull()
+        assertThat(error is kotlinx.coroutines.CancellationException).isTrue()
+        assertThat(runner.dispatched.size).isEqualTo(0)
+        assertThat(journal.entries().size).isEqualTo(1)
+    }
+
+    @Test
+    fun `reconciliation stops when journal record is replaced by a symlink`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journalDir = root.resolve(".koncerto-review-gates").resolve(projectKey)
+        val journal = ReviewBlockJournal(journalDir)
+        journal.put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val marker = Files.list(journalDir).use { it.filter { p -> p.fileName.toString().endsWith(".gate") }.findFirst().orElseThrow() }
+        val base = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val linear = object : LinearClient by base {
+            override suspend fun fetchIssueById(issueId: String): Issue? {
+                Files.delete(marker)
+                Files.createSymbolicLink(marker, root.resolve("outside"))
+                return issue("1", "T-1", "Todo")
+            }
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        runDispatchAwait(svc)
+        assertThat(svc.shutdownRequested).isTrue()
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `reconciliation stops if journal fails after retry transition`(@TempDir root: Path) = runBlocking {
+        val cfg = config().copy(tracker = config().tracker.copy(activeStates = listOf("In Review")))
+        val projectKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(cfg.tracker.projectSlug.toByteArray()).joinToString("") { "%02x".format(it) }
+        val journalDir = root.resolve(".koncerto-review-gates").resolve(projectKey)
+        ReviewBlockJournal(journalDir).put(ReviewBlockJournal.Entry("1", "In Review", false))
+        val base = TrackingLinearClient().also { it.addIssue(issue("1", "T-1", "In Review")) }
+        val linear = object : LinearClient by base {
+            override suspend fun updateIssueState(issueId: String, stateId: String) {
+                Files.move(journalDir, journalDir.resolveSibling("moved-gates"))
+                Files.writeString(journalDir, "unavailable")
+            }
+        }
+        val runner = CollectingAgentRunner()
+        val svc = createService(projectConfig = cfg, linear = linear, runner = runner,
+            workspaces = WorkspaceManager(root, HookExecutor { _, _ -> }))
+        runDispatchAwait(svc)
+        assertThat(svc.shutdownRequested).isTrue()
+        assertThat(runner.dispatched.size).isEqualTo(0)
+    }
+
+    @Test
+    fun `review without workspace stops rather than reporting completion`() = runBlocking {
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        val state = RuntimeState().also { it.completed["1"] = true }
+        val svc = createService(linear = linear, state = state, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(svc.shutdownRequested).isTrue()
+        assertThat(state.completed.containsKey("1")).isFalse()
+        assertThat(linear.transitionedStateId).isNull()
+    }
+
+    @Test
+    fun `review without failure state accepts a fresh pass`(@TempDir root: Path) = runBlocking {
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        Files.createDirectories(root.resolve("T-1"))
+        Files.writeString(root.resolve("T-1/.review-status"), "pass")
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = null, maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val svc = createService(linear = linear, workspaces = ws, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(linear.transitionedStateId).isEqualTo("done-id")
+        assertThat(svc.state.isBlocked("1")).isFalse()
+    }
+
+    @Test
+    fun `review with an invalid verdict goes to the failure state`(@TempDir root: Path) = runBlocking {
+        val ws = WorkspaceManager(root, HookExecutor { _, _ -> })
+        Files.createDirectories(root.resolve("T-1"))
+        Files.writeString(root.resolve("T-1/.review-status"), "unknown")
+        val stage = StageAgentConfig(
+            prompt = "p", model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val linear = TrackingLinearClient()
+        linear.addIssue(issue("1", "T-1", "In Review"))
+        val svc = createService(linear = linear, workspaces = ws, candidates = emptyList())
+        svc.transitionOnComplete(issue("1", "T-1", "In Review"), stage)
+        assertThat(linear.resolvedStateHistory).contains("In Progress")
+    }
+
+    @Test
     fun `review without failure state blocks when verdict missing`(@TempDir root: Path) = runBlocking {
         val stage = StageAgentConfig(
             prompt = "p", model = null, effort = null, maxConcurrent = null,
