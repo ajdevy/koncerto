@@ -56,7 +56,7 @@ class DockerRuntime(
     @Volatile
     private var pid: Long? = null
     @Volatile
-    private var jsonlMode: Boolean = false
+    private var jsonlMode: Boolean = command.contains("codex exec")
     @Volatile
     private var turnCompletedEmitted: Boolean = false
 
@@ -110,7 +110,11 @@ class DockerRuntime(
                 _output.tryEmit("[stdout] $line")
                     try {
                         val msgs = JsonRpcFraming.decodeAll(line)
-                        msgs.forEach { dispatchMessage(it) }
+                        if (msgs.isNotEmpty()) {
+                            msgs.forEach { dispatchMessage(it) }
+                        } else if (!tryHandleAsJsonl(line)) {
+                            events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
+                        }
                     } catch (e: Exception) {
                         if (!tryHandleAsJsonl(line)) {
                             events.trySend(AgentEvent.Malformed(raw = line.take(2000), pid = pid))
@@ -122,7 +126,7 @@ class DockerRuntime(
         }
         if (jsonlMode && !turnCompletedEmitted) {
             _output.tryEmit("[jsonl] stream ended")
-            events.trySend(AgentEvent.TurnCompleted("?", "?", null, pid))
+            events.trySend(AgentEvent.TurnFailed("?", "?", "agent_stream_ended_without_terminal_event", pid))
         }
     }
 
@@ -275,6 +279,7 @@ class DockerRuntime(
                     true
                 }
                 "error" -> {
+                    turnCompletedEmitted = true
                     val message = obj["message"]?.toString()?.trim('"') ?: "unknown error"
                     events.trySend(AgentEvent.TurnFailed("?", "?", message, pid))
                     true
