@@ -131,6 +131,25 @@ java -jar koncerto-app/build/libs/koncerto-app-*.jar WORKFLOW.md
 java -jar koncerto-app.jar WORKFLOW.md status
 ```
 
+### Verify a health response
+
+Use the Python 3 standard-library utility to check a JSON response from stdin:
+
+```bash
+python3 scripts/verify-health.py < health-response.json
+```
+
+It exits `0` only when the top-level `status` is exactly `"UP"`, `1` for any
+other string status, and `2` for malformed JSON, non-object JSON, a missing
+status, or a non-string status. A concise diagnostic is printed to stderr
+without echoing the input. No additional packages are required.
+
+Run its command-line tests from the repository root:
+
+```bash
+python3 -B -m unittest discover -s scripts -p 'test_*.py' -v
+```
+
 ## Project Structure
 
 ```

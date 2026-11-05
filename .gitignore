@@ -74,3 +74,8 @@ gradle/local-plugin-repo/*-gradle85.jar
 
 # Stray dir if koncerto is launched without KONCERTO_WORKSPACE_ROOT set
 $KONCERTO_WORKSPACE_ROOT/
+
+# Koncerto pipeline artifacts (auto-managed — do not commit)
+.koncerto/
+.review-*
+.model-exhausted*
