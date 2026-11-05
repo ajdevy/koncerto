@@ -236,12 +236,13 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `commitAndPush with autoPush creates commit and attempts push`() {
+    fun `commitAndPush retains commit and reports push failure`() {
         val config = GitConfig(enabled = true, autoCommit = true, autoPush = true)
         val workflow = GitWorkflow(config, noopLogger())
         workflow.createBranch(repoDir, "ABC-1")
         repoDir.resolve("push-test.txt").writeText("push")
-        workflow.commitAndPush(repoDir, "ABC-1", "Test push", labels = emptyList())
+        val result = runCatching { workflow.commitAndPush(repoDir, "ABC-1", "Test push", labels = emptyList()) }
+        assertThat(result.isFailure).isTrue()
         val log = runGit("log", "--oneline")
         assertThat(log).contains("feat: ABC-1: Test push")
     }
@@ -730,7 +731,7 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `commitAndPush force pushes when initial push rejected`() {
+    fun `commitAndPush reports rejected push without force`() {
         val bareDir = createBareRemoteWithMain()
         runGit("remote", "add", "origin", bareDir.toString())
         runGit("fetch", "origin", "main")
@@ -745,7 +746,8 @@ class GitWorkflowTest {
         runGit("commit", "-m", "diverged commit")
         val config = GitConfig(enabled = true, autoCommit = false, autoPush = true, remoteUrl = bareDir.toString())
         val workflow = GitWorkflow(config, noopLogger())
-        workflow.commitAndPush(repoDir, "PUSH-1", "Force push test")
+        val result = runCatching { workflow.commitAndPush(repoDir, "PUSH-1", "Rejected push test") }
+        assertThat(result.isFailure).isTrue()
         val log = runGit("log", "--oneline", "-1")
         assertThat(log.contains("diverged")).isTrue()
     }
@@ -880,7 +882,7 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `setupOriginRemote injects test GH token into remote url`(@TempDir tmpDir: Path) {
+    fun `setupOriginRemote keeps test GH token out of remote url`(@TempDir tmpDir: Path) {
         runGitIn(tmpDir, "init")
         GitWorkflow.testGhTokenOverride = "coverage-test-token"
         try {
@@ -892,7 +894,7 @@ class GitWorkflowTest {
             method.isAccessible = true
             method.invoke(workflow, tmpDir)
             val remote = runGitIn(tmpDir, "remote", "get-url", "origin")
-            assertThat(remote).contains("x-access-token:coverage-test-token@")
+            assertThat(remote).isEqualTo("https://github.com/acme/repo.git")
         } finally {
             GitWorkflow.testGhTokenOverride = null
         }

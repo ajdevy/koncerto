@@ -15,7 +15,7 @@ open class GitWorkflow(
     private val logger: StructuredLogger
 ) {
     companion object {
-        /** Test seam: overrides GH_TOKEN for authenticated remote URL setup. */
+        /** Test seam: overrides GH_TOKEN for a child Git credential helper. */
         @JvmStatic
         var testGhTokenOverride: String? = null
     }
@@ -135,30 +135,18 @@ open class GitWorkflow(
     }
 
     private fun setupOriginRemote(workspacePath: Path) {
-        val remoteUrl = config.remoteUrl
+        val remoteUrl = GitRemoteResolver.sanitizeRemoteUrl(config.remoteUrl)
         if (remoteUrl.isBlank()) return
-        val token = testGhTokenOverride ?: System.getenv("GH_TOKEN")
-        val authUrl = if (!token.isNullOrBlank()) {
-            // Insert token for authenticated push: https://x-access-token:<token>@github.com/...
-            remoteUrl.replace("://", "://x-access-token:$token@")
-        } else {
-            remoteUrl
-        }
         val existing = runGitSafe(workspacePath, "remote", "get-url", "origin")
-        if (existing != null) {
-            if (GitRemoteResolver.sanitizeRemoteUrl(existing) == GitRemoteResolver.sanitizeRemoteUrl(authUrl)) {
-                logger.info("origin_remote_exists", mapOf("url" to GitRemoteResolver.sanitizeRemoteUrl(existing)))
-                return
-            }
-            runGitSafe(workspacePath, "remote", "set-url", "origin", authUrl)
-            logger.info("origin_remote_updated", mapOf(
-                "url" to remoteUrl,
-                "auth" to (!token.isNullOrBlank()).toString()
-            ))
+        if (existing == remoteUrl) {
+            logger.info("origin_remote_exists", mapOf("url" to remoteUrl))
             return
         }
-        runGitSafe(workspacePath, "remote", "add", "origin", authUrl)
-        logger.info("origin_remote_added", mapOf("url" to remoteUrl, "auth" to (!token.isNullOrBlank()).toString()))
+        val action = if (existing == null) "add" else "set-url"
+        check(runGitSafe(workspacePath, "remote", action, "origin", remoteUrl) != null) {
+            "origin_remote_setup_failed"
+        }
+        logger.info(if (existing == null) "origin_remote_added" else "origin_remote_updated", mapOf("url" to remoteUrl))
     }
 
     fun commitAndPush(workspacePath: Path, issueIdentifier: String, title: String, labels: List<String> = emptyList()) {
@@ -180,10 +168,8 @@ open class GitWorkflow(
             }
         }
         if (config.autoPush) {
-            val pushResult = runGitSafe(workspacePath, "push", "-u", "origin", branch)
-            if (pushResult == null) {
-                // Rejected (e.g. remote branch exists with divergent history) — force push
-                runGitSafe(workspacePath, "push", "--force", "-u", "origin", branch)
+            check(runGitSafe(workspacePath, "push", "-u", "origin", branch) != null) {
+                "git_push_failed"
             }
         }
     }
@@ -250,10 +236,21 @@ open class GitWorkflow(
     private fun runCmdSafe(cmd: String, workspacePath: Path, vararg args: String): String? {
         return try {
             val fullCmd = listOf(cmd) + args.toList()
-            val proc = ProcessBuilder(fullCmd)
+            val builder = ProcessBuilder(fullCmd)
                 .directory(workspacePath.toFile())
                 .redirectErrorStream(true)
-                .start()
+            if (cmd == "git") {
+                val environment = builder.environment()
+                val count = environment["GIT_CONFIG_COUNT"]?.toIntOrNull() ?: 0
+                check(count in 0..1024) { "invalid_git_config_count" }
+                environment["GIT_CONFIG_COUNT"] = (count + 2).toString()
+                environment["GIT_CONFIG_KEY_$count"] = "credential.https://github.com.helper"
+                environment["GIT_CONFIG_VALUE_$count"] = ""
+                environment["GIT_CONFIG_KEY_${count + 1}"] = "credential.https://github.com.helper"
+                environment["GIT_CONFIG_VALUE_${count + 1}"] = "!gh auth git-credential"
+                testGhTokenOverride?.let { environment["GH_TOKEN"] = it }
+            }
+            val proc = builder.start()
             val output = proc.inputStream.bufferedReader().use { it.readText() }
             val exit = proc.waitFor()
             if (exit == 0) {
