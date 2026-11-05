@@ -425,15 +425,15 @@ class Beans {
                         notifier = compositeNotifier,
                         logger = logger,
                         workflowCache = cache,
-                        onReviewPassed = demoEventListener?.let { listener ->
+                        onReviewPassed = if (config.demoRecording.enabled) demoEventListener?.let { listener ->
                             { issue, targetUrl -> listener.onReviewPassed(issue.id, issue.identifier, slug, targetUrl) }
-                        },
-                        targetProjectDeployer = targetProjectDeployer,
+                        } else null,
+                        targetProjectDeployer = if (config.targetProjectDeployEnabled) targetProjectDeployer else null,
                         deployRepoFullName = parseRepoFullName(config),
                         demoFailureReporter = DemoFailureReporter(logger),
-                        demoScenarioGenerator = DemoScenarioGenerator("opencode", logger, workflowCache = cache),
-                        scenarioCoverageClassifier = ScenarioCoverageClassifier("opencode", logger),
-                        ticketCredentialExtractor = TicketCredentialExtractor(logger = logger),
+                        demoScenarioGenerator = if (config.demoRecording.enabled) DemoScenarioGenerator("opencode", logger, workflowCache = cache) else null,
+                        scenarioCoverageClassifier = if (config.demoRecording.enabled) ScenarioCoverageClassifier("opencode", logger) else null,
+                        ticketCredentialExtractor = if (config.demoRecording.enabled) TicketCredentialExtractor(logger = logger) else null,
                         crawlDomInventory = { internalUrl ->
                             com.flexsentlabs.koncerto.demo.recorder.DomInventoryCrawler(logger).crawl(internalUrl)
                         },
