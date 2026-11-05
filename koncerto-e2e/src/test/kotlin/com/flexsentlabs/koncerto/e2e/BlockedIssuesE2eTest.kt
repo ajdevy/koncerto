@@ -127,8 +127,8 @@ class BlockedIssuesE2eTest {
         try {
             val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-            val blockerNode = makeIssueNode("a", "FLE-52", "In Progress")
-            val blockedNode = makeIssueNodeWithBlocker("b", "FLE-53", "Todo", "a", "FLE-52", "In Progress")
+            val blockerNode = makeIssueNode("a", "DEMO-52", "In Progress")
+            val blockedNode = makeIssueNodeWithBlocker("b", "DEMO-53", "Todo", "a", "DEMO-52", "In Progress")
             val fakeGraphql = FakeLinearGraphqlClient(mutableListOf(blockerNode, blockedNode))
             val linear = DefaultLinearClient(fakeGraphql, "proj")
 
@@ -167,10 +167,10 @@ class BlockedIssuesE2eTest {
 
             orch.start()
 
-            waitFor({ runner.dispatched.any { it.identifier == "FLE-52" } }, 10000)
+            waitFor({ runner.dispatched.any { it.identifier == "DEMO-52" } }, 10000)
 
             delay(600)
-            assertThat(runner.dispatched.any { it.identifier == "FLE-53" }).isFalse()
+            assertThat(runner.dispatched.any { it.identifier == "DEMO-53" }).isFalse()
             assertThat(state.isBlocked("b")).isTrue()
 
             orch.stop()

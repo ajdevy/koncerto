@@ -257,4 +257,4 @@ demo_scenario:
 - Each step must have an `action` field.
 - Required fields per action type (as documented above) must be present.
 - Extra fields are ignored — don't include unsupported fields.
-- Write all text values (selectors, labels, URLs) in the language of the application's UI (Russian for PromoMesh).
+- Write all text values (selectors, labels, URLs) in the language of the application's UI (Russian for sample-app).

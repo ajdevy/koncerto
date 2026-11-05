@@ -165,7 +165,7 @@ class ModelRetryHandlerTest {
         coEvery { linearClient.updateIssueState("issue-1", "blocked-state-id") } returns Unit
         coEvery { linearClient.fetchIssueById("issue-1") } returns Issue(
             id = "issue-1",
-            identifier = "FLE-1",
+            identifier = "DEMO-1",
             title = "Test issue",
             description = null,
             priority = null,
@@ -293,7 +293,7 @@ class ModelRetryHandlerTest {
         coEvery { linearClient.updateIssueState(any(), any()) } just runs
         coEvery { linearClient.fetchIssueById(any()) } returns Issue(
             id = "issue-1",
-            identifier = "FLE-1",
+            identifier = "DEMO-1",
             title = "Test issue",
             description = null,
             priority = null,

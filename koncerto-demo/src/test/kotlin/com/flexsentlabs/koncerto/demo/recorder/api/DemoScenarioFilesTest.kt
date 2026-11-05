@@ -9,11 +9,11 @@ class DemoScenarioFilesTest {
 
     @Test
     fun `names each staging file by kind`() {
-        assert(DemoScenarioFiles.browserScenario("/tmp", "FLE-1").name == "FLE-1-scenario.yaml")
-        assert(DemoScenarioFiles.apiScenario("/tmp", "FLE-1").name == "FLE-1-api-scenario.yaml")
-        assert(DemoScenarioFiles.credentials("/tmp", "FLE-1").name == "FLE-1-credentials.env")
-        assert(DemoScenarioFiles.androidScenario("/tmp", "FLE-1").name == "FLE-1-android-scenario.yaml")
-        assert(DemoScenarioFiles.apiScenario("/tmp", "FLE-1").parentFile.name == "tmp")
+        assert(DemoScenarioFiles.browserScenario("/tmp", "DEMO-1").name == "DEMO-1-scenario.yaml")
+        assert(DemoScenarioFiles.apiScenario("/tmp", "DEMO-1").name == "DEMO-1-api-scenario.yaml")
+        assert(DemoScenarioFiles.credentials("/tmp", "DEMO-1").name == "DEMO-1-credentials.env")
+        assert(DemoScenarioFiles.androidScenario("/tmp", "DEMO-1").name == "DEMO-1-android-scenario.yaml")
+        assert(DemoScenarioFiles.apiScenario("/tmp", "DEMO-1").parentFile.name == "tmp")
     }
 
     @Test

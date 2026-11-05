@@ -130,7 +130,7 @@ class FreeModelReviewE2eTest {
 
             class Auth {
                 // Defect: hardcoded credential committed to source.
-                private val apiKey = "sk-live-SECRET-1234567890"
+                private val apiKey = "NOT_A_REAL_API_KEY_FOR_TESTS"
 
                 fun login(user: String?, password: String): Boolean {
                     // Defect: null dereference — `user` is nullable but dereferenced directly.

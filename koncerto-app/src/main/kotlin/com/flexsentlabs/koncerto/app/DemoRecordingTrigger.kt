@@ -45,7 +45,7 @@ object DemoRecordingTrigger {
 
         val issueIdentifier = args[0]
         val issueId = args.getOrNull(1)
-        val projectSlug = args.getOrNull(2) ?: "promomesh"
+        val projectSlug = args.getOrNull(2) ?: "sample-app"
         val workflowPath = System.getenv("KONCERTO_WORKFLOW_PATH") ?: "./WORKFLOW.md"
         val workspaceRoot = System.getenv("KONCERTO_WORKSPACE_ROOT") ?: "/workspace"
         val dbPath = System.getenv("KONCERTO_DB_PATH") ?: "/root/.koncerto/metrics.db"
@@ -117,7 +117,7 @@ object DemoRecordingTrigger {
         println("Cleaning up deployed container...")
         val deployer = createDeployer(logger)
         val deployConfig = DeployConfig(
-            repoFullName = "ajdevy/PromoMesh",
+            repoFullName = "example-org/sample-app",
             prBranch = issueIdentifier,
             baseBranch = "main",
             projectPath = projectPath

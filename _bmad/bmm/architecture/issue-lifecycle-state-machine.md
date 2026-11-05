@@ -133,7 +133,7 @@ if (now - entry.lastHeartbeatAt > heartbeatTimeoutMs) {
 
 During `fetchAndDispatch()`, for each candidate issue in `TODO`:
 
-1. Compute expected branch: `branchPrefix + issue.identifier` (e.g., `feature/FLE-46`)
+1. Compute expected branch: `branchPrefix + issue.identifier` (e.g., `feature/DEMO-46`)
 2. `git ls-remote --heads origin <branchName>` — check if remote branch exists
 3. Branch exists → dispatch to `IN_REVIEW` stage with `onCompleteState = "In Review"` (agent addresses PR feedback, transitions Todo → In Review)
 4. Branch missing → dispatch to `IN_PROGRESS` stage (agent implements, transitions Todo → In Progress → In Review)
@@ -269,5 +269,5 @@ Key config: `heartbeatTimeoutMs` (default 90s from `AgentProjectConfig`) drives 
 | `remoteBranchExists` unit | Mock `git ls-remote` output, verify true/false for existing/missing branches | ✅ |
 | Auto-review verdict parsing | Verify ❌ FAIL → review_failed, ✅ PASS → review_passed | ✅ Verified e2e |
 | PR comment posting | Verify gh pr comment --body-file with correct repo/PR# | ✅ Verified e2e |
-| Demo recording pipeline | Verify Playwright → ffmpeg → R2 upload → 200 OK | ✅ Verified e2e (FLE-51) |
-| Target project deploy | Verify Docker build → container start → health check | ✅ Verified e2e (FLE-75) |
+| Demo recording pipeline | Verify Playwright → ffmpeg → R2 upload → 200 OK | ✅ Verified e2e (DEMO-51) |
+| Target project deploy | Verify Docker build → container start → health check | ✅ Verified e2e (DEMO-75) |

@@ -944,7 +944,7 @@ class DispatchServiceTest {
             val workspace = workspaces.ensureWorkspace(testIssue.identifier)
             Files.writeString(workspace.path.resolve(".env.example"), "BREVO_API_KEY=\n")
             val secretsFile = root.resolve("secrets.env")
-            Files.writeString(secretsFile, "BREVO_API_KEY=xkeysib-provided\n")
+            Files.writeString(secretsFile, "BREVO_API_KEY=example-placeholder")
 
             val state = RuntimeState()
             val runner = CollectingAgentRunner()
@@ -959,7 +959,7 @@ class DispatchServiceTest {
             runDispatchAwait(svc)
 
             assertThat(runner.dispatched.size).isEqualTo(1)
-            assertThat(trackingLinear.commentedBody?.contains("required secret") ?: false).isFalse()
+            assertThat(trackingLinear.commentedBody?.contains("example-placeholder") ?: false).isFalse()
         } finally {
             root.toFile().deleteRecursively()
         }
@@ -1060,7 +1060,7 @@ class DispatchServiceTest {
             val trackingLinear = TrackingLinearClient()
             val testIssue = issue(
                 "1", "A-1", "Todo",
-                description = "Use the shared test email inbox qa@promomesh.test to read the code."
+                description = "Use the shared test email inbox qa@example.test to read the code."
             )
             trackingLinear.addIssue(testIssue)
             workspaces.ensureWorkspace(testIssue.identifier)
@@ -1091,7 +1091,7 @@ class DispatchServiceTest {
             trackingLinear.addIssue(testIssue)
             workspaces.ensureWorkspace(testIssue.identifier)
             val secretsFile = root.resolve("secrets.env")
-            Files.writeString(secretsFile, "TEST_EMAIL_INBOX=qa@promomesh.test\n")
+            Files.writeString(secretsFile, "TEST_EMAIL_INBOX=qa@example.test\n")
 
             val runner = CollectingAgentRunner()
             // Natural-language name ("test email inbox") must satisfy an ENV-style key (TEST_EMAIL_INBOX).

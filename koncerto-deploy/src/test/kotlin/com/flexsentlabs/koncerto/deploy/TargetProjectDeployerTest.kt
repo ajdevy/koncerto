@@ -293,7 +293,7 @@ class TargetProjectDeployerTest {
 
     @Test
     fun `cleanupOrphans skips the sweep while a deployment is in flight`(@TempDir tmpDir: Path) = runTest {
-        // Regression test for a real production incident: the periodic orphan sweep (every
+        // Regression test for a synthetic regression scenario: the periodic orphan sweep (every
         // 5 min) force-removes ANY container/image named koncerto-demo-* — the same pattern
         // every active deployment uses. A sweep landing between deploy success and the demo
         // recording finishing killed the live container out from under the recording
@@ -755,7 +755,7 @@ exit 0
 """
         val deployer = createDeployer(mockk(relaxed = true))
         FakeDockerPath.withFakeDocker(script) {
-            val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.demo.yml"), tmpDir, "koncerto-demo-fle-52")
+            val result = invokeDeployWithCompose(deployer, tmpDir.resolve("docker-compose.demo.yml"), tmpDir, "koncerto-demo-DEMO-52")
             assertThat(result.success).isTrue()
             assertThat(result.url).isEqualTo("http://localhost:17349")
         }
@@ -786,7 +786,7 @@ exit 0
 """
         val deployer = createDeployer(mockk(relaxed = true))
         FakeDockerPath.withFakeDockerSuspend(script) {
-            val result = deployer.deploy(DeployConfig("owner/koncerto", "fle-52", projectPath = tmpDir))
+            val result = deployer.deploy(DeployConfig("owner/koncerto", "DEMO-52", projectPath = tmpDir))
             assertThat(result.success).isTrue()
             assertThat(result.url).isEqualTo("http://localhost:17349")
         }

@@ -322,8 +322,8 @@ class DemoRecordingTriggerTest {
 
     @Test
     fun `resolveProjectPath falls back to repo root when issue dir has no git metadata`(@TempDir tmpDir: Path) {
-        val repoRoot = tmpDir.resolve("PromoMesh")
-        val issueDir = repoRoot.resolve("FLE-52")
+        val repoRoot = tmpDir.resolve("sample-app")
+        val issueDir = repoRoot.resolve("DEMO-52")
         Files.createDirectories(repoRoot.resolve(".git"))
         Files.writeString(
             repoRoot.resolve(".git").resolve("config"),
@@ -392,12 +392,12 @@ class DemoRecordingTriggerTest {
     fun `resolveIssueId reads issue_id from file with nested content`(@TempDir tmpDir: Path) {
         Files.writeString(
             tmpDir.resolve(".review-exhausted"),
-            """{"issue_id":"fle-99","status":"exhausted","attempts":5,"last_error":"timeout"}"""
+            """{"issue_id":"DEMO-99","status":"exhausted","attempts":5,"last_error":"timeout"}"""
         )
 
         val result = invokeResolveIssueId(tmpDir)
 
-        assertThat(result).isEqualTo("fle-99")
+        assertThat(result).isEqualTo("DEMO-99")
     }
 
     @Test

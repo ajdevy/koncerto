@@ -197,7 +197,7 @@ class PlaywrightRecorderTest {
 
     @Test
     fun `companion PLAYWRIGHT_SCRIPT has a hard-exit watchdog that outlives the post-scenario sleep`() {
-        // Regression test for a real production incident: FLE-52's recording hit an actual
+        // Regression test for a synthetic regression scenario: DEMO-52's recording hit an actual
         // browser/page crash mid-scenario, and process.exit(2) called from failValidation()
         // afterward did not reliably terminate Node — the recorder hung until the JVM-side
         // captureWaitSec (240s) forcibly destroyed the process. Four consecutive attempts hit
@@ -273,7 +273,7 @@ class PlaywrightRecorderTest {
 
     @Test
     fun `parseSimpleYaml unescapes double-quoted values and coerces numeric-looking ones`() {
-        // Regression test for a real FLE-52 recording: the model correctly used real
+        // Regression test for a real DEMO-52 recording: the model correctly used real
         // selectors like [data-testid="email-input"], but YAML's double-quoted scalars
         // treat \" as an escaped literal quote. Without unescaping, the parsed selector kept
         // its literal backslashes ([data-testid=\"email-input\"]), which is not valid CSS and
@@ -295,7 +295,7 @@ class PlaywrightRecorderTest {
               steps:
                 - action: type
                   selector: "[data-testid=\"email-input\"]"
-                  value: "owner@promomesh.ru"
+                  value: "owner@example.test"
                   delay: 50
         """.trimIndent()
 

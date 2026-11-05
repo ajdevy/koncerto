@@ -31,13 +31,13 @@ class GitCredentialSafetyTest {
         val repo = Files.createTempDirectory("git-auth-safety-")
         git(repo, "init")
         val workflow = GitWorkflow(GitConfig(enabled = true, remoteUrl = "https://github.com/acme/repo.git"), logger())
-        GitWorkflow.testGhTokenOverride = "synthetic-test-secret-12345"
+        GitWorkflow.testGhTokenOverride = "fake-test-token"
         try {
             val method = GitWorkflow::class.java.getDeclaredMethod("setupOriginRemote", Path::class.java)
             method.isAccessible = true
             method.invoke(workflow, repo)
             assertThat(git(repo, "remote", "get-url", "origin")).isEqualTo("https://github.com/acme/repo.git")
-            assertThat(repo.resolve(".git/config").readText().contains("synthetic-test-secret-12345")).isFalse()
+            assertThat(repo.resolve(".git/config").readText().contains("fake-test-token")).isFalse()
         } finally {
             GitWorkflow.testGhTokenOverride = null
         }

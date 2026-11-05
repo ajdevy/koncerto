@@ -16,14 +16,14 @@ class SecretsFileTest {
         val file = dir.resolve("secrets.env")
         Files.writeString(file, """
             # secrets
-            BREVO_API_KEY=xkeysib-abc123
+            BREVO_API_KEY=example-placeholder
 
             export DEBUG_TOKEN="tok-42"
             EMPTY=
         """.trimIndent())
 
         val loaded = SecretsFile.load(file.toString())
-        assertThat(loaded["BREVO_API_KEY"]).isEqualTo("xkeysib-abc123")
+        assertThat(loaded["BREVO_API_KEY"]).isEqualTo("example-placeholder")
         assertThat(loaded["DEBUG_TOKEN"]).isEqualTo("tok-42")
         assertThat(loaded.containsKey("EMPTY")).isEqualTo(false)
     }
