@@ -11,7 +11,7 @@ git:
   create_pr: true
   pr_base: main
 projects:
-  promomesh:
+  sample-app:
     tracker:
       kind: linear
       api_key: $LINEAR_API_KEY
@@ -27,7 +27,7 @@ projects:
     reviewer:
       kind: human
     git_remote_url: $GIT_REMOTE_URL
-    demo_secrets_file: $KONCERTO_PROMOMESH_SECRETS
+    demo_secrets_file: $KONCERTO_SAMPLE_APP_SECRETS
     demo_post_deploy_command: "alembic upgrade head"
     workspace:
       root: $KONCERTO_WORKSPACE_ROOT

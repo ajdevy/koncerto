@@ -5,7 +5,7 @@
 
 ## Problem
 
-Demo videos (e.g. FLE-51) are recorded with scenarios generated as a side-effect of the code review — the review agent appends a `demo_scenario:` YAML block at the end of its review output. Because the review agent's primary job is code review, it produces generic, low-quality scenarios: typically just `navigate` + `wait` steps with no scrolling, clicking, or form interactions. The result is a video where a website loads and nothing happens.
+Demo videos (e.g. DEMO-51) are recorded with scenarios generated as a side-effect of the code review — the review agent appends a `demo_scenario:` YAML block at the end of its review output. Because the review agent's primary job is code review, it produces generic, low-quality scenarios: typically just `navigate` + `wait` steps with no scrolling, clicking, or form interactions. The result is a video where a website loads and nothing happens.
 
 ## Goal
 

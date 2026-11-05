@@ -5,6 +5,10 @@
 
 A Kotlin/Spring Boot orchestrator that polls Linear for issues, dispatches them to AI agents (opencode, Codex, Claude), and manages the full lifecycle — retries, state transitions, and notifications.
 
+**Who it's for:** software teams using Linear who want configurable AI agents to implement and review issue work.
+
+**Built with:** Kotlin/JVM, Spring Boot, Gradle, Docker Compose, SQLite, and integrations with Linear, GitHub, and command-line coding agents.
+
 **Epic handling:** Issues with sub-issues (children) are treated as epics and are skipped by the agent dispatch — only leaf-level tasks are processed. This prevents koncerto from attempting to complete a parent issue that is a container for smaller work items.
 
 ## Quick Start
@@ -192,6 +196,12 @@ its findings, confidence, tokens, latency, and prompt version:
 Roll out measurement-first: collect a baseline (≥30 reviews) before tuning thresholds, and
 start new projects in `advisory` mode until the false-positive rate is under 20%. Design notes
 and decision records: `_bmad-output/planning-artifacts/architecture-review-quality.md`.
+
+## Roadmap
+
+- Collect at least 30 advisory review runs per project before changing publication thresholds.
+- Use human feedback and baseline metrics to reduce false positives below 20% before enabling blocking reviews for new projects.
+- Add specialist review prompts only where measured results show a clear gap in review coverage.
 
 ## Docker Agent Isolation
 

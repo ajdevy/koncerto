@@ -69,12 +69,12 @@ class ServiceConfigTest {
                     "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
                     "workspace" to mapOf("root" to "/tmp/test"),
                     "agent" to mapOf<String, Any?>(),
-                    "demo_secrets_file" to "/tmp/secrets/promomesh.env"
+                    "demo_secrets_file" to "/tmp/secrets/sample-app.env"
                 )
             )),
             workflowFileDir = "/tmp"
         )
-        assertThat(config.project().demoSecretsFile).isEqualTo("/tmp/secrets/promomesh.env")
+        assertThat(config.project().demoSecretsFile).isEqualTo("/tmp/secrets/sample-app.env")
     }
 
     @Test

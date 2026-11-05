@@ -31,7 +31,7 @@ Workspace repos are created via `git init` with no origin remote configured. `Gi
 
 1. Add `remoteUrl` field to `GitConfig` data class and wire it through `parseGitConfig()`
 2. In `GitWorkflow.createBranch()`, after `git init`, add origin remote (with GH_TOKEN embedded for auth)
-3. Update WORKFLOW.md with `remote_url` for both projects (`promomesh` + `default`) and flip `auto_push`/`create_pr` to `true`
+3. Update WORKFLOW.md with `remote_url` for both projects (`sample-app` + `default`) and flip `auto_push`/`create_pr` to `true`
 4. Pass `GH_TOKEN` from host env through docker-compose.yml
 
 ### Scope
@@ -111,4 +111,4 @@ Workspace repos are created via `git init` with no origin remote configured. `Gi
 ### Notes
 
 - The `default` project doesn't have an explicit remote repo URL yet — need to ask user or use a placeholder
-- promomesh remote: `https://github.com/ajdevy/promomesh.git`
+- sample-app remote: `https://github.com/example-org/sample-app.git`

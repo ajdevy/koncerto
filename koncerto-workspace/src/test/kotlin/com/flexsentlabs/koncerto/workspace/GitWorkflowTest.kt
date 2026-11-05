@@ -829,7 +829,7 @@ class GitWorkflowTest {
     @Test
     fun `isGitRepo returns false when only parent directory is a git repo`(@TempDir tmpDir: Path) {
         runGitIn(tmpDir, "init", "--initial-branch=main")
-        val workspace = tmpDir.resolve("FLE-52")
+        val workspace = tmpDir.resolve("DEMO-52")
         Files.createDirectories(workspace)
         val workflow = GitWorkflow(GitConfig(enabled = true), noopLogger())
         val method = GitWorkflow::class.java.getDeclaredMethod("isGitRepo", Path::class.java)
@@ -847,15 +847,15 @@ class GitWorkflowTest {
         runGitIn(tmpDir, "add", "-A")
         runGitIn(tmpDir, "commit", "-m", "parent initial")
 
-        val workspace = tmpDir.resolve("FLE-52")
+        val workspace = tmpDir.resolve("DEMO-52")
         Files.createDirectories(workspace)
         val config = GitConfig(enabled = true, remoteUrl = "https://github.com/acme/target.git")
         val workflow = GitWorkflow(config, noopLogger())
-        workflow.createBranch(workspace, "FLE-52")
+        workflow.createBranch(workspace, "DEMO-52")
 
         assertThat(workspace.resolve(".git").toFile().exists()).isTrue()
         assertThat(runGitIn(tmpDir, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("main")
-        assertThat(runGitIn(workspace, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("feature/FLE-52")
+        assertThat(runGitIn(workspace, "rev-parse", "--abbrev-ref", "HEAD")).isEqualTo("feature/DEMO-52")
         assertThat(runGitIn(workspace, "remote", "get-url", "origin"))
             .isEqualTo("https://github.com/acme/target.git")
     }

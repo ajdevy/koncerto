@@ -1301,7 +1301,7 @@ class AutoReviewOrchestratorTest {
         Files.writeString(issueDir.resolve(".review-output"), "PASS")
         // No .env.example → no required-secret gate; secrets file still supplies vars to inject.
         val secretsFile = tmpDir.resolve("secrets.env")
-        Files.writeString(secretsFile, "BREVO_API_KEY=xkeysib-provided\n")
+        Files.writeString(secretsFile, "SAMPLE_API_KEY=example-placeholder")
 
         val deployer = RecordingProjectDeployer(DeployResult.success("http://localhost:8080"))
         val decision = AutoReviewOrchestrator(
@@ -1324,7 +1324,7 @@ class AutoReviewOrchestratorTest {
 
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Pass::class)
         assertThat(deployer.deployCalls.size).isEqualTo(1)
-        assertThat(deployer.deployCalls[0].envVars["BREVO_API_KEY"]).isEqualTo("xkeysib-provided")
+        assertThat(deployer.deployCalls[0].envVars["SAMPLE_API_KEY"]).isEqualTo("example-placeholder")
     }
 
     @Test
