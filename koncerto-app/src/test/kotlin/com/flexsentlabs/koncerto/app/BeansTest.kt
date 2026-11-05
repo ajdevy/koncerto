@@ -596,6 +596,7 @@ class BeansTest {
             agentKind = null, command = null, onCompleteState = null
         )
         val config = ServiceConfig(
+            targetProjectDeployEnabled = true,
             projects = mapOf("test" to ProjectConfig(
                 tracker = TrackerConfig("linear", "x", "k", "p"),
                 workspace = WorkspaceConfig("/tmp"),
@@ -1437,6 +1438,44 @@ class BeansTest {
             aiTimelineGenerator = beans.aiTimelineGenerator(demoConfig)
         )
         assertThat(beans.demoController(service)).isNotNull()
+    }
+
+    @Test
+    fun `review pipeline honors demo and target deployment flags independently`() {
+        fun wired(demo: Boolean, deploy: Boolean): Pair<Any?, Any?> {
+            val config = ServiceConfig.fromMap(mapOf(
+                "demo_recording" to mapOf("enabled" to demo),
+                "target_project_deploy" to mapOf("enabled" to deploy),
+                "projects" to mapOf("test" to mapOf(
+                    "tracker" to mapOf("kind" to "linear", "api_key" to "k", "project_slug" to "p"),
+                    "workspace" to mapOf("root" to "/tmp"),
+                    "agent" to mapOf("stages" to mapOf("In Review" to mapOf("prompt" to "review")))
+                ))
+            ), "/tmp")
+            val orchestrator = createOrchestratorForConfig(config)
+            val factoryField = Orchestrator::class.java.getDeclaredField("autoReviewOrchestratorFactory")
+            factoryField.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            val factory = factoryField.get(orchestrator) as (ProjectConfig, RuntimeState) -> AutoReviewOrchestrator
+            val review = factory(config.projects.values.first(), RuntimeState())
+            fun field(name: String): Any? = AutoReviewOrchestrator::class.java.getDeclaredField(name).let {
+                it.isAccessible = true
+                it.get(review)
+            }
+            return field("demoScenarioGenerator") to field("targetProjectDeployer")
+        }
+        val bothOff = wired(false, false)
+        assertThat(bothOff.first).isNull()
+        assertThat(bothOff.second).isNull()
+        val demoOnly = wired(true, false)
+        assertThat(demoOnly.first).isNotNull()
+        assertThat(demoOnly.second).isNull()
+        val deployOnly = wired(false, true)
+        assertThat(deployOnly.first).isNull()
+        assertThat(deployOnly.second).isNotNull()
+        val bothOn = wired(true, true)
+        assertThat(bothOn.first).isNotNull()
+        assertThat(bothOn.second).isNotNull()
     }
 
     private fun createOrchestratorForConfig(config: ServiceConfig): com.flexsentlabs.koncerto.orchestrator.Orchestrator {

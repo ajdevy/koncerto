@@ -12,7 +12,8 @@ data class ServiceConfig(
     val gitConfig: GitConfig = GitConfig(),
     val adminApiKey: String? = null,
     val deprecationWarnings: List<String> = emptyList(),
-    val demoRecording: DemoRecordingConfig = DemoRecordingConfig()
+    val demoRecording: DemoRecordingConfig = DemoRecordingConfig(),
+    val targetProjectDeployEnabled: Boolean = false
 ) {
     fun hooksTimeoutMs(): Long = hooks.timeoutMs
 
@@ -43,7 +44,8 @@ data class ServiceConfig(
                 gitConfig = git,
                 adminApiKey = adminApiKey,
                 deprecationWarnings = deprecations,
-                demoRecording = demoRecording
+                demoRecording = demoRecording,
+                targetProjectDeployEnabled = ((map["target_project_deploy"] as? Map<*, *>)?.get("enabled") as? Boolean) ?: false
             )
         }
 
