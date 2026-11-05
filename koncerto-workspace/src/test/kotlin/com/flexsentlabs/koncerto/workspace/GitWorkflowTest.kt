@@ -563,7 +563,7 @@ class GitWorkflowTest {
     }
 
     @Test
-    fun `createBranch removes stale untracked artifacts before checkout`() {
+    fun `createBranch preserves untracked artifacts before checkout`() {
         repoDir.resolve(".koncerto").toFile().mkdirs()
         repoDir.resolve(".koncerto/dispatch-trace-2026-06-30.jsonl").writeText("stale")
 
@@ -573,11 +573,11 @@ class GitWorkflowTest {
 
         val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
         assertThat(branch).isEqualTo("feature/CLEAN-1")
-        assertThat(repoDir.resolve(".koncerto/dispatch-trace-2026-06-30.jsonl").toFile().exists()).isFalse()
+        assertThat(repoDir.resolve(".koncerto/dispatch-trace-2026-06-30.jsonl").readText()).isEqualTo("stale")
     }
 
     @Test
-    fun `createBranch resets existing local branch to matching remote branch`() {
+    fun `createBranch preserves divergent local branch rather than resetting it`() {
         val bareDir = createBareRemoteWithMain()
         val seedDir = Files.createTempDirectory("seed-feature-")
         ProcessBuilder("git", "init", "--initial-branch=main")
@@ -605,16 +605,17 @@ class GitWorkflowTest {
         repoDir.resolve("local.txt").writeText("local-only")
         runGit("add", "-A")
         runGit("commit", "-m", "local branch")
+        val localHead = runGit("rev-parse", "HEAD")
         runGit("checkout", "main")
 
         val config = GitConfig(enabled = true, remoteUrl = bareDir.toString(), prBase = "main")
         val workflow = GitWorkflow(config, noopLogger())
-        workflow.createBranch(repoDir, "EXISTING-REMOTE")
-
+        val result = runCatching { workflow.createBranch(repoDir, "EXISTING-REMOTE") }
+        assertThat(result.isFailure).isTrue()
         val branch = runGit("rev-parse", "--abbrev-ref", "HEAD")
         val head = runGit("rev-parse", "HEAD")
         assertThat(branch).isEqualTo("feature/EXISTING-REMOTE")
-        assertThat(head).isEqualTo(remoteHead)
+        assertThat(head).isEqualTo(localHead)
     }
 
     @Test
