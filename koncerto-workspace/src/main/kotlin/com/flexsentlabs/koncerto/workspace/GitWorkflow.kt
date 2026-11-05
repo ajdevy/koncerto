@@ -70,10 +70,13 @@ open class GitWorkflow(
         }
         setupOriginRemote(workspacePath)
 
-        // Scrub stale agent artifacts before any checkout/fetch path. These traces can be
-        // created before git branch setup and will otherwise block checkout in a fresh repo.
-        runGitSafe(workspacePath, "reset", "--hard", "HEAD")
-        runGitSafe(workspacePath, "clean", "-fd")
+        // WorkspaceManager may have created this exact managed file before git init.
+        // Remove only that known generated file so a tracked remote .gitignore can be checked out.
+        val ignore = workspacePath.resolve(".gitignore")
+        if (isNewRepo && Files.isRegularFile(ignore) && !Files.isSymbolicLink(ignore) &&
+            Files.readString(ignore) == KoncertoArtifactIgnore.GITIGNORE_BLOCK + "\n") {
+            Files.delete(ignore)
+        }
 
         // Gitignore is (re-)added in the `finally` below, AFTER any fetch+checkout of a real
         // remote branch — adding it beforehand leaves an untracked .gitignore in the working
@@ -83,7 +86,6 @@ open class GitWorkflow(
                 val branch = branchName(issueIdentifier)
                 val fetchResult = runGitSafe(workspacePath, "fetch", "origin", config.prBase, branch)
                 if (fetchResult != null) {
-                    runGitSafe(workspacePath, "branch", "-f", config.prBase, "origin/${config.prBase}")
                     if (remoteBranchExists(branch, workspacePath)) {
                         runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
                     } else {
@@ -108,26 +110,26 @@ open class GitWorkflow(
             val branchExists = runGitSafe(workspacePath, "rev-parse", "--verify", branch) != null
             val remoteBranchExists = remoteBranchExists(branch, workspacePath)
             if (branchExists && remoteBranchExists) {
-                runGitSafe(workspacePath, "checkout", branch)
-                runGitSafe(workspacePath, "reset", "--hard", "origin/$branch")
+                check(runGitSafe(workspacePath, "checkout", branch) != null) { "git_checkout_failed" }
+                check(runGitSafe(workspacePath, "merge", "--ff-only", "origin/$branch") != null) {
+                    "git_branch_not_fast_forward"
+                }
                 return
             }
             if (branchExists) {
-                runGitSafe(workspacePath, "checkout", branch)
+                check(runGitSafe(workspacePath, "checkout", branch) != null) { "git_checkout_failed" }
                 return
             }
             if (remoteBranchExists) {
-                runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch")
+                check(runGitSafe(workspacePath, "checkout", "-b", branch, "origin/$branch") != null) { "git_checkout_failed" }
                 return
             }
             val remoteRef = "origin/${config.prBase}"
             val remoteExists = runGitSafe(workspacePath, "rev-parse", "--verify", remoteRef)
             if (remoteExists != null) {
-                // Sync local base branch to origin so gh PR create works
-                runGitSafe(workspacePath, "branch", "-f", config.prBase, remoteRef)
-                runGitSafe(workspacePath, "checkout", "-b", branch, remoteRef)
+                check(runGitSafe(workspacePath, "checkout", "-b", branch, remoteRef) != null) { "git_checkout_failed" }
             } else {
-                runGitSafe(workspacePath, "checkout", "-b", branch)
+                check(runGitSafe(workspacePath, "checkout", "-b", branch) != null) { "git_checkout_failed" }
             }
         } finally {
             KoncertoArtifactIgnore.ensureGitignore(workspacePath)
