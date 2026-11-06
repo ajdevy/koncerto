@@ -93,4 +93,37 @@ class SecretRequirementDetectorTest {
 
         assertThat(detector.detect(dir)).containsExactlyInAnyOrder("SENDGRID_API_KEY")
     }
+
+    @Test
+    fun `compose list entries outside environment are not required secrets`(@TempDir dir: Path) {
+        Files.writeString(dir.resolve("docker-compose.yml"), """
+            services:
+              app:
+                cap_add:
+                  - SYS_ADMIN
+                  - SYS_RESOURCE
+                profiles:
+                  - agent
+                depends_on:
+                  - redis
+                environment:
+                  - REQUIRED_API_KEY
+                  - PRESET=already-set
+                volumes:
+                  - data
+              redis:
+                image: redis:${'$'}{REDIS_VERSION:-latest}
+                environment:
+                  RAW_TOKEN:
+                  EMPTY_TOKEN: ""
+                  OTHER_SECRET: ${'$'}{OTHER_SECRET:?required}
+                  MODE: production
+            volumes:
+              data:
+        """.trimIndent())
+        assertThat(detector.detect(dir)).containsExactlyInAnyOrder(
+            "REQUIRED_API_KEY", "RAW_TOKEN", "EMPTY_TOKEN", "OTHER_SECRET"
+        )
+    }
+
 }

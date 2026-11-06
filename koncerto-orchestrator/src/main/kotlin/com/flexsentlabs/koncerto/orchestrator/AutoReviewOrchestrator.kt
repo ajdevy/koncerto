@@ -184,7 +184,7 @@ class AutoReviewOrchestrator(
                     "max_attempts" to maxAttempts.toString()
                 )
             )
-            workspace?.let { cleanupReviewFiles(it.path) }
+            workspace?.let { cleanupReviewFiles(it.path, preserveOutput = true) }
             traceReviewStep(workspace, issue, "review_pass", "retry", mapOf(
                 "attempt" to currentAttempt.toString(),
                 "max_attempts" to maxAttempts.toString()
@@ -199,7 +199,7 @@ class AutoReviewOrchestrator(
             )
             runtimeState.reviewAttempts.remove(issue.id)
             handleReviewExhaustion(issue, currentAttempt)
-            workspace?.let { cleanupReviewFiles(it.path) }
+            workspace?.let { cleanupReviewFiles(it.path, preserveOutput = true) }
             traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
                 "attempt" to currentAttempt.toString(),
                 "max_attempts" to maxAttempts.toString()
@@ -240,7 +240,7 @@ class AutoReviewOrchestrator(
                     "max_attempts" to maxAttempts.toString()
                 )
             )
-            workspace?.let { cleanupReviewFiles(it.path) }
+            workspace?.let { cleanupReviewFiles(it.path, preserveOutput = true) }
             traceReviewStep(workspace, issue, "review_pass", "retry", mapOf(
                 "attempt" to currentAttempt.toString(),
                 "max_attempts" to maxAttempts.toString()
@@ -255,7 +255,7 @@ class AutoReviewOrchestrator(
             )
             runtimeState.reviewAttempts.remove(issue.id)
             handleReviewExhaustion(issue, currentAttempt)
-            workspace?.let { cleanupReviewFiles(it.path) }
+            workspace?.let { cleanupReviewFiles(it.path, preserveOutput = true) }
             traceReviewStep(workspace, issue, "review_pass", "blocked", mapOf(
                 "attempt" to currentAttempt.toString(),
                 "max_attempts" to maxAttempts.toString()
@@ -541,7 +541,9 @@ class AutoReviewOrchestrator(
         if (result.exitCode == 0) result.output.trim().takeIf { it.isNotBlank() } else null
     }.getOrNull()
 
-    private fun cleanupReviewFiles(workspacePath: Path) {
+    private fun cleanupReviewFiles(workspacePath: Path) = cleanupReviewFiles(workspacePath, preserveOutput = false)
+
+    private fun cleanupReviewFiles(workspacePath: Path, preserveOutput: Boolean) {
         listOf(
             ".review-status",
             ".review-output",
@@ -549,7 +551,7 @@ class AutoReviewOrchestrator(
             ".review-attempt",
             ".review-findings.json",
             ".review-fix-report.json",
-        ).forEach { name ->
+        ).filterNot { preserveOutput && it == ".review-output" }.forEach { name ->
             try {
                 Files.deleteIfExists(workspacePath.resolve(name))
             } catch (e: Exception) {

@@ -1154,7 +1154,7 @@ class AutoReviewOrchestratorTest {
     }
 
     @Test
-    fun `review files are deleted after retry`(@TempDir tmpDir: Path) = runTest {
+    fun `review feedback is retained after retry`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-status"), "fail")
@@ -1180,12 +1180,12 @@ class AutoReviewOrchestratorTest {
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
         assertThat(Files.exists(issueDir.resolve(".review-status"))).isFalse()
-        assertThat(Files.exists(issueDir.resolve(".review-output"))).isFalse()
+        assertThat(Files.readString(issueDir.resolve(".review-output"))).isEqualTo("review output")
         assertThat(Files.exists(issueDir.resolve(".review-attempt"))).isFalse()
     }
 
     @Test
-    fun `review files are deleted after exhaustion`(@TempDir tmpDir: Path) = runTest {
+    fun `review feedback is retained after exhaustion`(@TempDir tmpDir: Path) = runTest {
         val workspaceDir = tmpDir.resolve("workspace").also { Files.createDirectories(it) }
         val issueDir = workspaceDir.resolve("T-1").also { Files.createDirectories(it) }
         Files.writeString(issueDir.resolve(".review-status"), "fail")
@@ -1211,7 +1211,7 @@ class AutoReviewOrchestratorTest {
         val decision = orchestrator.onCodingComplete(issue())
         assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
         assertThat(Files.exists(issueDir.resolve(".review-status"))).isFalse()
-        assertThat(Files.exists(issueDir.resolve(".review-output"))).isFalse()
+        assertThat(Files.readString(issueDir.resolve(".review-output"))).isEqualTo("review output")
         assertThat(Files.exists(issueDir.resolve(".review-attempt"))).isFalse()
     }
 
@@ -3650,4 +3650,62 @@ class AutoReviewOrchestratorTest {
             clearStaging("issue-1", "T-1")
         }
     }
+
+    @Test
+    fun `failed review retains actionable feedback but removes its verdict`(@TempDir tmpDir: Path) = runTest {
+        val workspace = WorkspaceManager(tmpDir, HookExecutor { _, _ -> })
+        val path = workspace.ensureWorkspace(issue().identifier).path
+        Files.writeString(path.resolve(".review-status"), "fail")
+        Files.writeString(path.resolve(".review-output"), "fix the failing health check")
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 3,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = fakeRunner(), workspaceManager = workspace, linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = tmpDir.toString()),
+            projectSlug = "p", runtimeState = RuntimeState(), notifier = noopNotifier(), logger = noopLogger()
+        )
+        val decision = orchestrator.onReviewStageComplete(issue())
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.RetryWithCoding::class)
+        assertThat(Files.readString(path.resolve(".review-output"))).isEqualTo("fix the failing health check")
+        assertThat(Files.exists(path.resolve(".review-status"))).isFalse()
+    }
+
+    @Test
+    fun `exhausted auto review retains actionable feedback`(@TempDir tmpDir: Path) = runTest {
+        val workspace = WorkspaceManager(tmpDir, HookExecutor { _, _ -> })
+        val runner = object : AgentRunner by fakeRunner() {
+            override suspend fun run(
+                issue: Issue, attempt: Int?, prompt: String,
+                agentKindOverride: String?, commandOverride: String?,
+                modelOverride: String?, effortOverride: String?,
+                turnTimeoutMs: Long?, stallTimeoutMs: Long?, gitWorkflowOverride: GitWorkflow?
+            ): EmptyResult<IllegalStateException> {
+                val path = workspace.ensureWorkspace(issue.identifier).path
+                Files.writeString(path.resolve(".review-status"), "fail")
+                Files.writeString(path.resolve(".review-output"), "fix the failing health check")
+                return Result.Success(Unit)
+            }
+        }
+        val stage = StageAgentConfig(
+            prompt = null, model = null, effort = null, maxConcurrent = null,
+            agentKind = "codex", command = null, onCompleteState = "Done",
+            onFailureState = "In Progress", maxReviewAttempts = 1,
+            agent = null, followUp = null, crossProjectFollowUp = null
+        )
+        val orchestrator = AutoReviewOrchestrator(
+            agentRunner = runner, workspaceManager = workspace, linearClient = fakeTracker(),
+            projectConfig = projectConfig(stages = mapOf("in review" to stage), workspaceRoot = tmpDir.toString()),
+            projectSlug = "p", runtimeState = RuntimeState(), notifier = noopNotifier(), logger = noopLogger()
+        )
+        val decision = orchestrator.onCodingComplete(issue())
+        val path = workspace.ensureWorkspace(issue().identifier).path
+        assertThat(decision).isInstanceOf(AutoReviewOrchestrator.ReviewDecision.Blocked::class)
+        assertThat(Files.readString(path.resolve(".review-output"))).isEqualTo("fix the failing health check")
+        assertThat(Files.exists(path.resolve(".review-status"))).isFalse()
+    }
+
 }
