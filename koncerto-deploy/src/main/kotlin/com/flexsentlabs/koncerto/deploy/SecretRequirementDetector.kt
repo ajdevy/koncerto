@@ -88,18 +88,31 @@ class SecretRequirementDetector {
             val file = projectPath.resolve(name)
             if (!Files.exists(file)) continue
             val lines = runCatching { Files.readAllLines(file) }.getOrDefault(emptyList())
+            var environmentIndent: Int? = null
             for (raw in lines) {
                 val line = stripInlineComment(raw).trim()
                 if (line.isEmpty() || line.startsWith("#")) continue
+                val indent = raw.indexOfFirst { !it.isWhitespace() }
+                if (environmentIndent != null && indent <= environmentIndent) environmentIndent = null
+                if (line == "environment:") {
+                    environmentIndent = indent
+                    continue
+                }
                 for (m in ref.findAll(line)) {
                     val op = m.groupValues[2]
                     val hasDefault = op.startsWith(":-") || op.startsWith("-")
                     if (!hasDefault) names += m.groupValues[1]
                 }
-                // Bare list entry `- VAR` (no `=`) passes the host env var straight through → required.
+                if (environmentIndent == null || indent <= environmentIndent) continue
                 if (line.startsWith("- ")) {
                     val entry = line.removePrefix("- ").trim()
                     if (!entry.contains('=') && !entry.contains(':') && isEnvName(entry)) names += entry
+                } else {
+                    val colon = line.indexOf(':')
+                    if (colon <= 0) continue
+                    val key = line.substring(0, colon).trim()
+                    val value = line.substring(colon + 1).trim().trim('"', '\'').trim()
+                    if (isEnvName(key) && value.isEmpty()) names += key
                 }
             }
         }
